@@ -30,6 +30,12 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Daemon\1RemoteCLI.Daemon.csproj" />
     <ProjectReference Include="..\..\src\Protocol\1RemoteCLI.Protocol.csproj" />
+
+    <!-- The end-to-end test drives the real hub, not a stand-in. Referencing a web
+         project from a test project is unusual, but the alternative is a copy of the
+         hub's wiring that can drift from the thing being shipped — which is exactly
+         the class of bug this test exists to catch. -->
+    <ProjectReference Include="..\..\src\Hub\1RemoteCLI.Hub.csproj" />
   </ItemGroup>
 
 </Project>

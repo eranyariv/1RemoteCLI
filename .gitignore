@@ -46,3 +46,7 @@ secrets.json
 *.pfx
 *.pem
 *.key
+
+# Azure CLI profile, in case anyone points AZURE_CONFIG_DIR inside the repo.
+# It stores refresh tokens; see scripts/az-env.ps1 for the supported location.
+.azure/

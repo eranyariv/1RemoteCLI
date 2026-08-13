@@ -436,9 +436,11 @@ public sealed class EndToEndTests : IAsyncLifetime
     /// <summary>
     /// Output produced while no phone is connected still reaches the screen.
     /// <para>
-    /// The wire drops it, deliberately — there is nowhere to queue it. But the
-    /// emulator must not, or a session that was busy while the user was away would
-    /// show them a screen from before it started.
+    /// It does not reach the wire — there is no client attached to send it to — but it
+    /// is still numbered and kept in the session's tail, and it is still fed to the
+    /// emulator. Either route would be enough to make the next attach correct; having
+    /// both is what lets a short absence be answered with a replay and a long one with
+    /// a repaint.
     /// </para>
     /// </summary>
     [Fact]
@@ -460,6 +462,169 @@ public sealed class EndToEndTests : IAsyncLifetime
         await AttachAsync(phone, shell);
 
         await phone.WaitForScreenAsync(token);
+    }
+
+    /// <summary>
+    /// A brief drop costs a replay of what was missed, not a repaint.
+    /// <para>
+    /// This is the case the tail buffer exists for and the one that happens constantly:
+    /// a lift, a tunnel, a screen that locked for ten seconds. The claim is specific —
+    /// after resuming, no snapshot arrived and the sequence numbers run unbroken, which
+    /// is what the client uses to decide whether it missed anything.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task AShortDropIsResumedFromTheTailWithoutARepaint()
+    {
+        WrappedShell shell = await _harness.StartShellAsync();
+        PhoneClient phone = await _harness.ConnectPhoneAsync();
+
+        await AttachAsync(phone, shell);
+
+        string before = $"before-{Guid.NewGuid():n}";
+        Assert.Null(await phone.TypeAsync(shell.SessionId, $"echo {before}\r"));
+        await phone.WaitForScreenAsync(before);
+
+        long resumeFrom = phone.LastSeq!.Value;
+        int seen = phone.Frames.Count;
+
+        Assert.Null(await phone.DetachAsync(shell.SessionId));
+
+        // Typed at the desk, because the phone is supposed to be unreachable.
+        string during = $"during-{Guid.NewGuid():n}";
+        await shell.Pty.WriteAsync($"echo {during}\r");
+
+        await EndToEndHarness.WaitUntilAsync(
+            () => shell.Desk.Screen.Contains(during, StringComparison.Ordinal),
+            "the command to run while the phone was away");
+
+        Assert.Null(await phone.AttachAsync(
+            shell.MachineIdHint,
+            shell.SessionId,
+            cols: 80,
+            rows: 25,
+            lastSeq: resumeFrom));
+
+        await phone.WaitForScreenAsync(during);
+
+        IReadOnlyList<OutputFrame> resumed = [.. phone.Frames.Skip(seen)];
+
+        Assert.NotEmpty(resumed);
+        Assert.All(resumed, frame => Assert.Equal(TerminalOutputKind.Delta, frame.Kind));
+
+        // Unbroken numbering starting exactly where the client left off. A gap here is
+        // what makes the phone tell the user it missed something.
+        Assert.Equal(resumeFrom + 1, resumed[0].Seq);
+
+        for (int i = 1; i < resumed.Count; i++)
+        {
+            Assert.Equal(resumed[i - 1].Seq + 1, resumed[i].Seq);
+        }
+    }
+
+    /// <summary>
+    /// A drop long enough to overflow the tail is answered with a repaint, and the
+    /// repaint is right.
+    /// <para>
+    /// Falling out of the buffer is not an error path to be avoided; it is the other
+    /// half of the design, and the only thing that keeps the memory bound absolute. So
+    /// the test asserts the screen ends up correct, not that the fast path was taken.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task ADropLongEnoughToOverflowTheTailIsAnsweredWithASnapshot()
+    {
+        WrappedShell shell = await _harness.StartShellAsync();
+        PhoneClient phone = await _harness.ConnectPhoneAsync();
+
+        await AttachAsync(phone, shell);
+
+        string before = $"before-{Guid.NewGuid():n}";
+        Assert.Null(await phone.TypeAsync(shell.SessionId, $"echo {before}\r"));
+        await phone.WaitForScreenAsync(before);
+
+        long resumeFrom = phone.LastSeq!.Value;
+        int seen = phone.Frames.Count;
+
+        Assert.Null(await phone.DetachAsync(shell.SessionId));
+
+        // Comfortably more than the tail holds, produced the way a build produces it:
+        // as fast as the program can write.
+        string flood = Path.Combine(Path.GetTempPath(), $"1remote-flood-{Guid.NewGuid():n}.txt");
+        await File.WriteAllTextAsync(
+            flood,
+            string.Join("\r\n", Enumerable.Repeat(new string('x', 78), 6_000)));
+
+        try
+        {
+            string after = $"after-{Guid.NewGuid():n}";
+            await shell.Pty.WriteAsync($"type \"{flood}\"\r");
+            await shell.Pty.WriteAsync($"echo {after}\r");
+
+            await EndToEndHarness.WaitUntilAsync(
+                () => shell.Desk.Screen.Contains(after, StringComparison.Ordinal),
+                "the flood to finish at the desk");
+
+            Assert.True(_harness.Sessions.TryGet(shell.SessionId, out TerminalSession session));
+
+            await EndToEndHarness.WaitUntilAsync(
+                () => session.Tail.LastSeq > resumeFrom + 8,
+                "the session's tail to move well past where the phone left off");
+
+            Assert.Null(await phone.AttachAsync(
+                shell.MachineIdHint,
+                shell.SessionId,
+                cols: 80,
+                rows: 25,
+                lastSeq: resumeFrom));
+
+            await EndToEndHarness.WaitUntilAsync(
+                () => phone.Frames.Skip(seen).Any(frame => frame.Kind == TerminalOutputKind.Snapshot),
+                "a repaint to arrive");
+
+            await EndToEndHarness.WaitUntilAsync(
+                () => Normalize(phone.Render(80, 25)) == Normalize(session.Screen.Text()),
+                "the phone's rendering to match the agent's screen");
+        }
+        finally
+        {
+            File.Delete(flood);
+        }
+    }
+
+    /// <summary>
+    /// Resuming onto a differently shaped screen is refused in favour of a repaint.
+    /// <para>
+    /// The frames a client missed were produced for its old geometry. Replaying them
+    /// after a reshape would place every wrapped line where it used to belong, which is
+    /// worse than a repaint precisely because it looks plausible.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task ResumingAtANewSizeIsRepaintedInstead()
+    {
+        WrappedShell shell = await _harness.StartShellAsync();
+        PhoneClient phone = await _harness.ConnectPhoneAsync();
+
+        await AttachAsync(phone, shell);
+
+        string token = $"size-{Guid.NewGuid():n}";
+        Assert.Null(await phone.TypeAsync(shell.SessionId, $"echo {token}\r"));
+        await phone.WaitForScreenAsync(token);
+
+        long resumeFrom = phone.LastSeq!.Value;
+        int seen = phone.Frames.Count;
+
+        Assert.Null(await phone.AttachAsync(
+            shell.MachineIdHint,
+            shell.SessionId,
+            cols: 52,
+            rows: 31,
+            lastSeq: resumeFrom));
+
+        await EndToEndHarness.WaitUntilAsync(
+            () => phone.Frames.Skip(seen).Any(frame => frame.Kind == TerminalOutputKind.Snapshot),
+            "a repaint at the new size");
     }
 
     /// <summary>Trailing blanks differ harmlessly between two renderings of the same screen.</summary>

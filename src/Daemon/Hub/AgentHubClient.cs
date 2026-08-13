@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using Microsoft.AspNetCore.Http.Connections.Client;
@@ -7,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using OneRemoteCli.Daemon.Agent;
 using OneRemoteCli.Protocol;
 using OneRemoteCli.Protocol.Hub;
+using OneRemoteCli.Terminal.Vt;
 
 namespace OneRemoteCli.Daemon.Hub;
 
@@ -20,12 +20,12 @@ namespace OneRemoteCli.Daemon.Hub;
 /// identical lifetimes.
 /// </para>
 /// <para>
-/// Output is forwarded as it arrives, and every session's bytes are also fed to a VT
-/// emulator so an attach can be answered with the screen as it stands rather than a
-/// blank one. What is still missing is coalescing and backpressure: a flood is
-/// forwarded verbatim, and output produced while the hub is unreachable is dropped
-/// from the wire (though not from the emulator, so the next attach is still correct).
-/// Stage 3 covers both.
+/// Output arrives here already framed, is numbered and retained by the session's
+/// <see cref="SessionTail"/>, and is then put on the wire. An attach is answered from
+/// that tail when the client's last sequence is still in it, and with a snapshot of the
+/// emulator's screen when it is not. What is still missing is backpressure: a client
+/// that cannot keep up is not yet detected, so its frames queue in SignalR rather than
+/// being collapsed into a fresh snapshot. Task 3.3 covers it.
 /// </para>
 /// </summary>
 public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
@@ -42,9 +42,6 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     private readonly SessionRegistry _sessions;
     private readonly Func<CancellationToken, Task<string?>> _tokenProvider;
     private readonly Action<string>? _log;
-
-    /// <summary>Per-session output counter. Resume semantics arrive in Stage 3; the numbering does not need to wait.</summary>
-    private readonly ConcurrentDictionary<string, long> _sequences = new(StringComparer.Ordinal);
 
     /// <summary>Last message logged, so a hub that is down for an hour does not produce an hour of identical lines.</summary>
     private string? _lastComplaint;
@@ -170,8 +167,6 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(session);
 
-        _sequences[session.SessionId] = 0;
-
         await TryInvokeAsync(
             HubMethods.Server.SessionOpened,
             new AgentSessionOpenedNotification { Session = Describe(session) },
@@ -194,12 +189,19 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     }
 
     /// <summary>
-    /// Puts one chunk of output on the wire.
+    /// Numbers one chunk of output, keeps it, and puts it on the wire.
     /// <para>
     /// Callers are expected to be inside the session's exclusive region, which is what
     /// makes the sequence numbers match the order the bytes actually arrive in. That
     /// matters most for a snapshot: it is generated from a screen, so it is only
     /// correct relative to a specific point in the delta stream.
+    /// </para>
+    /// <para>
+    /// The frame is recorded before the connection is checked. Output produced while
+    /// the hub is unreachable is still part of this session's history, and a returning
+    /// client that resumes across such a gap has to be given it or told to start again;
+    /// silently skipping it would leave a contiguous run of sequence numbers with a
+    /// hole in the picture.
     /// </para>
     /// </summary>
     private async ValueTask SendOutputAsync(
@@ -208,17 +210,25 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
         TerminalOutputKind kind,
         CancellationToken cancellationToken)
     {
+        byte[] data = bytes.ToArray();
+        long seq = session.Tail.Record(kind, data);
+
         if (!IsConnected)
         {
-            // Dropped rather than queued. There is no tail buffer until Stage 3, and
-            // an unbounded queue behind an unreachable hub would turn a network
-            // problem into a memory problem on the user's own machine. The emulator
-            // has already seen these bytes, so the next attach still shows the truth.
             return;
         }
 
-        long seq = _sequences.AddOrUpdate(session.SessionId, 1, (_, previous) => previous + 1);
+        await TransmitAsync(session.SessionId, seq, kind, data, cancellationToken).ConfigureAwait(false);
+    }
 
+    /// <summary>Puts an already-numbered frame on the wire, unchanged.</summary>
+    private async ValueTask TransmitAsync(
+        string sessionId,
+        long seq,
+        TerminalOutputKind kind,
+        byte[] data,
+        CancellationToken cancellationToken)
+    {
         try
         {
             // Sent, not invoked: awaiting an acknowledgement for every chunk would put
@@ -227,10 +237,10 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
                 HubMethods.Server.TerminalOutput,
                 new TerminalOutputNotification
                 {
-                    SessionId = session.SessionId,
+                    SessionId = sessionId,
                     Seq = seq,
                     Kind = kind,
-                    Data = bytes.ToArray(),
+                    Data = data,
                 },
                 cancellationToken).ConfigureAwait(false);
         }
@@ -246,8 +256,6 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(session);
-
-        _sequences.TryRemove(session.SessionId, out _);
 
         await TryInvokeAsync(
             HubMethods.Server.SessionClosed,
@@ -298,7 +306,7 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     }
 
     /// <summary>
-    /// Answers an attach with the screen as it stands.
+    /// Answers an attach with either what the client missed or the screen as it stands.
     /// <para>
     /// The resize comes first and on purpose. The phone is authoritative while
     /// attached (spec §4.7), so its geometry reaches the real pseudoconsole before
@@ -306,9 +314,25 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     /// width that the client is about to render at its own, and every wrapped line
     /// would sit in the wrong place until the program next redrew.
     /// </para>
+    /// <para>
+    /// A resize also disqualifies the fast path. The frames a returning client missed
+    /// were produced for the old geometry, so replaying them onto a terminal that has
+    /// since been reshaped would put wrapped lines in the wrong place just as surely.
+    /// Reshaping is rare and repainting is cheap, so the simple rule wins.
+    /// </para>
     /// </summary>
     private async Task OnAttachRequestedAsync(AttachRequestedNotification notification)
     {
+        if (!_sessions.TryGet(notification.SessionId, out TerminalSession session))
+        {
+            Complain($"hub: cannot attach session {notification.SessionId}, which is not running here.");
+            return;
+        }
+
+        bool reshaped = notification.Cols > 0
+            && notification.Rows > 0
+            && (session.Cols != notification.Cols || session.Rows != notification.Rows);
+
         if (notification.Cols > 0 && notification.Rows > 0)
         {
             await RouteAsync(
@@ -319,30 +343,72 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
                     notification.Rows)).ConfigureAwait(false);
         }
 
-        if (!_sessions.TryGet(notification.SessionId, out TerminalSession session))
-        {
-            Complain($"hub: cannot snapshot session {notification.SessionId}, which is not running here.");
-            return;
-        }
+        bool resumed = false;
 
         await RouteAsync(
             notification.SessionId,
             () => session.RunExclusiveAsync(async () =>
             {
-                // Anything still buffered is already drawn on the screen being
-                // captured. Sending it after the snapshot would draw it twice.
-                session.Output.Discard();
+                if (!reshaped
+                    && notification.LastSeq is long lastSeq
+                    && session.Tail.TryReplayFrom(lastSeq, out IReadOnlyList<TailFrame> missed))
+                {
+                    resumed = true;
 
-                byte[] snapshot = session.Screen.Snapshot();
+                    foreach (TailFrame frame in missed)
+                    {
+                        // Resent with their original numbers, so the client sees an
+                        // unbroken run and does not report a gap for output it is in
+                        // the middle of receiving.
+                        await TransmitAsync(
+                            session.SessionId,
+                            frame.Seq,
+                            frame.Kind,
+                            frame.Data,
+                            CancellationToken.None).ConfigureAwait(false);
+                    }
 
-                await SendOutputAsync(
-                    session,
-                    snapshot,
-                    TerminalOutputKind.Snapshot,
-                    CancellationToken.None).ConfigureAwait(false);
+                    return;
+                }
+
+                await SendSnapshotAsync(session).ConfigureAwait(false);
             })).ConfigureAwait(false);
 
-        Log($"hub: client attached to session {notification.SessionId}.");
+        Log(resumed
+            ? $"hub: client resumed session {notification.SessionId}."
+            : $"hub: client attached to session {notification.SessionId}.");
+    }
+
+    /// <summary>
+    /// Sends the current screen, in as many frames as it takes.
+    /// <para>
+    /// A snapshot is produced in one piece and can be larger than a single message may
+    /// be, so it is cut at points where a terminal is between sequences. Only the first
+    /// frame is a <see cref="TerminalOutputKind.Snapshot"/>: that is what tells the
+    /// client to clear what it has, and the rest paint on top of the cleared screen.
+    /// </para>
+    /// <para>
+    /// The caller holds the session's exclusive region, so live output cannot arrive
+    /// between two frames of the same snapshot.
+    /// </para>
+    /// </summary>
+    private async ValueTask SendSnapshotAsync(TerminalSession session)
+    {
+        // Anything still buffered is already drawn on the screen being captured.
+        // Sending it after the snapshot would draw it twice.
+        session.Output.Discard();
+
+        byte[] snapshot = session.Screen.Snapshot();
+        IReadOnlyList<byte[]> frames = VtChunker.Split(snapshot, OutputCoalescer.MaxFrameBytes);
+
+        for (int i = 0; i < frames.Count; i++)
+        {
+            await SendOutputAsync(
+                session,
+                frames[i],
+                i == 0 ? TerminalOutputKind.Snapshot : TerminalOutputKind.Delta,
+                CancellationToken.None).ConfigureAwait(false);
+        }
     }
 
     /// <summary>

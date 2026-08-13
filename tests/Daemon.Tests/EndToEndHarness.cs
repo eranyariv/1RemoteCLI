@@ -580,7 +580,12 @@ internal sealed class PhoneClient : IAsyncDisposable
     public Task<MachineListNotification> ListMachinesAsync() =>
         _connection.InvokeAsync<MachineListNotification>(HubMethods.Server.ListMachines);
 
-    public Task<ErrorNotification?> AttachAsync(string machineId, string sessionId, int cols = 80, int rows = 25) =>
+    public Task<ErrorNotification?> AttachAsync(
+        string machineId,
+        string sessionId,
+        int cols = 80,
+        int rows = 25,
+        long? lastSeq = null) =>
         _connection.InvokeAsync<ErrorNotification?>(
             HubMethods.Server.AttachSession,
             new AttachSessionRequest
@@ -589,7 +594,20 @@ internal sealed class PhoneClient : IAsyncDisposable
                 SessionId = sessionId,
                 Cols = cols,
                 Rows = rows,
+                LastSeq = lastSeq,
             });
+
+    /// <summary>The highest sequence this client has seen, which is what it resumes from.</summary>
+    public long? LastSeq
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _sequences.Count == 0 ? null : _sequences[^1];
+            }
+        }
+    }
 
     public Task<ErrorNotification?> DetachAsync(string sessionId) =>
         _connection.InvokeAsync<ErrorNotification?>(

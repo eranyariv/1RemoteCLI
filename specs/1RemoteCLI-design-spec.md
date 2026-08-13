@@ -278,16 +278,23 @@ The agent applies four rules:
 
 Rule 4 is the payoff of the screen-state model. Because only the visible screen matters, throwing away a backlog is not lossy from the user's point of view — the snapshot already reflects everything the discarded bytes would have produced. A client on a bad link converges to the current screen instead of falling ever further behind.
 
+A snapshot obeys the cap too. A densely coloured full screen re-serializes to well over 24 KB, so it is cut at the same `GROUND` boundaries and sent as several frames. Only the first carries `Kind = Snapshot` — that is what tells the client to clear what it holds — and the rest are ordinary deltas painted on top. All of them are emitted inside the session's exclusive region, so live output cannot interleave between two frames of the same snapshot.
+
 Frames are carried as binary via the MessagePack hub protocol, avoiding the ~33 % overhead of base64 in JSON.
 
 ### 4.5 Resume after a brief disconnection
 
 Each session's outbound frames carry a monotonically increasing `seq`. The agent retains a small tail buffer (the last 256 KB, or fewer frames if larger). On reattach the client sends its last received `seq`:
 
-* If the requested `seq` is still in the tail buffer, the agent sends the missing frames — a fast path for a two-second signal drop.
+* If the requested `seq` is still in the tail buffer, the agent sends the missing frames, unchanged and with their original numbers — a fast path for a two-second signal drop. Renumbering them would present the client with a gap it would report as lost output.
 * Otherwise the agent sends a fresh snapshot with a new `seq` baseline.
 
 Both outcomes are correct; the tail buffer is purely a latency optimization.
+
+Two rules keep the fast path honest:
+
+* **Numbering happens before sending, not after.** Output produced while the hub is unreachable still consumes a sequence number and still enters the tail. Otherwise a client resuming across a hub outage would receive an unbroken run of sequence numbers with the outage's output missing from it — a screen that is wrong while claiming to be continuous, which is worse than any repaint. A long outage simply evicts its way out of the tail and the reattach is answered with a snapshot.
+* **A reshape disqualifies replay.** If the attaching client's geometry differs from the session's, the missed frames were produced for a screen of another shape and replaying them would place wrapped lines where they used to belong. That failure looks plausible rather than obviously broken, so the agent repaints instead.
 
 ### 4.6 Relay hub
 

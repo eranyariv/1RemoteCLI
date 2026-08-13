@@ -85,6 +85,9 @@ public sealed class TerminalSession
     /// <summary>Output waiting to be framed and sent.</summary>
     public OutputCoalescer Output { get; } = new();
 
+    /// <summary>Sequence numbering and the recent frames, for resume.</summary>
+    public SessionTail Tail { get; } = new();
+
     internal ISessionChannel Channel { get; }
 
     /// <summary>

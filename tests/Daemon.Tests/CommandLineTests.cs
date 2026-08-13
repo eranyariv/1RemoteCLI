@@ -63,6 +63,8 @@ public class CommandLineTests
     [Theory]
     [InlineData("agent", CommandKind.Agent)]
     [InlineData("login", CommandKind.Login)]
+    [InlineData("logout", CommandKind.Logout)]
+    [InlineData("status", CommandKind.Status)]
     public void RecognisesSubcommands(string token, CommandKind expected)
     {
         Assert.Equal(expected, CommandLine.Parse([token]).Kind);

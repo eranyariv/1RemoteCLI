@@ -12,6 +12,12 @@ public enum CommandKind
     /// <summary>Sign in and cache a token.</summary>
     Login,
 
+    /// <summary>Forget the cached token.</summary>
+    Logout,
+
+    /// <summary>Report who is signed in and whether the token still works.</summary>
+    Status,
+
     /// <summary>Print usage.</summary>
     Help,
 
@@ -61,6 +67,18 @@ public static class CommandLine
     /// </para>
     /// </summary>
     public const string NoAgentFlag = "--no-agent";
+
+    /// <summary>
+    /// Words that mean us rather than a program to run. Kept short on purpose: every
+    /// entry is a name the user can no longer wrap without <c>--</c> or a path.
+    /// </summary>
+    private static readonly Dictionary<string, CommandKind> Subcommands = new(StringComparer.Ordinal)
+    {
+        ["agent"] = CommandKind.Agent,
+        ["login"] = CommandKind.Login,
+        ["logout"] = CommandKind.Logout,
+        ["status"] = CommandKind.Status,
+    };
 
     public static ParsedCommand Parse(IReadOnlyList<string> argv)
     {
@@ -127,9 +145,9 @@ public static class CommandLine
 
         // Subcommands only count in the first non-option position, so `1remote agent`
         // starts the agent while `1remote pwsh agent` runs PowerShell.
-        if (program is "agent" or "login" && i == argv.Count - 1)
+        if (i == argv.Count - 1 && Subcommands.TryGetValue(program, out CommandKind subcommand))
         {
-            return new ParsedCommand(program == "agent" ? CommandKind.Agent : CommandKind.Login);
+            return new ParsedCommand(subcommand);
         }
 
         return new ParsedCommand(
@@ -221,6 +239,8 @@ public static class CommandLine
           1remote [options] <program> [args...]   Run a program in a shareable session
           1remote agent                           Start the per-machine agent
           1remote login                           Sign in
+          1remote logout                          Forget the cached sign-in
+          1remote status                          Show who is signed in
 
         Options:
           --name <text>   Friendly name for the session (defaults to the program name)

@@ -1,7 +1,9 @@
 using System.ComponentModel;
 using System.Reflection;
 using System.Runtime.Versioning;
+using Microsoft.Identity.Client;
 using OneRemoteCli.Daemon.Agent;
+using OneRemoteCli.Daemon.Auth;
 using OneRemoteCli.Daemon.Cli;
 using OneRemoteCli.Daemon.Pty;
 using OneRemoteCli.Daemon.Wrapper;
@@ -24,6 +26,12 @@ public static class Program
 
     /// <summary>A second agent for the same user, which is always a mistake.</summary>
     private const int ExitAlreadyRunning = 4;
+
+    /// <summary>Nobody is signed in, or the cached sign-in no longer works.</summary>
+    private const int ExitNotSignedIn = 5;
+
+    /// <summary>Sign-in was attempted and refused.</summary>
+    private const int ExitAuthFailed = 6;
 
     public static async Task<int> Main(string[] args)
     {
@@ -51,12 +59,73 @@ public static class Program
                 return await RunAgentAsync().ConfigureAwait(false);
 
             case CommandKind.Login:
-                Console.Error.WriteLine("1remote: sign-in is not implemented yet.");
-                return ExitCannotRun;
+                return await RunLoginAsync().ConfigureAwait(false);
+
+            case CommandKind.Logout:
+                return await RunLogoutAsync().ConfigureAwait(false);
+
+            case CommandKind.Status:
+                return await RunStatusAsync().ConfigureAwait(false);
 
             default:
                 return await RunWrappedAsync(command).ConfigureAwait(false);
         }
+    }
+
+    private static async Task<int> RunLoginAsync()
+    {
+        var broker = new TokenBroker();
+
+        try
+        {
+            Console.WriteLine("1remote: opening your browser to sign in...");
+            AuthenticationResult result = await broker.SignInAsync().ConfigureAwait(false);
+
+            Console.WriteLine($"Signed in as {result.Account.Username}.");
+            Console.WriteLine($"Token valid until {result.ExpiresOn.ToLocalTime():yyyy-MM-dd HH:mm}.");
+            return 0;
+        }
+        catch (MsalException ex)
+        {
+            Console.Error.WriteLine($"1remote: sign-in failed ({ex.ErrorCode}): {ex.Message}");
+            return ExitAuthFailed;
+        }
+    }
+
+    private static async Task<int> RunLogoutAsync()
+    {
+        var broker = new TokenBroker();
+
+        Console.WriteLine(await broker.SignOutAsync().ConfigureAwait(false)
+            ? "Signed out. Run '1remote login' to sign in again."
+            : "Nobody was signed in.");
+
+        return 0;
+    }
+
+    private static async Task<int> RunStatusAsync()
+    {
+        var broker = new TokenBroker();
+        AuthStatus status = await broker.GetStatusAsync().ConfigureAwait(false);
+
+        if (!status.IsSignedIn)
+        {
+            Console.WriteLine("Not signed in. Run '1remote login'.");
+            return ExitNotSignedIn;
+        }
+
+        Console.WriteLine($"Signed in as {status.Account}.");
+        Console.WriteLine($"Token cache: {broker.CachePath}");
+
+        if (status.TokenValidUntil is DateTimeOffset expiry)
+        {
+            Console.WriteLine($"Access token valid until {expiry.ToLocalTime():yyyy-MM-dd HH:mm}.");
+            return 0;
+        }
+
+        Console.WriteLine($"The cached sign-in no longer works: {status.Problem}");
+        Console.WriteLine("Run '1remote login' to sign in again.");
+        return ExitNotSignedIn;
     }
 
     private static async Task<int> RunAgentAsync()

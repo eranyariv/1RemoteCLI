@@ -6,6 +6,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The token cache's encrypt/decrypt path is internal but is the security
+         control worth testing directly, rather than through MSAL. -->
+    <InternalsVisibleTo Include="1RemoteCLI.Daemon.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.28" />
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="8.0.28" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />

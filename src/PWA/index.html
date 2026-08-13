@@ -3,8 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>pwa</title>
+    <!--
+      viewport-fit=cover lets the layout reach under the notch and the home
+      indicator; the safe-area insets in the CSS keep content out of them.
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#020617" />
+    <meta
+      name="description"
+      content="Attach to the terminal sessions already running on your machines."
+    />
+    <title>1RemoteCLI</title>
   </head>
   <body>
     <div id="root"></div>

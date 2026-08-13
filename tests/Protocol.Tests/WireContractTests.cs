@@ -1,0 +1,304 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using MessagePack;
+using Microsoft.AspNetCore.SignalR;
+using OneRemoteCli.Protocol;
+using OneRemoteCli.Protocol.Hub;
+
+namespace OneRemoteCli.Protocol.Tests;
+
+/// <summary>
+/// Pins the bytes the hub puts on the wire, so the PWA's hand-written decoder is
+/// checked against the real serializer rather than against someone's memory of it.
+/// <para>
+/// This matters more than it looks. <c>[MessagePackObject]</c> with <c>[Key(n)]</c>
+/// serialises as a positional <b>array</b>, not a map, so every field the browser
+/// reads is identified by an integer that appears nowhere in the payload. Adding a
+/// property in the middle of a C# message, or reordering two, silently shifts every
+/// later field on the JavaScript side — no exception, no type error, just a machine
+/// list where the OS column shows a version number.
+/// </para>
+/// <para>
+/// So this test writes a fixture of real bytes plus the values they decode to, and
+/// <c>src/PWA/src/protocol/wire.contract.test.ts</c> decodes the same file. Neither
+/// side hand-copies the other's constants: if the contract moves, the C# test fails
+/// on the bytes and the TypeScript test fails on the values.
+/// </para>
+/// </summary>
+public sealed class WireContractTests
+{
+    /// <summary>
+    /// Set to 1 to rewrite the fixture after a deliberate protocol change. The
+    /// resulting diff is the review: it shows exactly what the browser will now see.
+    /// </summary>
+    private const string UpdateVariable = "UPDATE_WIRE_FIXTURE";
+
+    /// <summary>
+    /// A fixed instant with a non-zero offset. Both parts matter: MessagePack writes
+    /// a <see cref="DateTimeOffset"/> as a two-element array of wall-clock time and
+    /// offset minutes, and a UTC-only sample would not catch a decoder that ignores
+    /// the second element.
+    /// </summary>
+    private static readonly DateTimeOffset Instant =
+        new(2024, 5, 17, 9, 30, 15, TimeSpan.FromHours(3));
+
+    /// <summary>Exactly what SignalR uses, rather than something that resembles it.</summary>
+    private static readonly MessagePackSerializerOptions Options =
+        new MessagePackHubProtocolOptions().SerializerOptions;
+
+    private static readonly JsonSerializerOptions Json = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
+
+    [Fact]
+    public void TheFixtureMatchesWhatTheHubActuallySends()
+    {
+        JsonObject expected = BuildFixture();
+        string rendered = expected.ToJsonString(Json) + Environment.NewLine;
+
+        if (Environment.GetEnvironmentVariable(UpdateVariable) == "1")
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(FixturePath)!);
+            File.WriteAllText(FixturePath, rendered);
+            return;
+        }
+
+        Assert.True(
+            File.Exists(FixturePath),
+            $"The wire fixture is missing. Re-run with {UpdateVariable}=1 to create it.");
+
+        Assert.True(
+            Normalise(File.ReadAllText(FixturePath)) == Normalise(rendered),
+            $"""
+             The bytes the hub sends no longer match {FixturePath}.
+
+             If you changed a message on purpose, re-run with {UpdateVariable}=1 and
+             read the diff: every moved field is a field the PWA decoder now reads
+             from the wrong position.
+             """);
+    }
+
+    [Fact]
+    public void EveryMessageTheClientReceivesIsCovered()
+    {
+        // A message with no fixture entry is a message whose layout nothing checks,
+        // which is the failure mode this file exists to prevent.
+        string[] covered = [.. BuildFixture()["messages"]!.AsObject().Select(m => m.Key)];
+
+        Assert.Contains("machineList", covered);
+        Assert.Contains("machineOnline", covered);
+        Assert.Contains("machineOffline", covered);
+        Assert.Contains("sessionOpened", covered);
+        Assert.Contains("sessionClosed", covered);
+        Assert.Contains("terminalOutput", covered);
+        Assert.Contains("sessionAwaitingInput", covered);
+        Assert.Contains("tokenExpiring", covered);
+        Assert.Contains("error", covered);
+    }
+
+    // The fixture.
+
+    private static JsonObject BuildFixture()
+    {
+        var messages = new JsonObject();
+
+        Add(messages, "machineList", new MachineListNotification
+        {
+            Machines =
+            [
+                new MachineInfo
+                {
+                    MachineId = "5d41402abc4b2a76b9719d911017c592",
+                    DisplayName = "Desk",
+                    Os = "Microsoft Windows 10.0.26100",
+                    AgentVersion = "1.2.3.4",
+                    Online = true,
+                    Sessions =
+                    [
+                        new SessionInfo
+                        {
+                            SessionId = "aab0f1e2c3d4",
+                            Program = "claude",
+                            Args = ["--resume", "last"],
+                            Cwd = @"C:\Projects\1RemoteCLI",
+                            Cols = 120,
+                            Rows = 30,
+                            StartedAt = Instant,
+                            DisplayName = "Claude Code",
+                            AwaitingInput = true,
+                        },
+                    ],
+                },
+                new MachineInfo
+                {
+                    MachineId = "0cc175b9c0f1b6a831c399e269772661",
+                    DisplayName = "Laptop",
+                    Os = "Microsoft Windows 10.0.22631",
+                    AgentVersion = "1.2.3.4",
+                    Online = false,
+                    Sessions = [],
+                },
+            ],
+        });
+
+        Add(messages, "machineOnline", new MachineOnlineNotification
+        {
+            Machine = new MachineInfo
+            {
+                MachineId = "5d41402abc4b2a76b9719d911017c592",
+                DisplayName = "Desk",
+                Os = "Microsoft Windows 10.0.26100",
+                AgentVersion = "1.2.3.4",
+                Online = true,
+                Sessions = [],
+            },
+        });
+
+        Add(messages, "machineOffline", new MachineOfflineNotification
+        {
+            MachineId = "5d41402abc4b2a76b9719d911017c592",
+        });
+
+        Add(messages, "sessionOpened", new ClientSessionOpenedNotification
+        {
+            MachineId = "5d41402abc4b2a76b9719d911017c592",
+            Session = new SessionInfo
+            {
+                SessionId = "ff00ff00",
+                Program = "pwsh",
+                Args = [],
+                Cwd = @"C:\Users\eran",
+                Cols = 80,
+                Rows = 24,
+                StartedAt = Instant,
+                DisplayName = null,
+                AwaitingInput = false,
+            },
+        });
+
+        Add(messages, "sessionClosed", new ClientSessionClosedNotification
+        {
+            MachineId = "5d41402abc4b2a76b9719d911017c592",
+            SessionId = "ff00ff00",
+            ExitCode = 130,
+        });
+
+        Add(messages, "terminalOutput", new TerminalOutputNotification
+        {
+            SessionId = "ff00ff00",
+            Seq = 4294967297,
+            Kind = TerminalOutputKind.Snapshot,
+            Data = [0x1b, 0x5b, 0x32, 0x4a, 0x68, 0x69, 0x0d, 0x0a],
+        });
+
+        Add(messages, "sessionAwaitingInput", new ClientSessionAwaitingInputNotification
+        {
+            MachineId = "5d41402abc4b2a76b9719d911017c592",
+            SessionId = "ff00ff00",
+            Hint = "Do you want to proceed?",
+        });
+
+        Add(messages, "tokenExpiring", new TokenExpiringNotification { ExpiresAt = Instant });
+
+        Add(messages, "error", new ErrorNotification
+        {
+            Code = ErrorCodes.AccountNotAllowed,
+            Message = "Ask an administrator to add this account.",
+            SessionId = null,
+        });
+
+        // Client-to-hub shapes, so the encoder is pinned too. A request the hub
+        // cannot deserialise fails at the far end, where the browser sees only a
+        // generic invocation error.
+        Add(messages, "clientHandshakeRequest", new ClientHandshakeRequest
+        {
+            ProtocolVersion = ProtocolVersion.Current,
+            ClientVersion = "pwa/0.1.0",
+        });
+
+        Add(messages, "attachSessionRequest", new AttachSessionRequest
+        {
+            MachineId = "5d41402abc4b2a76b9719d911017c592",
+            SessionId = "ff00ff00",
+            Cols = 80,
+            Rows = 24,
+            LastSeq = null,
+        });
+
+        Add(messages, "detachSessionRequest", new DetachSessionRequest { SessionId = "ff00ff00" });
+
+        Add(messages, "sendInputRequest", new SendInputRequest
+        {
+            SessionId = "ff00ff00",
+            Data = [0x64, 0x69, 0x72, 0x0d],
+        });
+
+        Add(messages, "resizeTerminalRequest", new ResizeTerminalRequest
+        {
+            SessionId = "ff00ff00",
+            Cols = 100,
+            Rows = 40,
+        });
+
+        Add(messages, "interruptSessionRequest", new InterruptSessionRequest { SessionId = "ff00ff00" });
+
+        return new JsonObject
+        {
+            ["comment"] =
+                "Generated by tests/Protocol.Tests/WireContractTests.cs. Do not hand-edit: " +
+                $"re-run the test with {UpdateVariable}=1 instead.",
+            ["protocolVersion"] = ProtocolVersion.Current,
+            ["messages"] = messages,
+        };
+    }
+
+    /// <summary>
+    /// Serialises one message and records both the bytes and the values they carry.
+    /// <para>
+    /// The decoded projection is produced here, from the same object, so the
+    /// TypeScript test never hand-copies a constant: it decodes our bytes and
+    /// compares against our values.
+    /// </para>
+    /// </summary>
+    private static void Add<T>(JsonObject messages, string name, T message)
+    {
+        byte[] bytes = MessagePackSerializer.Serialize(message, Options);
+
+        // Round-tripped rather than projected from the original, so a formatter that
+        // loses information is caught here instead of being written into the fixture
+        // as though it were correct.
+        T restored = MessagePackSerializer.Deserialize<T>(bytes, Options);
+
+        messages[name] = new JsonObject
+        {
+            ["type"] = typeof(T).Name,
+            ["base64"] = Convert.ToBase64String(bytes),
+            ["decoded"] = JsonSerializer.SerializeToNode(restored, Json),
+        };
+    }
+
+    private static string Normalise(string text) => text.Replace("\r\n", "\n").TrimEnd();
+
+    /// <summary>
+    /// Walks up from the test binary to the repository root. Hard-coding a relative
+    /// depth breaks the moment the target framework or configuration changes.
+    /// </summary>
+    private static string FixturePath
+    {
+        get
+        {
+            DirectoryInfo? directory = new(AppContext.BaseDirectory);
+
+            while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "1RemoteCLI.slnx")))
+            {
+                directory = directory.Parent;
+            }
+
+            Assert.NotNull(directory);
+
+            return Path.Combine(directory!.FullName, "src", "PWA", "src", "protocol", "wire.fixture.json");
+        }
+    }
+}

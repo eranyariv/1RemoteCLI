@@ -25,10 +25,18 @@ namespace OneRemoteCli.Hub.Relay;
 /// </para>
 /// </summary>
 [Authorize]
-public sealed class RelayHub(RelayRegistry registry, OutboundFanout fanout, ILogger<RelayHub> logger) : Microsoft.AspNetCore.SignalR.Hub
+public sealed class RelayHub(
+    RelayRegistry registry,
+    OutboundFanout fanout,
+    ConnectionTokens tokens,
+    IAccessTokenValidator tokenValidator,
+    ILogger<RelayHub> logger) : Microsoft.AspNetCore.SignalR.Hub
 {
     private readonly RelayRegistry _registry = registry ?? throw new ArgumentNullException(nameof(registry));
     private readonly OutboundFanout _fanout = fanout ?? throw new ArgumentNullException(nameof(fanout));
+    private readonly ConnectionTokens _tokens = tokens ?? throw new ArgumentNullException(nameof(tokens));
+    private readonly IAccessTokenValidator _tokenValidator =
+        tokenValidator ?? throw new ArgumentNullException(nameof(tokenValidator));
     private readonly ILogger<RelayHub> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
     public override async Task OnConnectedAsync()
@@ -47,12 +55,18 @@ public sealed class RelayHub(RelayRegistry registry, OutboundFanout fanout, ILog
 
         _registry.Connect(userKey, Context.ConnectionId);
 
+        // The token is checked once, at the handshake, and never again by SignalR. From
+        // here the hub owns its lifetime.
+        HubCallerContext context = Context;
+        _tokens.Track(context.ConnectionId, userKey, TokenExpiry.Of(context.User!), context.Abort);
+
         await base.OnConnectedAsync();
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
         _fanout.Forget(Context.ConnectionId);
+        _tokens.Forget(Context.ConnectionId);
 
         DisconnectResult result = _registry.Disconnect(Context.ConnectionId);
 
@@ -429,6 +443,75 @@ public sealed class RelayHub(RelayRegistry registry, OutboundFanout fanout, ILog
         }
 
         await Clients.Client(target!.AgentConnectionId).SendAsync(method, build(target));
+
+        return null;
+    }
+
+    // Either end to hub.
+
+    /// <summary>
+    /// Replaces the token a live connection was admitted with.
+    /// <para>
+    /// The re-check is deliberately the full one, not a signature check: a refresh that
+    /// validated less than the handshake would be a way to launder a weak token onto a
+    /// connection that was opened with a strong one.
+    /// </para>
+    /// <para>
+    /// The two failures are not treated alike, and the difference is deliberate.
+    /// </para>
+    /// <para>
+    /// A token the hub cannot accept is <b>refused, not fatal</b>. The connection's
+    /// existing token may still have minutes on it, and killing the connection would
+    /// destroy the one channel over which the holder could be told what went wrong —
+    /// an abort cancels the invocation before its result can be flushed, so the caller
+    /// would see only a disconnection with no reason. Refusing lets it acquire a proper
+    /// token and try again; if it never does, the sweeper ends the connection at expiry,
+    /// which was always the deadline.
+    /// </para>
+    /// <para>
+    /// A token belonging to <b>someone else is fatal</b>, and the lost error message is
+    /// a price worth paying. A connection carries attachments; walking one from one
+    /// account to another would hand whatever it is watching to a person who was never
+    /// granted it. There is no state on such a connection that is safe to keep once its
+    /// owner is in question, so it does not survive long enough to be told why.
+    /// </para>
+    /// </summary>
+    public async Task<ErrorNotification?> RefreshToken(RefreshTokenRequest request)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.Token))
+        {
+            return Error(ErrorCodes.InvalidRequest, "RefreshToken needs a token.");
+        }
+
+        TokenReview review = await _tokenValidator.ReviewAsync(request.Token, Context.ConnectionAborted)
+            .ConfigureAwait(false);
+
+        if (!review.IsValid)
+        {
+            _logger.LogWarning(
+                "Connection {ConnectionId} presented a token that is not valid: {Reason}",
+                Context.ConnectionId,
+                review.Reason);
+
+            return Error(ErrorCodes.TokenExpired, review.Reason ?? "The refreshed token is not valid.");
+        }
+
+        string current = RequireUserKey();
+
+        if (!string.Equals(review.UserKey, current, StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "Connection {ConnectionId} tried to refresh from one identity to another.",
+                Context.ConnectionId);
+
+            Context.Abort();
+            return Error(ErrorCodes.IdentityChanged, "The refreshed token belongs to a different account.");
+        }
+
+        if (review.ExpiresAt is { } expiresAt)
+        {
+            _tokens.Renew(Context.ConnectionId, expiresAt);
+        }
 
         return null;
     }

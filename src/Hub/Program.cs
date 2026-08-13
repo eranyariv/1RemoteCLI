@@ -19,14 +19,14 @@ builder.Services.AddSingleton<OutboundLimits>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<OutboundFanout>();
 
+// SignalR authenticates once, at the handshake. Everything that keeps a live socket
+// from outliving its token is here (spec §3.6).
+builder.Services.AddSingleton<ConnectionTokens>();
+builder.Services.AddSingleton<IAccessTokenValidator, EntraAccessTokenValidator>();
+builder.Services.AddHostedService<TokenExpirySweeper>();
+
 builder.Services
-    .AddSignalR(options =>
-    {
-        // Terminal output is chatty but small; a phone on a flaky connection is the
-        // normal case, so liveness is detected in seconds rather than minutes.
-        options.KeepAliveInterval = TimeSpan.FromSeconds(15);
-        options.ClientTimeoutInterval = TimeSpan.FromSeconds(30);
-    })
+    .AddSignalR(RelayLiveness.Apply)
     // MessagePack rather than JSON because terminal output is binary. JSON would
     // base64 every frame, paying a third more bytes on the one path that is hot.
     .AddMessagePackProtocol();

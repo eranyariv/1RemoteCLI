@@ -126,7 +126,15 @@ internal sealed class EndToEndHarness : IAsyncDisposable
         builder.Services.AddSingleton<OutboundLimits>();
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddSingleton<OutboundFanout>();
-        builder.Services.AddSignalR().AddMessagePackProtocol();
+
+        // The token lifetime machinery, with the one seam a test can hold: the
+        // validator, because the harness deliberately does not sign real JWTs.
+        builder.Services.AddSingleton<ConnectionTokens>();
+        builder.Services.AddSingleton<IAccessTokenValidator>(sp => new TestTokenValidator(
+            sp.GetRequiredService<AccountAllowlist>(),
+            sp.GetRequiredService<IOptions<EntraOptions>>().Value.RequiredScope));
+        builder.Services.AddSingleton<TokenExpirySweeper>();
+        builder.Services.AddSignalR(RelayLiveness.Apply).AddMessagePackProtocol();
 
         WebApplication app = builder.Build();
         app.UseAuthentication();
@@ -137,7 +145,18 @@ internal sealed class EndToEndHarness : IAsyncDisposable
 
         _hub = app;
         HubUri = new Uri(new Uri(app.Urls.First()), "hub");
+
+        // Held so a test can drive one sweep rather than wait thirty seconds for the
+        // hosted one — which the harness deliberately does not start.
+        Tokens = app.Services.GetRequiredService<ConnectionTokens>();
+        Sweeper = app.Services.GetRequiredService<TokenExpirySweeper>();
     }
+
+    /// <summary>The hub's view of when each connection's token runs out.</summary>
+    public ConnectionTokens Tokens { get; private set; } = null!;
+
+    /// <summary>The thing that warns and then disconnects. Driven a pass at a time.</summary>
+    public TokenExpirySweeper Sweeper { get; private set; } = null!;
 
     /// <summary>
     /// Takes the hub down and brings a new one up at the same address.
@@ -244,9 +263,12 @@ internal sealed class EndToEndHarness : IAsyncDisposable
     }
 
     /// <summary>Creates a client without connecting, for tests about admission rather than protocol.</summary>
-    public PhoneClient NewPhone(TestIdentity identity)
+    public PhoneClient NewPhone(TestIdentity identity) => NewPhone(identity.Token);
+
+    /// <summary>Creates a client holding a specific token, for tests about its lifetime.</summary>
+    public PhoneClient NewPhone(string token)
     {
-        var phone = new PhoneClient(HubUri, identity);
+        var phone = new PhoneClient(HubUri, token);
         _phones.Add(phone);
         return phone;
     }
@@ -380,6 +402,51 @@ internal sealed record TestIdentity(string TenantId, string ObjectId, string Use
     /// prove nothing the hub's own token tests do not already prove.
     /// </summary>
     public string Token => $"{TenantId}|{ObjectId}|{Username}|{Scopes}";
+
+    /// <summary>The same identity, in a token that runs out at a stated moment.</summary>
+    public string TokenExpiringAt(DateTimeOffset expiresAt) =>
+        $"{Token}|{expiresAt.ToUnixTimeSeconds()}";
+}
+
+/// <summary>
+/// Stands in for the Entra check on the refresh path.
+/// <para>
+/// It runs the <b>real</b> allowlist against the claims the test token carries, so what
+/// it proves about identity is what production proves; only the signature check, which
+/// the hub's own token tests cover, is absent.
+/// </para>
+/// </summary>
+internal sealed class TestTokenValidator(AccountAllowlist allowlist, string requiredScope) : IAccessTokenValidator
+{
+    public Task<TokenReview> ReviewAsync(string token, CancellationToken cancellationToken = default)
+    {
+        string[] parts = (token ?? string.Empty).Split('|');
+
+        if (parts.Length is not (4 or 5))
+        {
+            return Task.FromResult(TokenReview.Rejected("Malformed test token."));
+        }
+
+        List<Claim> claims =
+        [
+            new Claim(UserKey.TenantIdClaim, parts[0]),
+            new Claim(UserKey.ObjectIdClaim, parts[1]),
+            new Claim(UserKey.PreferredUsernameClaim, parts[2]),
+            new Claim(UserKey.ScopeClaim, parts[3]),
+        ];
+
+        if (parts.Length == 5)
+        {
+            claims.Add(new Claim(TokenExpiry.ExpiryClaim, parts[4]));
+        }
+
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(claims, TestTokenHandler.SchemeName));
+        AccessResult result = allowlist.Check(principal, requiredScope);
+
+        return Task.FromResult(result.IsAllowed
+            ? TokenReview.Accepted(result.Key!, TokenExpiry.Of(principal))
+            : TokenReview.Rejected(result.Reason ?? "Refused."));
+    }
 }
 
 internal static class TestIdentities
@@ -440,19 +507,25 @@ internal sealed class TestTokenHandler(
 
         string[] parts = token.Split('|');
 
-        if (parts.Length != 4)
+        if (parts.Length is not (4 or 5))
         {
             return Task.FromResult(AuthenticateResult.Fail("Malformed test token."));
         }
 
-        var principal = new ClaimsPrincipal(new ClaimsIdentity(
-            [
-                new Claim(UserKey.TenantIdClaim, parts[0]),
-                new Claim(UserKey.ObjectIdClaim, parts[1]),
-                new Claim(UserKey.PreferredUsernameClaim, parts[2]),
-                new Claim(UserKey.ScopeClaim, parts[3]),
-            ],
-            SchemeName));
+        List<Claim> claims =
+        [
+            new Claim(UserKey.TenantIdClaim, parts[0]),
+            new Claim(UserKey.ObjectIdClaim, parts[1]),
+            new Claim(UserKey.PreferredUsernameClaim, parts[2]),
+            new Claim(UserKey.ScopeClaim, parts[3]),
+        ];
+
+        if (parts.Length == 5)
+        {
+            claims.Add(new Claim(TokenExpiry.ExpiryClaim, parts[4]));
+        }
+
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(claims, SchemeName));
 
         AccessResult result = allowlist.Check(principal, entra.Value.RequiredScope);
 
@@ -474,15 +547,29 @@ internal sealed class PhoneClient : IAsyncDisposable
     private readonly List<OutputFrame> _frames = [];
     private readonly List<ClientSessionOpenedNotification> _opened = [];
     private readonly List<ClientSessionClosedNotification> _closed = [];
+    private readonly List<DateTimeOffset> _expiryWarnings = [];
     private readonly object _gate = new();
 
     public PhoneClient(Uri hubUri, TestIdentity identity)
+        : this(hubUri, (identity ?? throw new ArgumentNullException(nameof(identity))).Token)
+    {
+    }
+
+    public PhoneClient(Uri hubUri, string token)
     {
         _connection = new HubConnectionBuilder()
             .WithUrl(hubUri, options => options.AccessTokenProvider =
-                () => Task.FromResult<string?>(identity.Token))
+                () => Task.FromResult<string?>(token))
             .AddMessagePackProtocol()
             .Build();
+
+        _connection.On<TokenExpiringNotification>(HubMethods.Client.TokenExpiring, notification =>
+        {
+            lock (_gate)
+            {
+                _expiryWarnings.Add(notification.ExpiresAt);
+            }
+        });
 
         _connection.On<TerminalOutputNotification>(HubMethods.Client.TerminalOutput, notification =>
         {
@@ -612,8 +699,26 @@ internal sealed class PhoneClient : IAsyncDisposable
         }
     }
 
-    public Task<ErrorNotification?> HandshakeAsync(int protocolVersion = Protocol.ProtocolVersion.Current) =>
+    /// <summary>Presents a new token on the live connection.</summary>
+    public Task<ErrorNotification?> RefreshTokenAsync(string token) =>
         _connection.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.RefreshToken,
+            new RefreshTokenRequest { Token = token });
+
+    /// <summary>Every expiry warning the hub has sent, in order.</summary>
+    public IReadOnlyList<DateTimeOffset> ExpiryWarnings
+    {
+        get { lock (_gate) { return [.. _expiryWarnings]; } }
+    }
+
+    /// <summary>Whether the socket is still up. Aborts show here.</summary>
+    public HubConnectionState ConnectionState => _connection.State;
+
+    /// <summary>The hub's id for this connection, which is how the hub keys everything.</summary>
+    public string ConnectionId => _connection.ConnectionId
+        ?? throw new InvalidOperationException("The phone is not connected.");
+
+    public Task<ErrorNotification?> HandshakeAsync(int protocolVersion = Protocol.ProtocolVersion.Current) =>        _connection.InvokeAsync<ErrorNotification?>(
             HubMethods.Server.ClientHandshake,
             new ClientHandshakeRequest
             {

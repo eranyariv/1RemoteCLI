@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using Microsoft.AspNetCore.SignalR.Client;
 using OneRemoteCli.Daemon.Agent;
 using OneRemoteCli.Protocol;
 using OneRemoteCli.Protocol.Hub;
@@ -759,6 +760,120 @@ public sealed class EndToEndTests : IAsyncLifetime
             "the session to accept input again");
 
         await after.WaitForScreenAsync(token);
+    }
+
+    /// <summary>
+    /// A connection whose token runs out is asked to refresh, and dropped if it does
+    /// not.
+    /// <para>
+    /// This is the gap every SignalR design leaves open. The token is checked during
+    /// the handshake and never again, so without this a socket outlives its token for
+    /// as long as it stays open — which for a phone left attached overnight is longer
+    /// than any token's lifetime. Revoking somebody's access would not touch the
+    /// connection they already had.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task ATokenThatIsNeverRefreshedEndsTheConnection()
+    {
+        // Already past expiry when it arrives. The test handler does not check
+        // lifetimes — that is the signature-checking seam production owns — so this is
+        // the state a connection reaches by sitting still, without waiting for it.
+        PhoneClient phone = _harness.NewPhone(
+            TestIdentities.Owner.TokenExpiringAt(DateTimeOffset.UtcNow - TimeSpan.FromHours(1)));
+
+        await phone.StartAsync();
+        Assert.Equal(HubConnectionState.Connected, phone.ConnectionState);
+
+        await _harness.Sweeper.SweepAsync();
+
+        await EndToEndHarness.WaitUntilAsync(
+            () => Task.FromResult(phone.ConnectionState == HubConnectionState.Disconnected),
+            "the connection with the expired token to be dropped");
+    }
+
+    /// <summary>
+    /// A connection is warned before its token runs out, and a refresh in time saves
+    /// it.
+    /// </summary>
+    [Fact]
+    public async Task ARefreshInTimeKeepsTheConnection()
+    {
+        DateTimeOffset soon = DateTimeOffset.UtcNow.AddMinutes(2);
+
+        PhoneClient phone = _harness.NewPhone(TestIdentities.Owner.TokenExpiringAt(soon));
+        await phone.StartAsync();
+
+        await _harness.Sweeper.SweepAsync();
+
+        await EndToEndHarness.WaitUntilAsync(
+            () => Task.FromResult(phone.ExpiryWarnings.Count == 1),
+            "the hub to ask for a fresh token");
+
+        Assert.Null(await phone.RefreshTokenAsync(
+            TestIdentities.Owner.TokenExpiringAt(DateTimeOffset.UtcNow.AddHours(4))));
+
+        // The sweep that would otherwise have ended it.
+        await _harness.Sweeper.SweepAsync();
+        await _harness.Sweeper.SweepAsync();
+
+        Assert.Equal(HubConnectionState.Connected, phone.ConnectionState);
+
+        // And it is still a working connection, not merely an open socket.
+        MachineListNotification list = await phone.ListMachinesAsync();
+        Assert.Contains(list.Machines, m => m.MachineId == _harness.MachineId);
+    }
+
+    /// <summary>
+    /// A refresh that resolves to a different person ends the connection.
+    /// <para>
+    /// Not corrected, ended. A connection carries attachments, and quietly moving it
+    /// from one account to another would hand whatever it is watching to somebody who
+    /// was never granted it. There is no state on such a connection that is safe to
+    /// keep once its owner is in question — including the channel that would have
+    /// carried the explanation, which is why the caller sees a disconnection rather
+    /// than a message.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task ARefreshFromADifferentAccountEndsTheConnection()
+    {
+        PhoneClient phone = await _harness.ConnectPhoneAsync();
+
+        await Assert.ThrowsAnyAsync<Exception>(
+            () => phone.RefreshTokenAsync(TestIdentities.Stranger.Token));
+
+        await EndToEndHarness.WaitUntilAsync(
+            () => Task.FromResult(phone.ConnectionState == HubConnectionState.Disconnected),
+            "the connection whose identity changed to be dropped");
+    }
+
+    /// <summary>
+    /// A token the hub will not accept is refused, and the connection survives to be
+    /// told so.
+    /// <para>
+    /// Killing it here would destroy the one channel over which the holder could learn
+    /// what went wrong, and would bring forward a disconnection that the token's own
+    /// expiry was already going to cause. The deadline is unchanged: refuse to refresh
+    /// and the sweeper ends it at expiry.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task ARefreshWithATokenTheHubRejectsIsRefusedWithAReason()
+    {
+        DateTimeOffset soon = DateTimeOffset.UtcNow.AddMinutes(2);
+
+        PhoneClient phone = _harness.NewPhone(TestIdentities.Owner.TokenExpiringAt(soon));
+        await phone.StartAsync();
+
+        ErrorNotification? refusal = await phone.RefreshTokenAsync(TestIdentities.Uninvited.Token);
+
+        Assert.NotNull(refusal);
+        Assert.Equal(ErrorCodes.TokenExpired, refusal!.Code);
+        Assert.Equal(HubConnectionState.Connected, phone.ConnectionState);
+
+        // The deadline it failed to move is still the deadline.
+        Assert.Equal(soon.ToUnixTimeSeconds(), _harness.Tokens.ExpiryOf(phone.ConnectionId)?.ToUnixTimeSeconds());
     }
 
     /// <summary>Trailing blanks differ harmlessly between two renderings of the same screen.</summary>

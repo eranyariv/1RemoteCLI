@@ -301,7 +301,7 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
 
         _connection.On<TokenExpiringNotification>(
             HubMethods.Agent.TokenExpiring,
-            notification => Complain($"hub: access token expires at {notification.ExpiresAt.ToLocalTime():HH:mm}."));
+            async notification => await RefreshTokenAsync(notification).ConfigureAwait(false));
 
         _connection.On<ErrorNotification>(
             HubMethods.Agent.Error,
@@ -480,6 +480,44 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
         {
             Complain($"hub: registration failed ({ex.Message}).");
         }
+    }
+
+    /// <summary>
+    /// Answers the hub's warning with a fresh token.
+    /// <para>
+    /// The agent is the end that must never need a person: it runs unattended on a
+    /// machine whose owner is, by definition, somewhere else. A token it failed to
+    /// renew would drop the connection and take every session on the machine off the
+    /// air until somebody walked back to the desk — so a failure here is reported
+    /// loudly rather than silently, even though the reconnect loop will also try.
+    /// </para>
+    /// </summary>
+    private async Task RefreshTokenAsync(TokenExpiringNotification notification)
+    {
+        string? token;
+
+        try
+        {
+            token = await _tokenProvider(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Complain($"hub: could not renew the access token ({ex.Message}). Run '1remote login'.");
+            return;
+        }
+
+        if (string.IsNullOrEmpty(token))
+        {
+            Complain(
+                $"hub: the access token expires at {notification.ExpiresAt.ToLocalTime():HH:mm} " +
+                "and could not be renewed. Run '1remote login'.");
+            return;
+        }
+
+        await TryInvokeAsync(
+            HubMethods.Server.RefreshToken,
+            new RefreshTokenRequest { Token = token },
+            CancellationToken.None).ConfigureAwait(false);
     }
 
     private async Task TryInvokeAsync<T>(string method, T argument, CancellationToken cancellationToken)

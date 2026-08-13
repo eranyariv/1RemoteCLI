@@ -237,6 +237,11 @@ export function encodeDetachSession(sessionId: string): unknown[] {
   return [sessionId]
 }
 
+/** `RefreshTokenRequest` */
+export function encodeRefreshToken(token: string): unknown[] {
+  return [token]
+}
+
 export function encodeSendInput(sessionId: string, data: Uint8Array): unknown[] {
   return [sessionId, data]
 }

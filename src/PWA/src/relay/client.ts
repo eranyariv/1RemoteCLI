@@ -23,6 +23,7 @@ import {
   encodeDetachSession,
   encodeInterruptSession,
   encodeResizeTerminal,
+  encodeRefreshToken,
   encodeSendInput,
   type HubError,
   type MachineInfo,
@@ -219,6 +220,46 @@ export class RelayClient {
     await this.refreshMachines()
   }
 
+  /**
+   * Hands the hub a fresh token before the current one runs out.
+   *
+   * MSAL serves this from its own cache when the token still has life in it and goes
+   * to the network only when it does not, so this is cheap in the common case and
+   * correct in the one that matters.
+   *
+   * A failure is reported as signed out rather than swallowed. The alternative is a
+   * terminal that keeps working for a few more minutes and then disconnects for no
+   * visible reason, which is the same outcome with the explanation removed.
+   */
+  private async refreshToken(connection: HubConnection): Promise<void> {
+    let token: string | null = null
+
+    try {
+      token = await getAccessToken()
+    } catch {
+      token = null
+    }
+
+    if (!token) {
+      this.emit('status', 'signed-out', 'Your sign-in could not be renewed.')
+      return
+    }
+
+    try {
+      const rejection = await connection.invoke(Server.RefreshToken, encodeRefreshToken(token))
+
+      if (rejection) {
+        const problem = decodeError(rejection)
+        this.emit('error', problem)
+        this.emit('status', 'signed-out', describeError(problem.code, problem.message))
+      }
+    } catch {
+      // The invoke fails when the hub has already closed the connection, which is
+      // exactly what it does when a refresh presents somebody else's identity. The
+      // reconnect path owns what happens next.
+    }
+  }
+
   private attachHandlers(connection: HubConnection): void {
     connection.on(Client.MachineList, (n) => this.emit('machines', decodeMachineList(n)))
     connection.on(Client.MachineOnline, (n) => this.emit('machineOnline', decodeMachineOnline(n)))
@@ -242,6 +283,10 @@ export class RelayClient {
     })
 
     connection.on(Client.TerminalOutput, (n) => this.emit('terminalOutput', decodeTerminalOutput(n)))
+
+    // SignalR checks the token once, at the handshake. The hub therefore has to ask,
+    // and this has to answer, or the connection is dropped when the token runs out.
+    connection.on(Client.TokenExpiring, () => this.refreshToken(connection))
 
     connection.on(Client.Error, (n) => {
       const problem = decodeError(n)

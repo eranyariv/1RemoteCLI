@@ -177,16 +177,33 @@ A connection whose `UserKey` and verified `preferred_username` both fail to matc
 
 ### 3.6 Mid-connection token expiry
 
-SignalR authenticates at the handshake and **does not re-authenticate afterwards**. Left alone, a WebSocket outlives its access token indefinitely — the single most commonly missed authorization gap in SignalR designs.
+SignalR authenticates at the handshake and **does not re-authenticate afterwards**. Left alone, a WebSocket outlives its access token indefinitely — the single most commonly missed authorization gap in SignalR designs. For a phone left attached overnight that is a connection whose authorization was last checked a day ago; revoking someone's access, or removing them from the allowlist, would have no effect on the connection they already hold. Closing that gap is what this section is for.
 
-The hub therefore tracks each connection's token `exp` and:
+The hub records each connection's token `exp` at admission and owns its lifetime from there:
 
-1. Sends `TokenExpiring` to the client 5 minutes before expiry.
-2. The client acquires a fresh token and invokes `RefreshToken(token)`.
-3. The hub re-validates the token in full, and additionally asserts that the new token's `UserKey` is **identical** to the connection's existing one. A mismatch aborts the connection.
-4. If no valid token is presented by `exp`, the hub aborts the connection.
+1. Sends `TokenExpiring` to the holder **5 minutes** before expiry — comfortably longer than a token acquisition takes even when it has to reach Entra over a bad link.
+2. The holder acquires a fresh token and invokes `RefreshToken(token)`.
+3. The hub **re-validates the token in full** — signature, issuer, audience, required scope and the allowlist — and additionally asserts that the new token's `UserKey` is **identical** to the connection's existing one.
+4. If no valid token has been presented by `exp`, the hub aborts the connection.
 
-Both the PWA and the agent implement this. Clients also supply an `accessTokenFactory` so that automatic reconnects carry a fresh token.
+Both the PWA and the agent implement this. Clients also supply an `accessTokenFactory` so that automatic reconnects (§4.6) carry a fresh token.
+
+Four decisions are worth stating, because each has a plausible-looking alternative:
+
+**Re-validation is the full check, not a signature check.** Anything less would be a way to launder a weak token onto a connection that was opened with a strong one. The refresh path deliberately reuses the bearer handler's own validation parameters and refetches signing keys from the same configuration manager, so a key rollover at the identity provider does not turn every refresh in flight into a disconnection.
+
+**A refused token is not fatal; a changed identity is.** These are treated differently on purpose:
+
+- *Refused* (expired, malformed, wrong audience, no longer on the allowlist) — the hub refuses the refresh and says why, and the connection **survives**. Killing it here would destroy the one channel over which the holder could learn what went wrong, and would bring forward a disconnection that the token's own expiry was already going to cause anyway. The deadline is unchanged: refuse to refresh, and the connection ends at its original `exp`.
+- *Different identity* — the connection is **aborted**. A connection carries attachments, and quietly walking it from one account to another would hand whatever it is watching to somebody who was never granted it. There is no state on such a connection that is safe to keep, including the channel that would have carried the explanation. The holder sees a disconnection, and reconnection re-admits them as whoever they now are.
+
+This asymmetry has a mechanical consequence worth knowing: aborting a connection inside a hub method cancels the in-flight invocation before its return value can be flushed, so an aborting failure can never also be a reported one.
+
+**Expiry is enforced by a sweep, not a timer per connection.** A pass every **30 seconds** over the tracked connections: the work is a dictionary walk, the resolution the problem needs is minutes, and a timer per connection is a leak waiting for the one disposal path somebody forgets. The 30-second interval also guarantees the 5-minute warning arrives with at least 4.5 minutes to spare.
+
+**Expiry is enforced with the same 60-second clock skew the handshake allows.** Being stricter at the sweep than at admission would let the hub accept a token and then immediately kill the connection it had just accepted — which presents to the user as a connection that drops for no reason, on a machine whose clock is merely a little off.
+
+Finally, a token whose `exp` the hub cannot read is **not tracked at all** rather than treated as expiring now. Admission has already decided the token is genuine; disconnecting somebody over a claim the hub failed to parse would turn a hub-side misunderstanding into their outage.
 
 ---
 
@@ -340,7 +357,7 @@ Everything is reconstructed by agents and clients reconnecting after a restart. 
 
 **Routing.** Every hub method resolves `UserKey` from the connection's principal, looks up the target inside that partition only, and rejects with an `Error` message if the target is absent. Since a machine that does not belong to the caller is not in the caller's partition, a spoofed `machineId` finds nothing.
 
-**Liveness.** SignalR keep-alive at 15 seconds, client timeout at 30 seconds. A dropped agent connection marks the machine offline and notifies that user's attached clients; its sessions are removed, since sessions cannot outlive their wrapper.
+**Liveness.** SignalR keep-alive at 15 seconds, client timeout at 30 seconds. A dropped agent connection marks the machine offline and notifies that user's attached clients; its sessions are removed, since sessions cannot outlive their wrapper. Both numbers live in one place and are applied to the hub and to the end-to-end harness alike, so the hub a test exercises behaves like the hub that is deployed on exactly the axis those numbers govern.
 
 ### 4.8 Mobile PWA
 

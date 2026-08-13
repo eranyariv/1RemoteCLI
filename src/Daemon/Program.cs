@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Reflection;
 using System.Runtime.Versioning;
+using OneRemoteCli.Daemon.Agent;
 using OneRemoteCli.Daemon.Cli;
 using OneRemoteCli.Daemon.Pty;
 using OneRemoteCli.Daemon.Wrapper;
@@ -20,6 +21,9 @@ public static class Program
 
     /// <summary>Matches the shell convention for "command could not be run".</summary>
     private const int ExitCannotRun = 127;
+
+    /// <summary>A second agent for the same user, which is always a mistake.</summary>
+    private const int ExitAlreadyRunning = 4;
 
     public static async Task<int> Main(string[] args)
     {
@@ -44,8 +48,7 @@ public static class Program
                 return 0;
 
             case CommandKind.Agent:
-                Console.Error.WriteLine("1remote: the agent is not implemented yet.");
-                return ExitCannotRun;
+                return await RunAgentAsync().ConfigureAwait(false);
 
             case CommandKind.Login:
                 Console.Error.WriteLine("1remote: sign-in is not implemented yet.");
@@ -53,6 +56,39 @@ public static class Program
 
             default:
                 return await RunWrappedAsync(command).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<int> RunAgentAsync()
+    {
+        MachineIdentity identity = MachineIdentity.Load(log: Console.Error.WriteLine);
+
+        await using var host = new AgentHost(identity, log: Console.Error.WriteLine);
+
+        using var stopping = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, e) =>
+        {
+            // Handled, so the agent gets to unwind and tell its wrappers goodbye
+            // instead of being killed mid-frame.
+            e.Cancel = true;
+            stopping.Cancel();
+        };
+
+        Console.WriteLine($"1remote agent: {identity.DisplayName} ({identity.MachineId})");
+        Console.WriteLine($"Listening on \\\\.\\pipe\\{host.PipeName}. Press Ctrl+C to stop.");
+
+        host.Sessions.Changed += () =>
+            Console.WriteLine($"1remote agent: {host.Sessions.Count} session(s) attached.");
+
+        try
+        {
+            await host.RunAsync(stopping.Token).ConfigureAwait(false);
+            return 0;
+        }
+        catch (AgentAlreadyRunningException ex)
+        {
+            Console.Error.WriteLine($"1remote: {ex.Message}");
+            return ExitAlreadyRunning;
         }
     }
 

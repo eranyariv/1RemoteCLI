@@ -59,6 +59,6 @@ public static class AgentConnector
         worse than no session at all. Pass --no-agent to run locally anyway.
         """;
 
-    public static Task<IAgentConnection> ConnectAsync(CancellationToken cancellationToken) =>
-        throw new AgentUnavailableException(NotRunningMessage);
+    public static async Task<IAgentConnection> ConnectAsync(CancellationToken cancellationToken) =>
+        await Ipc.AgentPipeClient.ConnectAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
 }

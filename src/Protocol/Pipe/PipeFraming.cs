@@ -25,18 +25,35 @@ public static class PipeFraming
         MessagePackSerializerOptions.Standard.WithSecurity(MessagePackSecurity.UntrustedData);
 
     /// <summary>Wraps <paramref name="message"/> in an envelope and writes one frame.</summary>
-    public static async ValueTask WriteAsync<T>(
+    public static ValueTask WriteAsync<T>(
         Stream stream,
         PipeMessageKind kind,
         T message,
-        CancellationToken cancellationToken = default)
-    {
-        var envelope = new PipeEnvelope
+        CancellationToken cancellationToken = default) =>
+        WriteAsync(stream, Encode(kind, message), cancellationToken);
+
+    /// <summary>
+    /// Packs a message into an envelope without writing it.
+    /// <para>
+    /// Separate from <see cref="WriteAsync{T}"/> so a sender can encode while it still
+    /// knows the concrete message type and queue the result. Deferring serialisation
+    /// to the point of writing would mean queueing values as <c>object</c>, which
+    /// MessagePack cannot serialise without falling back to embedding type names.
+    /// </para>
+    /// </summary>
+    public static PipeEnvelope Encode<T>(PipeMessageKind kind, T message) =>
+        new()
         {
             Kind = kind,
-            Payload = MessagePackSerializer.Serialize(message, Options, cancellationToken),
+            Payload = MessagePackSerializer.Serialize(message, Options),
         };
 
+    /// <summary>Writes one already-encoded frame.</summary>
+    public static async ValueTask WriteAsync(
+        Stream stream,
+        PipeEnvelope envelope,
+        CancellationToken cancellationToken = default)
+    {
         byte[] body = MessagePackSerializer.Serialize(envelope, Options, cancellationToken);
         if (body.Length > MaxFrameBytes)
         {

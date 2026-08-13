@@ -9,6 +9,12 @@ import type { MachineInfo, SessionInfo, TerminalOutputKind } from '../protocol/w
 import type { RelayClient } from '../relay/client'
 import { ExtraKeys, KeyBarLayout, encodeBinary, encodeKey, type KeyDefinition } from '../terminal/keys'
 import { NoModifiers, applyModifiers, isArmed, type Modifiers } from '../terminal/modifiers'
+import {
+  measureViewport,
+  sameViewport,
+  viewportStyle,
+  type ViewportBox,
+} from '../terminal/viewport'
 import { applyOutput } from '../terminal/apply'
 import { verdict } from '../terminal/latency'
 import { downloadTrace } from '../terminal/trace'
@@ -61,6 +67,9 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
   const modifiersRef = useRef<Modifiers>(NoModifiers)
   modifiersRef.current = modifiers
 
+  // The area the browser is actually showing, which on iOS is not what CSS thinks.
+  const [box, setBox] = useState<ViewportBox | null>(() => measureViewport(window.visualViewport))
+
   /**
    * Takes whatever is armed and disarms it.
    *
@@ -96,6 +105,10 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
     cols: geometry.cols,
     rows: geometry.rows,
     onOutput: write,
+    // What the desk terminal was before the phone reshaped it. Handing it back on
+    // the way out means walking away from the phone does not leave a 45-column
+    // program stranded inside a wide desktop window.
+    restoreOnDetach: { cols: session.cols, rows: session.rows },
   })
 
   sendRef.current = attached.send
@@ -190,6 +203,34 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
     }
   }, [])
 
+  // Track the visible area itself, separately from fitting the terminal into it.
+  //
+  // On iOS the layout viewport does not shrink when the keyboard opens — the page is
+  // scrolled inside a smaller visual viewport — so a `inset-0` element keeps its full
+  // height and hides its own bottom behind the keyboard. The accessory bar and the
+  // last lines of output are exactly what is down there.
+  useEffect(() => {
+    const viewport = window.visualViewport
+    if (!viewport) return
+
+    const apply = () => {
+      const next = measureViewport(viewport)
+      setBox((current) => (sameViewport(current, next) ? current : next))
+    }
+
+    apply()
+
+    viewport.addEventListener('resize', apply)
+    // Scroll, not just resize: the keyboard opening moves the visual viewport
+    // down inside the layout one without changing its size at all.
+    viewport.addEventListener('scroll', apply)
+
+    return () => {
+      viewport.removeEventListener('resize', apply)
+      viewport.removeEventListener('scroll', apply)
+    }
+  }, [])
+
   // Report geometry separately from measuring it, so a burst of resize events while
   // the keyboard animates open produces one message rather than thirty.
   const resize = attached.resize
@@ -255,7 +296,10 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
   const tone = verdict(attached.latency.p50)
 
   return (
-    <div className="fixed inset-0 z-20 flex flex-col bg-slate-950">
+    <div
+      className="fixed inset-x-0 top-0 z-20 flex flex-col bg-slate-950"
+      style={{ height: '100dvh', ...viewportStyle(box) }}
+    >
       <header className="flex items-center gap-2 border-b border-slate-800 px-2 py-2">
         <button
           type="button"

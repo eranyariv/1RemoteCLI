@@ -191,4 +191,80 @@ describe('useAttachedSession', () => {
     // A session that ended has not become uncertain just because the network did.
     expect(result.current.state).toBe('closed')
   })
+
+  it('hands the session back its desk shape when the phone leaves', async () => {
+    // The phone reshaped the real PTY on attach, and nothing at the desk resizes
+    // it back. Without this, walking away leaves a 45-column program stranded
+    // inside a wide desktop window until somebody drags the corner.
+    const { result, unmount } = renderHook(() =>
+      useAttachedSession({ ...options(relay, true), restoreOnDetach: { cols: 120, rows: 30 } }),
+    )
+
+    await waitFor(() => expect(result.current.state).toBe('attached'))
+
+    unmount()
+
+    expect(relay.resize).toHaveBeenCalledWith('session-1', 120, 30)
+  })
+
+  it('restores before it detaches, not after', async () => {
+    // The hub only forwards a resize from a client that is still attached, so the
+    // order is the whole of whether this works.
+    const order: string[] = []
+    relay.resize.mockImplementation(async () => {
+      order.push('resize')
+      return null
+    })
+    relay.detach.mockImplementation(async () => {
+      order.push('detach')
+      return null
+    })
+
+    const { result, unmount } = renderHook(() =>
+      useAttachedSession({ ...options(relay, true), restoreOnDetach: { cols: 120, rows: 30 } }),
+    )
+
+    await waitFor(() => expect(result.current.state).toBe('attached'))
+
+    unmount()
+
+    expect(order).toEqual(['resize', 'detach'])
+  })
+
+  it('does not resize a session it watched exit', async () => {
+    // There is nothing left to reshape, and asking would draw an error about a
+    // session the user already knows is over.
+    const { result, unmount } = renderHook(() =>
+      useAttachedSession({ ...options(relay, true), restoreOnDetach: { cols: 120, rows: 30 } }),
+    )
+
+    await waitFor(() => expect(result.current.state).toBe('attached'))
+
+    act(() => {
+      relay.emit('sessionClosed', 'machine-1', 'session-1', 0)
+    })
+
+    unmount()
+
+    expect(relay.resize).not.toHaveBeenCalled()
+  })
+
+  it('does not restore on a reconnection, only on the way out', async () => {
+    // A dropped socket is not the user walking away, and reshaping the desk
+    // terminal every time the phone loses signal would be its own kind of mess.
+    const { result, rerender } = renderHook(
+      (connected: boolean) =>
+        useAttachedSession({ ...options(relay, connected), restoreOnDetach: { cols: 120, rows: 30 } }),
+      { initialProps: true },
+    )
+
+    await waitFor(() => expect(result.current.state).toBe('attached'))
+
+    rerender(false)
+    rerender(true)
+
+    await waitFor(() => expect(result.current.state).toBe('attached'))
+
+    expect(relay.resize).not.toHaveBeenCalled()
+  })
 })

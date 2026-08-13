@@ -43,6 +43,14 @@ export interface AttachOptions {
   onOutput(data: Uint8Array, kind: TerminalOutputKind): void
   /** Whether the relay connection is currently up. Drives re-attach. */
   connected: boolean
+  /**
+   * The shape to hand the session back when the phone stops looking at it.
+   *
+   * Resizing on the phone reshapes the real PTY, and nothing at the desk resizes it
+   * back — so without this, walking away leaves a 45-column program stranded inside a
+   * wide desktop window until somebody drags the corner.
+   */
+  restoreOnDetach?: { cols: number; rows: number }
 }
 
 /**
@@ -94,6 +102,30 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
   const [missedOutput, setMissedOutput] = useState(false)
   const [latency, setLatency] = useState<LatencyStats>(EMPTY_STATS)
   const [recording, setRecording] = useState(false)
+
+  const restore = useRef(options.restoreOnDetach)
+  restore.current = options.restoreOnDetach
+
+  // Hand the session back its original shape on the way out.
+  //
+  // Declared before the attach effect so that its cleanup runs first: the hub only
+  // forwards a resize from a client that is still attached, so sending this after
+  // the detach would send it into a closed door. Its dependencies are deliberately
+  // narrow — a reconnection re-runs the attach effect below and must not be read as
+  // the user walking away.
+  useEffect(() => {
+    return () => {
+      if (finished.current) return
+
+      const shape = restore.current
+      if (!shape) return
+
+      // Fire-and-forget, like the detach it precedes. The socket may already be
+      // gone, and an error here would be reported about a screen the user has
+      // just left.
+      void client.resize(sessionId, shape.cols, shape.rows)
+    }
+  }, [client, sessionId])
 
   useEffect(() => {
     const off = [

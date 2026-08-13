@@ -5,6 +5,7 @@ using Microsoft.Identity.Client;
 using OneRemoteCli.Daemon.Agent;
 using OneRemoteCli.Daemon.Auth;
 using OneRemoteCli.Daemon.Cli;
+using OneRemoteCli.Daemon.Hub;
 using OneRemoteCli.Daemon.Pty;
 using OneRemoteCli.Daemon.Wrapper;
 
@@ -132,7 +133,36 @@ public static class Program
     {
         MachineIdentity identity = MachineIdentity.Load(log: Console.Error.WriteLine);
 
-        await using var host = new AgentHost(identity, log: Console.Error.WriteLine);
+        var broker = new TokenBroker();
+        var sessions = new SessionRegistry();
+        Uri hubUri = HubEndpoint.Resolve();
+
+        await using var hub = new AgentHubClient(
+            hubUri,
+            identity,
+            sessions,
+            async cancellationToken =>
+            {
+                try
+                {
+                    return (await broker.AcquireTokenAsync(cancellationToken).ConfigureAwait(false)).AccessToken;
+                }
+                catch (NotSignedInException)
+                {
+                    // Not an error here. The agent is expected to be started before
+                    // anyone signs in — at boot, for instance — and must wait rather
+                    // than exit.
+                    return null;
+                }
+                catch (MsalException ex)
+                {
+                    Console.Error.WriteLine($"1remote: could not get a token ({ex.ErrorCode}).");
+                    return null;
+                }
+            },
+            log: Console.Error.WriteLine);
+
+        await using var host = new AgentHost(identity, sessions, hub, log: Console.Error.WriteLine);
 
         using var stopping = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) =>
@@ -145,13 +175,19 @@ public static class Program
 
         Console.WriteLine($"1remote agent: {identity.DisplayName} ({identity.MachineId})");
         Console.WriteLine($"Listening on \\\\.\\pipe\\{host.PipeName}. Press Ctrl+C to stop.");
+        Console.WriteLine($"Relaying through {hubUri}.");
 
         host.Sessions.Changed += () =>
             Console.WriteLine($"1remote agent: {host.Sessions.Count} session(s) attached.");
 
+        // The hub loop runs alongside the pipe server rather than gating it: a machine
+        // with no internet must still be able to run local sessions.
+        Task relay = hub.RunAsync(stopping.Token);
+
         try
         {
             await host.RunAsync(stopping.Token).ConfigureAwait(false);
+            await relay.ConfigureAwait(false);
             return 0;
         }
         catch (AgentAlreadyRunningException ex)

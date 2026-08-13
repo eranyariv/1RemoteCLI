@@ -82,6 +82,9 @@ public sealed class TerminalSession
     /// <summary>What a terminal would be showing for this session right now.</summary>
     public SessionScreen Screen { get; }
 
+    /// <summary>Output waiting to be framed and sent.</summary>
+    public OutputCoalescer Output { get; } = new();
+
     internal ISessionChannel Channel { get; }
 
     /// <summary>

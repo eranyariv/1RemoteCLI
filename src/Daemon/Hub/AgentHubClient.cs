@@ -329,6 +329,10 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
             notification.SessionId,
             () => session.RunExclusiveAsync(async () =>
             {
+                // Anything still buffered is already drawn on the screen being
+                // captured. Sending it after the snapshot would draw it twice.
+                session.Output.Discard();
+
                 byte[] snapshot = session.Screen.Snapshot();
 
                 await SendOutputAsync(

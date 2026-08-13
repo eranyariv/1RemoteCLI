@@ -92,13 +92,38 @@ public sealed class VtParser
     public bool IsAtSafeBoundary => State == VtState.Ground && _pendingNeeded == 0;
 
     /// <summary>Feeds bytes to the parser, reporting what they mean to <paramref name="sink"/>.</summary>
-    public void Parse(ReadOnlySpan<byte> bytes, IVtEventSink sink)
+    public void Parse(ReadOnlySpan<byte> bytes, IVtEventSink sink) => Parse(bytes, sink, out _);
+
+    /// <summary>
+    /// Feeds bytes and reports where the last cuttable point was.
+    /// <para>
+    /// <paramref name="lastSafeOffset"/> is the number of bytes from the start of
+    /// <paramref name="bytes"/> that may be taken without splitting a sequence or a
+    /// character; -1 means there was no such point in this batch. Only the parser can
+    /// answer this, and only while it is running — asking afterwards gives the state
+    /// at the very end, which says nothing about the eleven kilobytes before it.
+    /// </para>
+    /// <para>
+    /// This exists so output can be cut into frames for the network. A frame that ends
+    /// mid-sequence is not merely inelegant: a client that reconnects and resumes from
+    /// a frame boundary would start reading in the middle of an escape sequence, and
+    /// every byte after it would be interpreted as something else.
+    /// </para>
+    /// </summary>
+    public void Parse(ReadOnlySpan<byte> bytes, IVtEventSink sink, out int lastSafeOffset)
     {
         ArgumentNullException.ThrowIfNull(sink);
 
-        foreach (byte b in bytes)
+        lastSafeOffset = -1;
+
+        for (int i = 0; i < bytes.Length; i++)
         {
-            Advance(b, sink);
+            Advance(bytes[i], sink);
+
+            if (IsAtSafeBoundary)
+            {
+                lastSafeOffset = i + 1;
+            }
         }
     }
 

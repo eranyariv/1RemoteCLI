@@ -101,6 +101,97 @@ public class AgentHostTests
         await WaitUntilAsync(() => fixture.Sink.Output.Contains("hello"));
     }
 
+    /// <summary>
+    /// A thousand small writes do not become a thousand messages.
+    /// <para>
+    /// This is the difference between a phone that works on a train and one that does
+    /// not. A full-screen program redrawing at its own pace produces writes far faster
+    /// than any link can carry individual messages, and the redraws in between are
+    /// overwritten before anyone could have seen them.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task AFloodOfSmallWritesIsCoalescedIntoFarFewerFrames()
+    {
+        await using var fixture = await AgentFixture.StartAsync();
+
+        AgentPipeClient wrapper = await fixture.ConnectAsync();
+        await wrapper.OpenSessionAsync(StartInfo("pwsh"), default).WaitAsync(Timeout);
+
+        // Kept under the wrapper's outbound queue depth on purpose. Exceeding it is a
+        // different failure — the wrapper deliberately drops the agent rather than
+        // stall the desk terminal — and a test that tripped it would be measuring
+        // that rule instead of this one.
+        const int writes = 400;
+        byte[] line = Encoding.UTF8.GetBytes("redraw\r\n");
+
+        for (int i = 0; i < writes; i++)
+        {
+            await wrapper.SendOutputAsync(line, default);
+        }
+
+        int expected = writes * line.Length;
+
+        await WaitUntilAsync(() => fixture.Sink.FrameSizes.Sum() == expected);
+
+        IReadOnlyList<int> frames = fixture.Sink.FrameSizes;
+
+        // Nothing is lost or duplicated, whatever the framing did.
+        Assert.Equal(expected, frames.Sum());
+
+        // The real assertion. An uncoalesced path produces one frame per write; the
+        // bound is generous because the exact count depends on how many ticks the
+        // writes happened to span, and pinning that would make this a clock test.
+        Assert.True(frames.Count < writes / 10, $"{frames.Count} frames for {writes} writes.");
+
+        Assert.All(frames, size => Assert.InRange(size, 1, OutputCoalescer.MaxFrameBytes));
+    }
+
+    /// <summary>
+    /// A burst larger than the message limit is split, and no piece exceeds it.
+    /// SignalR refuses an oversized message outright, so this is the difference
+    /// between a slow screen and a dropped connection.
+    /// </summary>
+    [Fact]
+    public async Task ABurstLargerThanTheMessageLimitIsSplitIntoBoundedFrames()
+    {
+        await using var fixture = await AgentFixture.StartAsync();
+
+        AgentPipeClient wrapper = await fixture.ConnectAsync();
+        await wrapper.OpenSessionAsync(StartInfo("pwsh"), default).WaitAsync(Timeout);
+
+        byte[] burst = Encoding.UTF8.GetBytes(new string('x', OutputCoalescer.MaxFrameBytes * 4));
+        await wrapper.SendOutputAsync(burst, default);
+
+        await WaitUntilAsync(() => fixture.Sink.FrameSizes.Sum() == burst.Length);
+
+        IReadOnlyList<int> frames = fixture.Sink.FrameSizes;
+
+        Assert.All(frames, size => Assert.InRange(size, 1, OutputCoalescer.MaxFrameBytes));
+        Assert.True(frames.Count >= 4, $"expected at least 4 frames, got {frames.Count}.");
+    }
+
+    /// <summary>
+    /// The last thing a program writes still arrives, even though it lands between two
+    /// ticks. This is the moment the user is most likely to be looking: the error the
+    /// program printed just before it stopped.
+    /// </summary>
+    [Fact]
+    public async Task TheFinalOutputSurvivesTheSessionEnding()
+    {
+        await using var fixture = await AgentFixture.StartAsync();
+
+        AgentPipeClient wrapper = await fixture.ConnectAsync();
+        await wrapper.OpenSessionAsync(StartInfo("pwsh"), default).WaitAsync(Timeout);
+
+        await wrapper.SendOutputAsync(Encoding.UTF8.GetBytes("last words"), default);
+        await wrapper.CloseSessionAsync(7, default);
+
+        await WaitUntilAsync(() => fixture.Sink.LastExitCode == 7);
+
+        Assert.Contains("last words", fixture.Sink.Output, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task RoutesInputResizeAndInterruptToTheRightWrapper()
     {
@@ -272,6 +363,7 @@ public class AgentHostTests
     private sealed class RecordingSink : ISessionSink
     {
         private readonly StringBuilder _output = new();
+        private readonly List<int> _frameSizes = [];
         private readonly object _lock = new();
 
         public string Output
@@ -281,6 +373,18 @@ public class AgentHostTests
                 lock (_lock)
                 {
                     return _output.ToString();
+                }
+            }
+        }
+
+        /// <summary>The size of every frame, in order. Coalescing is a claim about these.</summary>
+        public IReadOnlyList<int> FrameSizes
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return [.. _frameSizes];
                 }
             }
         }
@@ -297,6 +401,7 @@ public class AgentHostTests
         {
             lock (_lock)
             {
+                _frameSizes.Add(bytes.Length);
                 _output.Append(Encoding.UTF8.GetString(bytes.Span));
             }
 

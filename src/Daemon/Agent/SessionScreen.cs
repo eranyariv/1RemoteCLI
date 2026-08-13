@@ -61,17 +61,27 @@ public sealed class SessionScreen
         }
     }
 
-    /// <summary>Applies output from the program.</summary>
-    public void Feed(ReadOnlySpan<byte> bytes)
+    /// <summary>
+    /// Applies output from the program, and reports where it could be cut.
+    /// <para>
+    /// The return value is the offset within <paramref name="bytes"/> of the last
+    /// point that is safe to end a network frame at, or -1 if there was none. It comes
+    /// from the emulator's own parser because that parser has already looked at every
+    /// byte — running a second state machine alongside it to answer the same question
+    /// would double the per-byte cost of the hottest path in the system.
+    /// </para>
+    /// </summary>
+    public int Feed(ReadOnlySpan<byte> bytes)
     {
         if (bytes.IsEmpty)
         {
-            return;
+            return -1;
         }
 
         lock (_gate)
         {
-            _parser.Parse(bytes, _screen);
+            _parser.Parse(bytes, _screen, out int lastSafeOffset);
+            return lastSafeOffset;
         }
     }
 

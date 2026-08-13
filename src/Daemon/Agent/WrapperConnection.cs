@@ -19,19 +19,25 @@ public sealed class WrapperConnection : ISessionChannel
     private readonly SessionRegistry _registry;
     private readonly ISessionSink _sink;
     private readonly Action<string>? _log;
+    private readonly TimeSpan? _outputTick;
 
     private TerminalSession? _session;
+    private SessionOutputPump? _pump;
+    private CancellationTokenSource? _pumping;
+    private Task _pumpTask = Task.CompletedTask;
 
     public WrapperConnection(
         AgentPipeConnection connection,
         SessionRegistry registry,
         ISessionSink? sink = null,
-        Action<string>? log = null)
+        Action<string>? log = null,
+        TimeSpan? outputTick = null)
     {
         _connection = connection ?? throw new ArgumentNullException(nameof(connection));
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _sink = sink ?? NullSessionSink.Instance;
         _log = log;
+        _outputTick = outputTick;
     }
 
     /// <summary>The session this wrapper registered, or null before it has.</summary>
@@ -93,14 +99,16 @@ public sealed class WrapperConnection : ISessionChannel
                 {
                     ReadOnlyMemory<byte> bytes = PipeFraming.DecodePayload<OutputMessage>(envelope).Bytes;
 
-                    // The emulator is fed and the bytes forwarded as one step, so a
-                    // snapshot can never be taken between the two and hand a client a
-                    // screen that already includes output it is about to receive again.
+                    // Fed to the emulator immediately but sent on the pump's tick. The
+                    // screen must always be current — a snapshot is only worth
+                    // anything if it reflects what the program has actually done — but
+                    // the wire does not need to hear about every read.
                     await live.RunExclusiveAsync(
-                        async () =>
+                        () =>
                         {
-                            live.Screen.Feed(bytes.Span);
-                            await _sink.OnOutputAsync(live, bytes, cancellationToken).ConfigureAwait(false);
+                            int safe = live.Screen.Feed(bytes.Span);
+                            live.Output.Append(bytes.Span, safe);
+                            return ValueTask.CompletedTask;
                         },
                         cancellationToken).ConfigureAwait(false);
                 }
@@ -146,6 +154,10 @@ public sealed class WrapperConnection : ISessionChannel
             new SessionAcceptedMessage { SessionId = _session.SessionId },
             cancellationToken).ConfigureAwait(false);
 
+        _pump = new SessionOutputPump(_session, _sink, _outputTick);
+        _pumping = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _pumpTask = _pump.RunAsync(_pumping.Token);
+
         await _sink.OnOpenedAsync(_session, cancellationToken).ConfigureAwait(false);
     }
 
@@ -154,6 +166,23 @@ public sealed class WrapperConnection : ISessionChannel
         if (_session is not TerminalSession session)
         {
             return;
+        }
+
+        // Stop the tick, then send what is left. The other order would race the pump
+        // for the last frame, and losing it means the phone never sees why the program
+        // stopped — which is exactly the moment the user is looking.
+        if (_pumping is not null)
+        {
+            await _pumping.CancelAsync().ConfigureAwait(false);
+            await _pumpTask.ConfigureAwait(false);
+            _pumping.Dispose();
+            _pumping = null;
+        }
+
+        if (_pump is not null)
+        {
+            await _pump.FlushAsync().ConfigureAwait(false);
+            _pump = null;
         }
 
         _session = null;

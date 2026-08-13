@@ -55,6 +55,9 @@ internal sealed class EndToEndHarness : IAsyncDisposable
     private string _pipeName = string.Empty;
     private int _hubPort;
 
+    /// <summary>Every log record the hub and the agent produced, at every level.</summary>
+    public RecordingLogger Logs { get; } = new();
+
     private EndToEndHarness()
     {
     }
@@ -106,6 +109,11 @@ internal sealed class EndToEndHarness : IAsyncDisposable
 
         builder.WebHost.UseUrls($"http://127.0.0.1:{_hubPort}");
         builder.Logging.ClearProviders();
+
+        // Everything the hub logs, kept and at every level, so LogRedactionTests can
+        // assert on what was never written. Nothing else reads it.
+        builder.Logging.AddProvider(Logs);
+        builder.Logging.SetMinimumLevel(LogLevel.Trace);
 
         builder.Services.Configure<EntraOptions>(options =>
         {
@@ -215,7 +223,7 @@ internal sealed class EndToEndHarness : IAsyncDisposable
             identity,
             sessions,
             _ => Task.FromResult<string?>(TestIdentities.Owner.Token),
-            log: message => Console.WriteLine($"[agent] {message}"));
+            Logs.CreateLogger("agent"));
 
         // A unique pipe name, because the production one is per user and two of these
         // running at once would collide on FirstPipeInstance.

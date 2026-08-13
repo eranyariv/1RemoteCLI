@@ -4,7 +4,10 @@ using Microsoft.AspNetCore.Http.Connections.Client;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using OneRemoteCli.Daemon.Agent;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using OneRemoteCli.Protocol;
+using OneRemoteCli.Protocol.Diagnostics;
 using OneRemoteCli.Protocol.Hub;
 using OneRemoteCli.Terminal.Vt;
 
@@ -41,10 +44,10 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     private readonly MachineIdentity _identity;
     private readonly SessionRegistry _sessions;
     private readonly Func<CancellationToken, Task<string?>> _tokenProvider;
-    private readonly Action<string>? _log;
+    private readonly ILogger _logger;
 
     /// <summary>Last message logged, so a hub that is down for an hour does not produce an hour of identical lines.</summary>
-    private string? _lastComplaint;
+    private int? _lastComplaint;
 
     private volatile bool _signedOut;
 
@@ -56,7 +59,7 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
         MachineIdentity identity,
         SessionRegistry sessions,
         Func<CancellationToken, Task<string?>> tokenProvider,
-        Action<string>? log = null,
+        ILogger? logger = null,
         Action<HttpConnectionOptions>? configureConnection = null)
     {
         ArgumentNullException.ThrowIfNull(hubUri);
@@ -64,7 +67,7 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
         _identity = identity ?? throw new ArgumentNullException(nameof(identity));
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _tokenProvider = tokenProvider ?? throw new ArgumentNullException(nameof(tokenProvider));
-        _log = log;
+        _logger = logger ?? NullLogger.Instance;
 
         _connection = new HubConnectionBuilder()
             .WithUrl(hubUri, options =>
@@ -132,7 +135,7 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
         catch (Exception ex)
         {
             // A broken observer is not a broken relay.
-            Complain($"hub: a status listener failed ({ex.Message}).");
+            _logger.Failed(ex, "Notifying a status listener");
         }
     }
 
@@ -161,7 +164,7 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
                     _signedOut = true;
                     RaiseStateChanged();
 
-                    Complain("hub: not signed in, so this machine is not reachable from your phone. Run '1remote login'.");
+                    Once(1101, () => _logger.NotSignedIn("Run '1remote login'."));
                     wait = SignedOutRetry;
                 }
                 else
@@ -172,13 +175,15 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
                     await _connection.StartAsync(cancellationToken).ConfigureAwait(false);
                     await RegisterAsync(cancellationToken).ConfigureAwait(false);
 
+                    _logger.HubConnected(_identity.MachineId);
+
                     retry = MinimumRetry;
                     RaiseStateChanged();
 
                     // Returns when automatic reconnect has given up entirely.
                     await _closed.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
 
-                    Complain("hub: disconnected, reconnecting.");
+                    _logger.HubDisconnected("the connection closed");
                     wait = MinimumRetry;
                 }
             }
@@ -188,12 +193,14 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
             }
             catch (Exception ex)
             {
-                Complain($"hub: {ex.Message}");
+                Once(1900, () => _logger.Failed(ex, "Connecting to the hub"));
                 retry = Backoff(retry);
             }
 
             try
             {
+                _logger.HubReconnecting(wait.TotalSeconds);
+
                 await Task.Delay(wait, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
@@ -211,6 +218,8 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     public async ValueTask OnOpenedAsync(TerminalSession session, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(session);
+
+        _logger.SessionOpened(_identity.MachineId, session.SessionId, session.Program);
 
         await TryInvokeAsync(
             HubMethods.Server.SessionOpened,
@@ -291,10 +300,12 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
                     TargetConnectionId = target,
                 },
                 cancellationToken).ConfigureAwait(false);
+
+            _logger.OutputRelayed(sessionId, seq, data.Length);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Complain($"hub: output dropped ({ex.Message}).");
+            Once(1303, () => _logger.OutputDropped(sessionId, data.Length, "the connection failed mid-send"));
         }
     }
 
@@ -304,6 +315,8 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(session);
+
+        _logger.SessionClosed(_identity.MachineId, session.SessionId, exitCode);
 
         await TryInvokeAsync(
             HubMethods.Server.SessionClosed,
@@ -318,6 +331,8 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(session);
 
+        _logger.SessionAwaitingInput(session.SessionId);
+
         await TryInvokeAsync(
             HubMethods.Server.SessionAwaitingInput,
             new SessionAwaitingInputNotification { SessionId = session.SessionId, Hint = hint },
@@ -330,9 +345,14 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     {
         _connection.On<SendInputNotification>(
             HubMethods.Agent.SendInput,
-            async notification => await RouteAsync(
-                notification.SessionId,
-                () => _sessions.SendInputAsync(notification.SessionId, notification.Data)).ConfigureAwait(false));
+            async notification =>
+            {
+                _logger.InputDelivered(notification.SessionId, notification.Data.Length);
+
+                await RouteAsync(
+                    notification.SessionId,
+                    () => _sessions.SendInputAsync(notification.SessionId, notification.Data)).ConfigureAwait(false);
+            });
 
         _connection.On<ResizeTerminalNotification>(
             HubMethods.Agent.ResizeTerminal,
@@ -355,7 +375,7 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
 
         _connection.On<DetachRequestedNotification>(
             HubMethods.Agent.DetachRequested,
-            notification => Log($"hub: client detached from session {notification.SessionId}."));
+            notification => _logger.ClientDetached(notification.SessionId));
 
         _connection.On<TokenExpiringNotification>(
             HubMethods.Agent.TokenExpiring,
@@ -363,7 +383,7 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
 
         _connection.On<ErrorNotification>(
             HubMethods.Agent.Error,
-            notification => Complain($"hub: {notification.Code} — {notification.Message}"));
+            notification => Once(1901, () => _logger.Refused("A hub call", notification.Code, notification.Message)));
     }
 
     /// <summary>
@@ -386,7 +406,7 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     {
         if (!_sessions.TryGet(notification.SessionId, out TerminalSession session))
         {
-            Complain($"hub: cannot attach session {notification.SessionId}, which is not running here.");
+            _logger.Refused("Attach", "session_not_found", notification.SessionId);
             return;
         }
 
@@ -438,9 +458,10 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
                 await SendSnapshotAsync(session, notification.ClientConnectionId).ConfigureAwait(false);
             })).ConfigureAwait(false);
 
-        Log(resumed
-            ? $"hub: client resumed session {notification.SessionId}."
-            : $"hub: client attached to session {notification.SessionId}.");
+        _logger.ClientAttached(
+            notification.SessionId,
+            notification.LastSeq ?? -1,
+            resumed ? "the frames it missed" : "a fresh snapshot");
     }
 
     /// <summary>
@@ -519,12 +540,12 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
 
             if (error is not null)
             {
-                Complain($"hub: refused this machine ({error.Code}) — {error.Message}");
+                Once(1003, () => _logger.HubRefused(error.Code, error.Message));
                 return;
             }
 
             _lastComplaint = null;
-            Log($"hub: registered as {_identity.DisplayName}.");
+            _logger.MachineRegistered(_identity.MachineId);
 
             foreach (TerminalSession session in _sessions.Snapshot())
             {
@@ -536,7 +557,7 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Complain($"hub: registration failed ({ex.Message}).");
+            Once(1900, () => _logger.Failed(ex, "Registering this machine"));
         }
     }
 
@@ -560,15 +581,13 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Complain($"hub: could not renew the access token ({ex.Message}). Run '1remote login'.");
+            Once(1102, () => _logger.TokenRenewalFailed(ex.GetType().Name));
             return;
         }
 
         if (string.IsNullOrEmpty(token))
         {
-            Complain(
-                $"hub: the access token expires at {notification.ExpiresAt.ToLocalTime():HH:mm} " +
-                "and could not be renewed. Run '1remote login'.");
+            Once(1102, () => _logger.TokenRenewalFailed("no cached sign-in"));
             return;
         }
 
@@ -593,12 +612,12 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
 
             if (error is not null)
             {
-                Complain($"hub: {method} refused ({error.Code}) — {error.Message}");
+                Once(1901, () => _logger.Refused(method, error.Code, error.Message));
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Complain($"hub: {method} failed ({ex.Message}).");
+            Once(1900, () => _logger.Failed(ex, method));
         }
     }
 
@@ -618,11 +637,11 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
         }
         catch (UnknownSessionException)
         {
-            Complain($"hub: ignoring a request for session {sessionId}, which is not running here.");
+            _logger.Refused("Delivering to a session", "session_not_found", sessionId);
         }
         catch (Exception ex)
         {
-            Complain($"hub: could not deliver to session {sessionId} ({ex.Message}).");
+            _logger.Failed(ex, "Delivering to a session");
         }
     }
 
@@ -644,18 +663,25 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     private static TimeSpan Backoff(TimeSpan current) =>
         TimeSpan.FromTicks(Math.Min(current.Ticks * 2, MaximumRetry.Ticks));
 
-    private void Log(string message) => _log?.Invoke(message);
-
-    /// <summary>Logs a problem, but only when it is not the one already being complained about.</summary>
-    private void Complain(string message)
+    /// <summary>
+    /// Logs something, unless it is the same complaint as last time.
+    /// <para>
+    /// A hub that is down for an hour would otherwise produce an hour of identical
+    /// lines, which is not merely noise: the log rolls daily and is meant to be
+    /// readable, and a wall of one repeated warning hides everything either side of
+    /// it. Keyed by event id rather than by message text, so two different failures
+    /// are never mistaken for a repeat of one.
+    /// </para>
+    /// </summary>
+    private void Once(int eventId, Action write)
     {
-        if (_lastComplaint == message)
+        if (_lastComplaint == eventId)
         {
             return;
         }
 
-        _lastComplaint = message;
-        _log?.Invoke(message);
+        _lastComplaint = eventId;
+        write();
     }
 
     private async Task StopQuietlyAsync()

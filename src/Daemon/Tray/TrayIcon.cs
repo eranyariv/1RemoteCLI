@@ -28,7 +28,7 @@ public sealed class TrayIcon : IDisposable
     private readonly string _machineName;
     private readonly Action _onSignIn;
     private readonly Action _onShowSessions;
-    private readonly Action _onOpenFolder;
+    private readonly Action _onOpenLogs;
     private readonly Action _onQuit;
 
     private readonly Thread _thread;
@@ -46,13 +46,13 @@ public sealed class TrayIcon : IDisposable
         string machineName,
         Action onSignIn,
         Action onShowSessions,
-        Action onOpenFolder,
+        Action onOpenLogs,
         Action onQuit)
     {
         _machineName = machineName ?? string.Empty;
         _onSignIn = onSignIn ?? throw new ArgumentNullException(nameof(onSignIn));
         _onShowSessions = onShowSessions ?? throw new ArgumentNullException(nameof(onShowSessions));
-        _onOpenFolder = onOpenFolder ?? throw new ArgumentNullException(nameof(onOpenFolder));
+        _onOpenLogs = onOpenLogs ?? throw new ArgumentNullException(nameof(onOpenLogs));
         _onQuit = onQuit ?? throw new ArgumentNullException(nameof(onQuit));
 
         _thread = new Thread(Pump)
@@ -120,7 +120,7 @@ public sealed class TrayIcon : IDisposable
         _signIn = new ToolStripMenuItem("Sign in", null, (_, _) => _onSignIn());
         menu.Items.Add(_signIn);
         menu.Items.Add(new ToolStripMenuItem("Show sessions", null, (_, _) => _onShowSessions()));
-        menu.Items.Add(new ToolStripMenuItem("Open settings folder", null, (_, _) => _onOpenFolder()));
+        menu.Items.Add(new ToolStripMenuItem("Open logs", null, (_, _) => _onOpenLogs()));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Quit", null, (_, _) => _onQuit()));
 

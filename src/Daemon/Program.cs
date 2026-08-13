@@ -5,12 +5,15 @@ using System.Runtime.Versioning;
 using Microsoft.Identity.Client;
 using OneRemoteCli.Daemon.Agent;
 using OneRemoteCli.Daemon.Auth;
+using Microsoft.Extensions.Logging;
 using OneRemoteCli.Daemon.Cli;
+using OneRemoteCli.Daemon.Diagnostics;
 using OneRemoteCli.Daemon.Hub;
 using OneRemoteCli.Daemon.Install;
 using OneRemoteCli.Daemon.Pty;
 using OneRemoteCli.Daemon.Tray;
 using OneRemoteCli.Daemon.Wrapper;
+using OneRemoteCli.Protocol.Diagnostics;
 
 namespace OneRemoteCli.Daemon;
 
@@ -167,6 +170,9 @@ public static class Program
 
     private static async Task<int> RunAgentAsync()
     {
+        using ILoggerFactory loggers = AgentLogging.Create();
+        ILogger logger = loggers.CreateLogger("Agent");
+
         MachineIdentity identity = MachineIdentity.Load(log: Console.Error.WriteLine);
 
         var broker = new TokenBroker();
@@ -192,11 +198,11 @@ public static class Program
                 }
                 catch (MsalException ex)
                 {
-                    Console.Error.WriteLine($"1remote: could not get a token ({ex.ErrorCode}).");
+                    logger.TokenRenewalFailed(ex.ErrorCode);
                     return null;
                 }
             },
-            log: Console.Error.WriteLine);
+            loggers.CreateLogger("Hub"));
 
         await using var host = new AgentHost(
             identity,
@@ -204,7 +210,6 @@ public static class Program
             hub,
             log: Console.Error.WriteLine,
             awaitingInput: AwaitingInputOptions.Load(log: Console.Error.WriteLine));
-
 
         using var stopping = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) =>
@@ -216,8 +221,10 @@ public static class Program
         };
 
         Console.WriteLine($"1remote agent: {identity.DisplayName} ({identity.MachineId})");
-        Console.WriteLine($"Listening on \\\\.\\pipe\\{host.PipeName}. Press Ctrl+C to stop.");
-        Console.WriteLine($"Relaying through {hubUri}.");
+        Console.WriteLine($"Relaying through {hubUri}. Press Ctrl+C to stop.");
+        Console.WriteLine($"Logging to {FileLogger.DefaultDirectory}.");
+
+        logger.PipeListening(host.PipeName);
 
         host.Sessions.Changed += () =>
             Console.WriteLine($"1remote agent: {host.Sessions.Count} session(s) attached.");
@@ -269,7 +276,7 @@ public static class Program
                 identity.DisplayName,
                 onSignIn: () => Launch(Installer.ExecutablePath, "login"),
                 onShowSessions: () => Launch(HubEndpoint.AppUri().ToString()),
-                onOpenFolder: () => Launch(Path.GetDirectoryName(MachineIdentity.DefaultPath) ?? "."),
+                onOpenLogs: () => Launch(FileLogger.DefaultDirectory),
                 onQuit: stopping.Cancel);
 
             tray.Start();

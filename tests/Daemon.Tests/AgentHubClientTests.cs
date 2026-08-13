@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using OneRemoteCli.Daemon.Agent;
 using OneRemoteCli.Daemon.Hub;
 using OneRemoteCli.Protocol;
@@ -308,14 +309,14 @@ public sealed class AgentHubClientTests : IAsyncLifetime
         // The agent is expected to start before anyone signs in — at boot, say — and
         // must keep the machine's local sessions working while it waits.
         var sessions = new SessionRegistry();
-        var complaints = new List<string>();
+        var logs = new RecordingLogger();
 
         await using var client = new AgentHubClient(
             _hubUri,
             Identity(),
             sessions,
             _ => Task.FromResult<string?>(null),
-            log: complaints.Add);
+            logs.CreateLogger("agent"));
 
         using var stopping = new CancellationTokenSource();
         Task run = client.RunAsync(stopping.Token);
@@ -324,7 +325,7 @@ public sealed class AgentHubClientTests : IAsyncLifetime
 
         Assert.False(run.IsFaulted);
         Assert.False(client.IsConnected);
-        Assert.Contains(complaints, c => c.Contains("1remote login", StringComparison.Ordinal));
+        Assert.Contains("1remote login", logs.All(), StringComparison.Ordinal);
 
         stopping.Cancel();
         await run;
@@ -341,11 +342,11 @@ public sealed class AgentHubClientTests : IAsyncLifetime
             Message = "Ask an administrator.",
         };
 
-        var complaints = new List<string>();
-        await StartAsync(new SessionRegistry(), complaints.Add);
+        var logs = new RecordingLogger();
+        await StartAsync(new SessionRegistry(), logs);
 
         await Next<RegisterMachineRequest>();
-        await WaitUntil(() => complaints.Any(c => c.Contains(ErrorCodes.AccountNotAllowed, StringComparison.Ordinal)));
+        await WaitUntil(() => logs.All().Contains(ErrorCodes.AccountNotAllowed, StringComparison.Ordinal));
     }
 
     [Theory]
@@ -361,14 +362,14 @@ public sealed class AgentHubClientTests : IAsyncLifetime
 
     // Helpers.
 
-    private async Task<AgentHubClient> StartAsync(SessionRegistry sessions, Action<string>? log = null)
+    private async Task<AgentHubClient> StartAsync(SessionRegistry sessions, RecordingLogger? logs = null)
     {
         var client = new AgentHubClient(
             _hubUri,
             Identity(),
             sessions,
             _ => Task.FromResult<string?>("token"),
-            log: log);
+            logs?.CreateLogger("agent") ?? NullLogger.Instance);
 
         _clients.Add(client);
 

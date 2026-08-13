@@ -607,6 +607,27 @@ The hub is a single instance with no redundancy; a restart drops all connections
 
 Terminal content is **relayed but never persisted** — the hub holds bytes only for the instant it takes to forward them, and writes no terminal content to logs at any level. Screen state exists only in agent memory and dies with the session.
 
+**How that guarantee is enforced.** "Never log terminal content" is not a rule anyone can keep by being careful; a single `_log.LogDebug($"got {text}")` added at 2 a.m. while chasing a framing bug undoes it, and nothing fails. So the logging vocabulary is closed rather than free-form. `Protocol/Diagnostics/LogEvents.cs` is the only vocabulary the product logs through: a set of `[LoggerMessage]` source-generated events with fixed compile-time templates and fixed parameter lists. There is no `Log(string message)` member, so there is no free-form string to interpolate a payload into, and no member accepts `byte[]`, a span, a screen, or a line of text. What gets logged about traffic is **sizes and sequence numbers** — which is what you actually need to debug framing and flow control anyway:
+
+```
+Relayed 512 bytes as seq 1841 for session s-7f2a.
+Delivered 3 bytes of input to session s-7f2a.
+```
+
+Two deliberate exclusions. A session's **display name is not logged**, because it is a string the user typed and can hold anything; the *program* name is, because we chose that metadata and it is how you tell two sessions apart. And the general failure event takes an `Exception` rather than a message, so the call site has nothing to format.
+
+Three tests hold the line, because there are three ways to break it:
+
+| Test | Catches |
+| --- | --- |
+| `LogEventsTests` (reflection over the vocabulary) | Somebody *adding* an event that could carry a payload |
+| `LogRedactionTests` (end-to-end canary) | Any component logging a payload through some other logger |
+| `FileLoggerTests` | A formatter reintroducing content while rendering "for readability" |
+
+The canary drives the real product — real pipe, real pseudoconsole, real hub — with a secret-shaped string flowing both directions through a session, captures every record from every sink at `Trace`, and asserts the string appears in none of them. It has been verified to fail when a payload log is deliberately added.
+
+**Log files.** `%LOCALAPPDATA%\1RemoteCLI\logs\agent-YYYY-MM-DD.log`, one per day, fourteen days kept. The file is opened and closed per write rather than held, so it can be read, copied or deleted while the agent is running — a log you must stop the misbehaving process to collect is a log nobody ever sends you. `ONEREMOTE_LOG_LEVEL` turns it up (`trace`, `debug`/`verbose`, `info`, `warn`, `error`, `off`); an unrecognised value gives `Information` rather than refusing to start. The default is `Information`, not `Debug`, because `Debug` logs a line per relayed frame and would bury the one line that matters.
+
 ### 7.4 Security posture
 
 Threats addressed: cross-user access (structural partitioning by `UserKey`), unauthorized sign-in (account allowlist), stale credentials (mid-connection token refresh), local privilege boundaries (pipe ACL restricted to the user's SID), remote code execution (attach-only — the capability does not exist), and machine spoofing (agent-generated GUID, partition-scoped lookup).

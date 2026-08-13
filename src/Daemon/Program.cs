@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.Versioning;
 using Microsoft.Identity.Client;
@@ -6,7 +7,9 @@ using OneRemoteCli.Daemon.Agent;
 using OneRemoteCli.Daemon.Auth;
 using OneRemoteCli.Daemon.Cli;
 using OneRemoteCli.Daemon.Hub;
+using OneRemoteCli.Daemon.Install;
 using OneRemoteCli.Daemon.Pty;
+using OneRemoteCli.Daemon.Tray;
 using OneRemoteCli.Daemon.Wrapper;
 
 namespace OneRemoteCli.Daemon;
@@ -33,6 +36,9 @@ public static class Program
 
     /// <summary>Sign-in was attempted and refused.</summary>
     private const int ExitAuthFailed = 6;
+
+    /// <summary>At least one install or uninstall step did not work.</summary>
+    private const int ExitInstallFailed = 7;
 
     public static async Task<int> Main(string[] args)
     {
@@ -67,6 +73,12 @@ public static class Program
 
             case CommandKind.Status:
                 return await RunStatusAsync().ConfigureAwait(false);
+
+            case CommandKind.Install:
+                return RunInstall();
+
+            case CommandKind.Uninstall:
+                return RunUninstall();
 
             default:
                 return await RunWrappedAsync(command).ConfigureAwait(false);
@@ -129,6 +141,30 @@ public static class Program
         return ExitNotSignedIn;
     }
 
+    private static int RunInstall()
+    {
+        IReadOnlyList<StepResult> steps = Installer.Install(Installer.ExecutablePath, Installer.CurrentUserId);
+
+        return Report(steps, installing: true);
+    }
+
+    private static int RunUninstall() => Report(Installer.Uninstall(), installing: false);
+
+    private static int Report(IReadOnlyList<StepResult> steps, bool installing)
+    {
+        foreach (StepResult step in steps)
+        {
+            Console.WriteLine($"  {(step.Ok ? "ok  " : "FAIL")}  {step.Message}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine(Installer.Summarise(steps, installing));
+
+        // Non-zero on any failure, so a setup script can tell. Printing the failure and
+        // exiting 0 is how half-installed machines happen.
+        return steps.All(step => step.Ok) ? 0 : ExitInstallFailed;
+    }
+
     private static async Task<int> RunAgentAsync()
     {
         MachineIdentity identity = MachineIdentity.Load(log: Console.Error.WriteLine);
@@ -186,6 +222,8 @@ public static class Program
         host.Sessions.Changed += () =>
             Console.WriteLine($"1remote agent: {host.Sessions.Count} session(s) attached.");
 
+        using TrayIcon? tray = StartTray(identity, hub, host, stopping);
+
         // The hub loop runs alongside the pipe server rather than gating it: a machine
         // with no internet must still be able to run local sessions.
         Task relay = hub.RunAsync(stopping.Token);
@@ -200,6 +238,79 @@ public static class Program
         {
             Console.Error.WriteLine($"1remote: {ex.Message}");
             return ExitAlreadyRunning;
+        }
+    }
+
+    /// <summary>
+    /// Puts an icon in the tray, if there is a desktop to put it on.
+    /// <para>
+    /// Optional by design. The agent's job is to keep sessions reachable, and it must
+    /// do that on a machine with no interactive desktop, under a policy that blocks
+    /// shell integration, or with a broken shell — none of which is a reason to stop
+    /// relaying.
+    /// </para>
+    /// </summary>
+    private static TrayIcon? StartTray(
+        MachineIdentity identity,
+        AgentHubClient hub,
+        AgentHost host,
+        CancellationTokenSource stopping)
+    {
+        if (!Environment.UserInteractive)
+        {
+            return null;
+        }
+
+        TrayIcon tray;
+
+        try
+        {
+            tray = new TrayIcon(
+                identity.DisplayName,
+                onSignIn: () => Launch(Installer.ExecutablePath, "login"),
+                onShowSessions: () => Launch(HubEndpoint.AppUri().ToString()),
+                onOpenFolder: () => Launch(Path.GetDirectoryName(MachineIdentity.DefaultPath) ?? "."),
+                onQuit: stopping.Cancel);
+
+            tray.Start();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"1remote: no tray icon ({ex.Message}). The agent is running anyway.");
+            return null;
+        }
+
+        void Refresh() => tray.Update(
+            hub.IsConnected ? AgentState.Connected
+                : hub.IsSignedOut ? AgentState.SignedOut
+                : AgentState.Reconnecting,
+            host.Sessions.Count);
+
+        hub.StateChanged += Refresh;
+        host.Sessions.Changed += Refresh;
+
+        Refresh();
+
+        return tray;
+    }
+
+    /// <summary>Hands something to the shell to open — a URL, a folder or this executable.</summary>
+    private static void Launch(string target, string? arguments = null)
+    {
+        try
+        {
+            using Process? _ = Process.Start(new ProcessStartInfo(target)
+            {
+                Arguments = arguments ?? string.Empty,
+
+                // Required for a URL or a folder: without it the target must be an
+                // executable, and "https://..." is not.
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
+        {
+            Console.Error.WriteLine($"1remote: could not open {target} ({ex.Message}).");
         }
     }
 

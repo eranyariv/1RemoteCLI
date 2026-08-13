@@ -245,13 +245,52 @@ The wrapper does **not** parse VT sequences, hold a screen model, or talk to the
 
 ### 4.2 Tray agent (`1remote agent`)
 
-One per machine. No console window; a tray icon shows connection state and offers *Sign in*, *Show sessions*, *Open logs*, and *Quit*.
+One per machine.
 
 **Machine identity.** On first run the agent generates a GUID and persists it to `%LOCALAPPDATA%\1RemoteCLI\machine.json` along with a friendly display name (defaulting to the computer name, user-editable). The GUID — not the computer name — is the `machineId`. Computer names are neither unique nor unforgeable.
 
 **Named pipe server.** `\\.\pipe\1remotecli-agent-{user-sid}`, with a security descriptor granting access **only to the current user's SID**. Without this ACL any local process, including one running as a different user on a shared machine, could inject keystrokes into a live session. The SID is embedded in the pipe name so that two users logged on to the same machine each get their own agent and their own pipe.
 
-**Autostart.** A Scheduled Task registered at install: trigger *At log on* for the current user, action `1remote.exe agent`, "Run only when user is logged on", hidden, no execution time limit, and *not* stopped on battery or idle. A `Run` registry key is the fallback if task registration fails.
+**Tray icon.** The agent's only face, and for most users the entire product on the desktop side. It shows exactly three states, because the only question a user has is whether their phone can see this machine, and there are only three answers:
+
+| State | Icon | Meaning |
+| --- | --- | --- |
+| Connected | filled green dot | Reachable. Tooltip gives the session count. |
+| Reconnecting | hollow amber ring | Trying. Tooltip says local sessions keep working regardless. |
+| Signed out | hollow grey ring with a slash | Only the user can fix it. *Sign in* is enabled. |
+
+Distinguishable by shape as well as colour: colour alone fails for red/green colour blindness and at 16 px against a dark taskbar. Icons are drawn at runtime rather than shipped as resources.
+
+The tooltip is the whole diagnostic surface for someone whose phone has stopped seeing a machine, so it leads with the state and the machine name and is truncated to the 127 characters Windows will show — beyond that Windows drops the tooltip entirely rather than truncating it.
+
+Menu: *Sign in* (disabled when already connected), *Show sessions* (opens the PWA), *Open settings folder*, *Quit*.
+
+The icon runs its own STA thread with its own message pump. The agent's main thread is busy awaiting the pipe server, and the tray is optional decoration: a machine with no interactive desktop, a policy that blocks shell integration or a broken shell must not stop the agent relaying. Failure to create it is logged and ignored.
+
+The binary is a **console** subsystem executable, because the same binary is the wrapper and a windows-subsystem process has no stdout to write a terminal to. "No console window" for the agent therefore comes from the scheduled task's `Hidden` setting, not from the subsystem.
+
+**Autostart (`1remote install`).** A Scheduled Task, not a Windows service — this is the load-bearing decision of the product. The agent must run *as the interactive user, in their session*, with their environment and their token cache; a service runs in session 0 and can neither see nor be seen by the console the user types at.
+
+The task is registered from XML (`schtasks /Create /XML`) rather than from flags, because several required settings have no flag at all. The XML file must be **UTF-16 with a BOM**; `schtasks` rejects UTF-8 with "The task XML is malformed", which points at the XML rather than at the encoding.
+
+The settings that matter, each of which is a default that silently kills a long-running agent hours after a successful install with nothing in any log:
+
+| Setting | Value | Without it |
+| --- | --- | --- |
+| `LogonType` | `InteractiveToken` | Runs in session 0; cannot see the user's terminals. |
+| `StopIfGoingOnBatteries` | `false` | Unplugging the laptop stops the agent. |
+| `ExecutionTimeLimit` | `PT0S` | The agent vanishes after three days. |
+| `StopOnIdleEnd` / `RunOnlyIfIdle` | `false` | Walking away stops it. |
+| `MultipleInstancesPolicy` | `IgnoreNew` | A second agent fights the first for the same pipe. |
+| `LogonTrigger/UserId` | this user | Fires for every account that logs on. |
+| `Hidden` | `true` | A console window flashes up at every logon. |
+| `RunLevel` | `LeastPrivilege` | Prompts at install and puts the agent on a different integrity level from the terminals it wraps. |
+
+The executable path comes from the *process*, not the assembly location: a single-file publish unpacks the managed assembly to a temp directory, and a task pointing there works once and is then gone.
+
+An `HKCU\...\Run` value is the fallback when task registration is refused, which happens by policy on some managed machines. The installer registers **exactly one** of the two, never both — together they race at logon and the loser exits with "an agent is already running", which reads like a bug.
+
+`1remote install` also adds Start menu shortcuts (*Sign in*, *Start agent*), reports every step individually, continues past a failure rather than leaving a machine half-installed silently, and exits non-zero if any step failed. `1remote uninstall` reverses all three and is safe to run on a machine that was never installed.
 
 **Responsibilities.** Session registry, one headless VT emulator per session, hub connection and authentication, output framing and flow control, idle/prompt detection, and routing input from the hub to the correct wrapper pipe.
 

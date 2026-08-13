@@ -65,9 +65,21 @@ public class CommandLineTests
     [InlineData("login", CommandKind.Login)]
     [InlineData("logout", CommandKind.Logout)]
     [InlineData("status", CommandKind.Status)]
+    [InlineData("install", CommandKind.Install)]
+    [InlineData("uninstall", CommandKind.Uninstall)]
     public void RecognisesSubcommands(string token, CommandKind expected)
     {
         Assert.Equal(expected, CommandLine.Parse([token]).Kind);
+    }
+
+    [Theory]
+    [InlineData("install")]
+    [InlineData("uninstall")]
+    public void EverySubcommandIsDocumented(string token)
+    {
+        // A subcommand missing from the usage text exists only for whoever read the
+        // source, which for an install command is nobody who needs it.
+        Assert.Contains($"1remote {token}", CommandLine.Usage, StringComparison.Ordinal);
     }
 
     /// <summary>A program called <c>agent</c> is still a program when it has arguments.</summary>

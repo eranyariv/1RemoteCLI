@@ -46,6 +46,8 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     /// <summary>Last message logged, so a hub that is down for an hour does not produce an hour of identical lines.</summary>
     private string? _lastComplaint;
 
+    private volatile bool _signedOut;
+
     private volatile TaskCompletionSource _closed =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -83,11 +85,22 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
         // The hub's registry is per connection and in memory, so a new connection id
         // means the hub has never heard of this machine. Re-registering is not a
         // repair, it is the normal path.
-        _connection.Reconnected += async _ => await RegisterAsync(CancellationToken.None).ConfigureAwait(false);
+        _connection.Reconnected += async _ =>
+        {
+            await RegisterAsync(CancellationToken.None).ConfigureAwait(false);
+            RaiseStateChanged();
+        };
+
+        _connection.Reconnecting += _ =>
+        {
+            RaiseStateChanged();
+            return Task.CompletedTask;
+        };
 
         _connection.Closed += _ =>
         {
             _closed.TrySetResult();
+            RaiseStateChanged();
             return Task.CompletedTask;
         };
 
@@ -95,6 +108,33 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     }
 
     public bool IsConnected => _connection.State == HubConnectionState.Connected;
+
+    /// <summary>
+    /// Whether the last attempt failed for want of a token, rather than for want of a
+    /// network. The tray draws the two differently because only one of them is the
+    /// user's to fix.
+    /// </summary>
+    public bool IsSignedOut => _signedOut;
+
+    /// <summary>
+    /// Raised whenever <see cref="IsConnected"/> or <see cref="IsSignedOut"/> may have
+    /// changed. Deliberately carries no payload: the handler reads the properties, so
+    /// a burst of transitions cannot deliver them out of order.
+    /// </summary>
+    public event Action? StateChanged;
+
+    private void RaiseStateChanged()
+    {
+        try
+        {
+            StateChanged?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            // A broken observer is not a broken relay.
+            Complain($"hub: a status listener failed ({ex.Message}).");
+        }
+    }
 
     /// <summary>
     /// Connects and stays connected until cancelled.
@@ -118,17 +158,22 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
 
                 if (token is null)
                 {
+                    _signedOut = true;
+                    RaiseStateChanged();
+
                     Complain("hub: not signed in, so this machine is not reachable from your phone. Run '1remote login'.");
                     wait = SignedOutRetry;
                 }
                 else
                 {
+                    _signedOut = false;
                     _closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
                     await _connection.StartAsync(cancellationToken).ConfigureAwait(false);
                     await RegisterAsync(cancellationToken).ConfigureAwait(false);
 
                     retry = MinimumRetry;
+                    RaiseStateChanged();
 
                     // Returns when automatic reconnect has given up entirely.
                     await _closed.Task.WaitAsync(cancellationToken).ConfigureAwait(false);

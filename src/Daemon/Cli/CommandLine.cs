@@ -18,6 +18,12 @@ public enum CommandKind
     /// <summary>Report who is signed in and whether the token still works.</summary>
     Status,
 
+    /// <summary>Start the agent at logon and add Start menu shortcuts.</summary>
+    Install,
+
+    /// <summary>Undo <see cref="Install"/>.</summary>
+    Uninstall,
+
     /// <summary>Print usage.</summary>
     Help,
 
@@ -78,6 +84,8 @@ public static class CommandLine
         ["login"] = CommandKind.Login,
         ["logout"] = CommandKind.Logout,
         ["status"] = CommandKind.Status,
+        ["install"] = CommandKind.Install,
+        ["uninstall"] = CommandKind.Uninstall,
     };
 
     public static ParsedCommand Parse(IReadOnlyList<string> argv)
@@ -241,6 +249,8 @@ public static class CommandLine
           1remote login                           Sign in
           1remote logout                          Forget the cached sign-in
           1remote status                          Show who is signed in
+          1remote install                         Start the agent at every logon
+          1remote uninstall                       Stop starting the agent at logon
 
         Options:
           --name <text>   Friendly name for the session (defaults to the program name)

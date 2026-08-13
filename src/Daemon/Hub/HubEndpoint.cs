@@ -38,4 +38,17 @@ public static class HubEndpoint
             ? baseUri
             : new Uri(baseUri, $"{path}/{Path}");
     }
+
+    /// <summary>
+    /// Where the phone app lives: the same origin, minus the hub path. The PWA is
+    /// served by the hub rather than from a second host, so that a push deep link, an
+    /// attach socket and a sign-in redirect all share one origin — three origins would
+    /// mean three certificates and a CORS policy for no gain.
+    /// </summary>
+    public static Uri AppUri(string? configured = null)
+    {
+        Uri hub = Resolve(configured);
+
+        return new Uri(hub.GetLeftPart(UriPartial.Authority));
+    }
 }

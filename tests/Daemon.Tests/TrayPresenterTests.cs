@@ -1,0 +1,137 @@
+using OneRemoteCli.Daemon.Tray;
+
+namespace OneRemoteCli.Daemon.Tests;
+
+/// <summary>
+/// The tooltip and menu state.
+/// <para>
+/// This is the whole diagnostic surface for a user whose phone has stopped seeing
+/// their machine, so the wording is behaviour, not decoration: it has to say which of
+/// the three situations they are in and what, if anything, they should do.
+/// </para>
+/// </summary>
+public sealed class TrayPresenterTests
+{
+    private const string Machine = "ADA-LAPTOP";
+
+    [Fact]
+    public void ConnectedSaysHowManySessionsThePhoneCanSee()
+    {
+        TrayPresentation view = TrayPresenter.Present(AgentState.Connected, 3, Machine);
+
+        // The count is the one fact the user can check against what they know they
+        // started; "connected" alone does not distinguish working from wired-up-wrong.
+        Assert.Contains("3 sessions", view.Tooltip, StringComparison.Ordinal);
+        Assert.Contains("connected", view.Tooltip, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConnectedWithNoSessionsSaysHowToStartOne()
+    {
+        // The likeliest reason for looking at the tray: everything is fine, and there
+        // is simply nothing shared yet. Saying "0 sessions" would read like a fault.
+        TrayPresentation view = TrayPresenter.Present(AgentState.Connected, 0, Machine);
+
+        Assert.Contains("1remote pwsh", view.Tooltip, StringComparison.Ordinal);
+        Assert.DoesNotContain("0 sessions", view.Tooltip, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OneSessionIsNotDescribedAsOneSessions()
+    {
+        Assert.Contains("1 session,", TrayPresenter.Present(AgentState.Connected, 1, Machine).Tooltip, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SignedOutSaysWhatToDoAboutIt()
+    {
+        TrayPresentation view = TrayPresenter.Present(AgentState.SignedOut, 2, Machine);
+
+        Assert.Contains("Sign in", view.Tooltip, StringComparison.Ordinal);
+
+        // The only state the user can act on from the menu.
+        Assert.True(view.SignInEnabled);
+    }
+
+    [Fact]
+    public void ReconnectingSaysLocalSessionsAreStillFine()
+    {
+        // Otherwise the honest reading of "reconnecting" is "my session is broken",
+        // and the user kills a terminal that was never in trouble.
+        TrayPresentation view = TrayPresenter.Present(AgentState.Reconnecting, 1, Machine);
+
+        Assert.Contains("keep working", view.Tooltip, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SigningInAgainWhileConnectedIsOffered_As_Nothing()
+    {
+        // Signing in when already signed in does nothing but open a browser, so the
+        // menu item is disabled rather than quietly useless.
+        Assert.False(TrayPresenter.Present(AgentState.Connected, 0, Machine).SignInEnabled);
+    }
+
+    [Theory]
+    [InlineData(AgentState.Connected)]
+    [InlineData(AgentState.Reconnecting)]
+    [InlineData(AgentState.SignedOut)]
+    public void TheBadgeFollowsTheState(AgentState state) =>
+        Assert.Equal(state, TrayPresenter.Present(state, 1, Machine).Badge);
+
+    [Fact]
+    public void TheMachineNameIsShownSoTwoTraysAreTellableApart()
+    {
+        Assert.Contains(Machine, TrayPresenter.Present(AgentState.Connected, 1, Machine).Tooltip, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void AnEmptyMachineNameLeavesNoEmptyBrackets(string name)
+    {
+        TrayPresentation view = TrayPresenter.Present(AgentState.Connected, 1, name);
+
+        Assert.DoesNotContain("()", view.Tooltip, StringComparison.Ordinal);
+        Assert.DoesNotContain("( )", view.Tooltip, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ALongMachineNameCannotPushTheTooltipPastWhatWindowsWillShow()
+    {
+        // Windows drops a tooltip over 127 characters entirely rather than truncating
+        // it, so an over-long name would leave the user with no tooltip at all.
+        TrayPresentation view = TrayPresenter.Present(
+            AgentState.Connected,
+            12,
+            new string('W', 400));
+
+        Assert.True(view.Tooltip.Length <= TrayPresenter.TooltipLimit);
+
+        // And what survives is the part that says what is going on.
+        Assert.StartsWith("1RemoteCLI: connected", view.Tooltip, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(AgentState.Connected)]
+    [InlineData(AgentState.Reconnecting)]
+    [InlineData(AgentState.SignedOut)]
+    public void EveryStateSaysWhichStateItIsOnTheFirstLine(AgentState state)
+    {
+        string first = TrayPresenter.Present(state, 1, Machine).Tooltip.Split('\n')[0];
+
+        Assert.StartsWith("1RemoteCLI: ", first, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheThreeStatesDoNotReadAlike()
+    {
+        string[] tooltips =
+        [
+            TrayPresenter.Present(AgentState.Connected, 1, Machine).Tooltip,
+            TrayPresenter.Present(AgentState.Reconnecting, 1, Machine).Tooltip,
+            TrayPresenter.Present(AgentState.SignedOut, 1, Machine).Tooltip,
+        ];
+
+        Assert.Equal(3, tooltips.Distinct(StringComparer.Ordinal).Count());
+    }
+}

@@ -19,14 +19,30 @@
  * interruptible; that path signals the process rather than writing to the pipe.
  */
 
+import { encodeCsi, type Modifiers } from './modifiers'
+
 export interface KeyDefinition {
   /** What goes on the button. */
   label: string
   /** Longer name, for assistive technology. */
   name: string
   bytes: Uint8Array
+  /**
+   * The final character of the key's CSI sequence, for the keys that can carry a
+   * modifier parameter. Present means "this key knows how to be Ctrl-ed".
+   */
+  csiFinal?: string
   /** True when the key should stand out — the one that stops things. */
   emphasis?: boolean
+  /**
+   * Routed through the interrupt hub method rather than written as bytes.
+   * <p>
+   * A flag rather than a comparison against the label, because the label is a
+   * presentation detail: renaming the button from `^C` to `Ctrl+C` should not
+   * silently turn the one key that has to work on a wedged session into a byte
+   * written to a pipe nobody is reading.
+   */
+  interrupt?: boolean
 }
 
 const ESC = 0x1b
@@ -49,33 +65,71 @@ function seq(...bytes: number[]): Uint8Array {
 export const Keys = {
   escape: { label: 'Esc', name: 'Escape', bytes: seq(ESC) },
   tab: { label: 'Tab', name: 'Tab', bytes: seq(0x09) },
-  ctrlC: { label: '^C', name: 'Ctrl+C — interrupt', bytes: seq(0x03), emphasis: true },
+  ctrlC: {
+    label: '^C',
+    name: 'Ctrl+C — interrupt',
+    bytes: seq(0x03),
+    emphasis: true,
+    interrupt: true,
+  },
   ctrlD: { label: '^D', name: 'Ctrl+D — end of input', bytes: seq(0x04) },
   ctrlZ: { label: '^Z', name: 'Ctrl+Z — suspend', bytes: seq(0x1a) },
-  up: { label: '↑', name: 'Cursor up', bytes: seq(ESC, 0x5b, 0x41) },
-  down: { label: '↓', name: 'Cursor down', bytes: seq(ESC, 0x5b, 0x42) },
-  right: { label: '→', name: 'Cursor right', bytes: seq(ESC, 0x5b, 0x43) },
-  left: { label: '←', name: 'Cursor left', bytes: seq(ESC, 0x5b, 0x44) },
+  up: { label: '↑', name: 'Cursor up', bytes: seq(ESC, 0x5b, 0x41), csiFinal: 'A' },
+  down: { label: '↓', name: 'Cursor down', bytes: seq(ESC, 0x5b, 0x42), csiFinal: 'B' },
+  right: { label: '→', name: 'Cursor right', bytes: seq(ESC, 0x5b, 0x43), csiFinal: 'C' },
+  left: { label: '←', name: 'Cursor left', bytes: seq(ESC, 0x5b, 0x44), csiFinal: 'D' },
   enter: { label: '⏎', name: 'Return', bytes: seq(0x0d) },
 } as const satisfies Record<string, KeyDefinition>
 
 /**
- * The row shown above the keyboard, in reach order: the keys that stop or escape
- * something sit at the ends where a thumb lands, and the arrows cluster in the
- * middle where they are used as a group.
+ * The row shown above the keyboard, in the order the spec draws it: the modifiers
+ * first, because they change what the rest of the keyboard means; then the two keys a
+ * phone is missing outright; then the arrows as a group, since they are used as one;
+ * and the interrupt at the far end, alone, where a thumb lands and nothing else is.
+ *
+ * The modifiers are not in this list. They are not keys — they send nothing — and
+ * modelling them as `KeyDefinition`s would mean every consumer of this row had to
+ * know which entries were real.
  */
 export const KeyBarLayout: KeyDefinition[] = [
   Keys.escape,
   Keys.tab,
-  Keys.left,
   Keys.up,
   Keys.down,
+  Keys.left,
   Keys.right,
+  Keys.enter,
   Keys.ctrlC,
 ]
 
-/** The keys behind the "more" disclosure — real, but rarely the thing you need. */
-export const ExtraKeys: KeyDefinition[] = [Keys.ctrlD, Keys.ctrlZ, Keys.enter]
+/**
+ * The keys behind the "more" disclosure — real, but rarely the thing you need.
+ *
+ * `^D` and `^Z` stay here rather than being left to the sticky Ctrl. They are
+ * reachable that way, but both are one tap from ending a session, and a shortcut you
+ * arrive at accidentally is worse than one you have to go looking for.
+ */
+export const ExtraKeys: KeyDefinition[] = [Keys.ctrlD, Keys.ctrlZ]
+
+/**
+ * The bytes a bar key sends with the given modifiers armed.
+ *
+ * Cursor keys carry their modifiers inside the sequence, because that is how a
+ * terminal reports `Ctrl+Left` and how readline recognises it as "move a word". Every
+ * other key falls back to the general rule, where Alt prefixes an escape and Ctrl,
+ * having nothing to modify, is ignored — arming Ctrl and then pressing Tab should
+ * send a Tab, not nothing.
+ */
+export function encodeKey(key: KeyDefinition, modifiers: Modifiers): Uint8Array {
+  if (key.csiFinal) return encodeCsi(key.csiFinal, modifiers)
+
+  if (!modifiers.alt) return key.bytes
+
+  const out = new Uint8Array(key.bytes.length + 1)
+  out[0] = ESC
+  out.set(key.bytes, 1)
+  return out
+}
 
 const encoder = new TextEncoder()
 

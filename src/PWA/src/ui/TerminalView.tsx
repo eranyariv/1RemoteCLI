@@ -7,7 +7,8 @@ import '@xterm/xterm/css/xterm.css'
 import { describeError } from '../protocol/errors'
 import type { MachineInfo, SessionInfo, TerminalOutputKind } from '../protocol/wire'
 import type { RelayClient } from '../relay/client'
-import { ExtraKeys, KeyBarLayout, encodeBinary, encodeText, type KeyDefinition } from '../terminal/keys'
+import { ExtraKeys, KeyBarLayout, encodeBinary, encodeKey, type KeyDefinition } from '../terminal/keys'
+import { NoModifiers, applyModifiers, isArmed, type Modifiers } from '../terminal/modifiers'
 import { applyOutput } from '../terminal/apply'
 import { verdict } from '../terminal/latency'
 import { downloadTrace } from '../terminal/trace'
@@ -53,6 +54,29 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
   const fitRef = useRef<FitAddon | null>(null)
   const [geometry, setGeometry] = useState({ cols: session.cols, rows: session.rows })
   const [showExtras, setShowExtras] = useState(false)
+  const [modifiers, setModifiers] = useState<Modifiers>(NoModifiers)
+
+  // Read by the xterm callbacks, which are wired once and must see what is armed
+  // *now* rather than what was armed on the render that registered them.
+  const modifiersRef = useRef<Modifiers>(NoModifiers)
+  modifiersRef.current = modifiers
+
+  /**
+   * Takes whatever is armed and disarms it.
+   *
+   * Sticky modifiers apply to exactly one keypress. Leaving Ctrl latched after it
+   * has been used would turn the next letter into a control code nobody asked for —
+   * and on a terminal, an unintended control code is not a typo you can see and
+   * correct.
+   */
+  const consumeModifiers = useCallback((): Modifiers => {
+    const armed = modifiersRef.current
+    if (!isArmed(armed)) return NoModifiers
+
+    modifiersRef.current = NoModifiers
+    setModifiers(NoModifiers)
+    return armed
+  }, [])
 
   // Held in a ref and read by the xterm callbacks: those are wired up once, when the
   // terminal is created, and must always reach the *current* attachment rather than
@@ -107,7 +131,7 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
     term.loadAddon(new WebLinksAddon())
     term.open(host)
 
-    term.onData((data) => sendRef.current(encodeText(data)))
+    term.onData((data) => sendRef.current(applyModifiers(data, consumeModifiers())))
     term.onBinary((data) => sendRef.current(encodeBinary(data)))
 
     termRef.current = term
@@ -118,7 +142,7 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
       termRef.current = null
       fitRef.current = null
     }
-  }, [])
+  }, [consumeModifiers])
 
   // Fit to the container, and tell the far end when the shape changed.
   //
@@ -182,18 +206,39 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
       // enough to have stopped reading its input is exactly the session you are
       // trying to interrupt, and writing 0x03 into a pipe nobody is draining does
       // nothing at all.
-      if (key.label === '^C') {
+      if (key.interrupt) {
+        // Whatever was armed is discarded rather than applied. Nobody taps Ctrl
+        // meaning to change what the interrupt key does, and this is the one key
+        // that must do the same thing every time it is pressed.
+        consumeModifiers()
         attached.interrupt()
       } else {
-        attached.send(key.bytes)
+        attached.send(encodeKey(key, consumeModifiers()))
       }
 
       // Keep focus on the terminal so the software keyboard does not dismiss after
       // every tap on the key row.
       termRef.current?.focus()
     },
-    [attached],
+    [attached, consumeModifiers],
   )
+
+  /**
+   * Arms or disarms a sticky modifier.
+   *
+   * Tapping the same one again disarms it, because the alternative — a modifier you
+   * can only clear by using it — leaves the keyboard in a state the user has to type
+   * their way out of.
+   */
+  const toggleModifier = useCallback((which: keyof Modifiers) => {
+    setModifiers((current) => {
+      const next = { ...current, [which]: !current[which] }
+      modifiersRef.current = next
+      return next
+    })
+
+    termRef.current?.focus()
+  }, [])
 
   const saveTrace = useCallback(() => {
     attached.stopRecording()
@@ -302,6 +347,19 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
 
       <div className="border-t border-slate-800 bg-slate-900/60 pb-[env(safe-area-inset-bottom)]">
         <div className="flex items-center gap-1 overflow-x-auto px-2 py-2">
+          <ModifierButton
+            label="Ctrl"
+            armed={modifiers.ctrl}
+            onToggle={() => toggleModifier('ctrl')}
+          />
+          <ModifierButton
+            label="Alt"
+            armed={modifiers.alt}
+            onToggle={() => toggleModifier('alt')}
+          />
+
+          <span className="mx-1 h-6 w-px shrink-0 bg-slate-700" aria-hidden="true" />
+
           {KeyBarLayout.map((key) => (
             <KeyButton key={key.name} definition={key} onPress={press} />
           ))}
@@ -348,6 +406,42 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
         </p>
       </div>
     </div>
+  )
+}
+
+/**
+ * A sticky modifier.
+ *
+ * Announced as a toggle rather than a button, because that is what it is: a screen
+ * reader saying "Ctrl, pressed" is the only way somebody who cannot see the highlight
+ * finds out that the next letter they type will be a control code.
+ */
+function ModifierButton({
+  label,
+  armed,
+  onToggle,
+}: {
+  label: string
+  armed: boolean
+  onToggle(): void
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={armed}
+      aria-label={`${label} — applies to the next key`}
+      onPointerDown={(event) => {
+        event.preventDefault()
+        onToggle()
+      }}
+      className={`min-h-10 shrink-0 rounded-lg px-3 text-sm font-semibold transition ${
+        armed
+          ? 'bg-sky-400 text-slate-950'
+          : 'bg-slate-800 text-slate-300 active:bg-slate-700'
+      }`}
+    >
+      {label}
+    </button>
   )
 }
 

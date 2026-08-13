@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { ExtraKeys, KeyBarLayout, Keys, encodeBinary, encodeText } from './keys'
+import { ExtraKeys, KeyBarLayout, Keys, encodeBinary, encodeKey, encodeText } from './keys'
+import { NoModifiers } from './modifiers'
 
 /**
  * These are not really tests of code — they are tests of constants. That is the
@@ -40,9 +41,17 @@ describe('key bar', () => {
   it('offers every key a phone keyboard cannot produce', () => {
     const shown = new Set([...KeyBarLayout, ...ExtraKeys].map((key) => key.label))
 
-    for (const label of ['Esc', 'Tab', '^C', '↑', '↓', '←', '→']) {
+    for (const label of ['Esc', 'Tab', '^C', '↑', '↓', '←', '→', '⏎']) {
       expect(shown.has(label)).toBe(true)
     }
+  })
+
+  it('keeps the interrupt on the always-visible row', () => {
+    // Never behind a disclosure. Stopping a runaway agent is the most time-critical
+    // thing anybody does here, and it must not cost a second tap or a moment's
+    // thought about where the key went.
+    expect(KeyBarLayout.some((key) => key.interrupt)).toBe(true)
+    expect(ExtraKeys.some((key) => key.interrupt)).toBe(false)
   })
 
   it('marks the interrupt key as the one that stands out', () => {
@@ -52,6 +61,14 @@ describe('key bar', () => {
     expect(emphasised.map((key) => key.label)).toEqual(['^C'])
   })
 
+  it('identifies the interrupt by a flag, not by its label', () => {
+    // The label is presentation. Routing the one key that has to work on a wedged
+    // session by comparing against it would make renaming the button a silent
+    // functional change.
+    const flagged = [...KeyBarLayout, ...ExtraKeys].filter((key) => key.interrupt)
+    expect(flagged.map((key) => key.label)).toEqual(['^C'])
+  })
+
   it('names every key for assistive technology', () => {
     for (const key of [...KeyBarLayout, ...ExtraKeys]) {
       // "↑" must read as "Cursor up"; a screen reader announcing "up arrow
@@ -59,6 +76,30 @@ describe('key bar', () => {
       expect(key.name.length).toBeGreaterThanOrEqual(key.label.length)
       expect(key.name).not.toMatch(/^[↑↓←→⏎]$/)
     }
+  })
+})
+
+describe('bar keys with modifiers armed', () => {
+  it('sends its plain bytes when nothing is armed', () => {
+    expect([...encodeKey(Keys.tab, NoModifiers)]).toEqual([0x09])
+    expect([...encodeKey(Keys.left, NoModifiers)]).toEqual([0x1b, 0x5b, 0x44])
+  })
+
+  it('folds modifiers into cursor keys', () => {
+    // Ctrl+Left is how readline is told to move back a word.
+    expect([...encodeKey(Keys.left, { ctrl: true, alt: false })]).toEqual([
+      0x1b, 0x5b, 0x31, 0x3b, 0x35, 0x44,
+    ])
+  })
+
+  it('still sends a key Ctrl cannot modify', () => {
+    // Arming Ctrl and pressing Tab must send a Tab. Sending nothing would look
+    // like the bar had stopped working.
+    expect([...encodeKey(Keys.tab, { ctrl: true, alt: false })]).toEqual([0x09])
+  })
+
+  it('prefixes an escape for Alt', () => {
+    expect([...encodeKey(Keys.tab, { ctrl: false, alt: true })]).toEqual([0x1b, 0x09])
   })
 })
 

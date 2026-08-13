@@ -141,21 +141,4 @@ public sealed class OutputCoalescer
             return true;
         }
     }
-
-    /// <summary>
-    /// Throws away everything waiting.
-    /// <para>
-    /// Used when a snapshot is about to be sent. The snapshot is generated from a
-    /// screen that has already absorbed these bytes, so sending them afterwards would
-    /// draw them a second time on top of a screen that already shows them.
-    /// </para>
-    /// </summary>
-    public void Discard()
-    {
-        lock (_gate)
-        {
-            _buffer.Clear();
-            _safeLength = 0;
-        }
-    }
 }

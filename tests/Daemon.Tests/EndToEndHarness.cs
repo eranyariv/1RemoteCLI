@@ -116,6 +116,9 @@ internal sealed class EndToEndHarness : IAsyncDisposable
 
         // The real registry and the real hub, wired the way Program.cs wires them.
         builder.Services.AddSingleton<RelayRegistry>();
+        builder.Services.AddSingleton<OutboundLimits>();
+        builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddSingleton<OutboundFanout>();
         builder.Services.AddSignalR().AddMessagePackProtocol();
 
         WebApplication app = builder.Build();

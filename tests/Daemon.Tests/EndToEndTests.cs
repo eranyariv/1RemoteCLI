@@ -113,12 +113,22 @@ public sealed class EndToEndTests : IAsyncLifetime
             () => shell.Desk.Screen.Contains(token, StringComparison.Ordinal),
             "the same bytes to reach the desk terminal");
 
-        // Sequence numbers exist so Stage 3 can detect a gap after a reconnect. They
-        // are only useful if they are monotonic from the very first frame.
+        // Sequence numbers exist so Stage 3 can detect a gap after a reconnect. What
+        // matters is that they never go backwards and never skip: a skip is what makes
+        // the phone tell the user it missed something.
+        //
+        // Two frames may share a number. A snapshot is labelled with the sequence it
+        // depicts rather than being given one of its own, because it is sent to one
+        // client and a number consumed by one client's repaint would look like a hole
+        // to everybody else watching the same session.
         IReadOnlyList<long> sequences = phone.Sequences;
         Assert.NotEmpty(sequences);
-        Assert.Equal(sequences.OrderBy(s => s), sequences);
-        Assert.Equal(sequences.Distinct().Count(), sequences.Count);
+
+        for (int i = 1; i < sequences.Count; i++)
+        {
+            long step = sequences[i] - sequences[i - 1];
+            Assert.True(step is 0 or 1, $"Sequence jumped from {sequences[i - 1]} to {sequences[i]}.");
+        }
     }
 
     /// <summary>
@@ -625,6 +635,84 @@ public sealed class EndToEndTests : IAsyncLifetime
         await EndToEndHarness.WaitUntilAsync(
             () => phone.Frames.Skip(seen).Any(frame => frame.Kind == TerminalOutputKind.Snapshot),
             "a repaint at the new size");
+    }
+
+    /// <summary>
+    /// One phone reattaching leaves the other phone's screen alone.
+    /// <para>
+    /// Issue #42. Several phones can watch the same session, and an attach is answered
+    /// with either a repaint or a replay of frames the attaching phone missed. Both are
+    /// answers to one phone's question. Broadcast to the others, the repaint is a
+    /// pointless flash and the replay is real corruption: it writes bytes they already
+    /// have onto the screen a second time.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task OnePhoneReattachingDoesNotDisturbAnother()
+    {
+        WrappedShell shell = await _harness.StartShellAsync();
+        PhoneClient watcher = await _harness.ConnectPhoneAsync();
+        PhoneClient rejoiner = await _harness.ConnectPhoneAsync();
+
+        await AttachAsync(watcher, shell);
+        await AttachAsync(rejoiner, shell);
+
+        string before = $"before-{Guid.NewGuid():n}";
+        Assert.Null(await watcher.TypeAsync(shell.SessionId, $"echo {before}\r"));
+
+        await watcher.WaitForScreenAsync(before);
+        await rejoiner.WaitForScreenAsync(before);
+
+        long resumeFrom = rejoiner.LastSeq!.Value;
+        int watcherSaw = watcher.Frames.Count;
+
+        Assert.Null(await rejoiner.DetachAsync(shell.SessionId));
+
+        string during = $"during-{Guid.NewGuid():n}";
+        Assert.Null(await watcher.TypeAsync(shell.SessionId, $"echo {during}\r"));
+        await watcher.WaitForScreenAsync(during);
+
+        int watcherAfterOutput = watcher.Frames.Count;
+        long watcherHighest = watcher.LastSeq!.Value;
+
+        Assert.Null(await rejoiner.AttachAsync(
+            shell.MachineIdHint,
+            shell.SessionId,
+            cols: 80,
+            rows: 25,
+            lastSeq: resumeFrom));
+
+        await rejoiner.WaitForScreenAsync(during);
+
+        // The frames the returning phone was sent to catch it up.
+        IReadOnlyList<OutputFrame> caughtUp = [.. rejoiner.Frames.Skip(watcherSaw)];
+        Assert.NotEmpty(caughtUp);
+
+        // Give anything mistakenly fanned out time to arrive, so this is an assertion
+        // rather than a race the wrong way round.
+        await Task.Delay(500);
+
+        // The watcher may legitimately still be receiving output — a prompt redraw, say
+        // — so its frame count is not the thing to pin. What must never appear is the
+        // signature of somebody else's attach being answered on this connection: a
+        // sequence number it has already seen, which is a replayed frame, or a snapshot,
+        // which is a repaint it never asked for.
+        foreach (OutputFrame frame in watcher.Frames.Skip(watcherAfterOutput))
+        {
+            Assert.Equal(TerminalOutputKind.Delta, frame.Kind);
+            Assert.True(
+                frame.Seq > watcherHighest,
+                $"The watcher was sent sequence {frame.Seq}, which it had already seen.");
+
+            watcherHighest = frame.Seq;
+        }
+
+        Assert.True(_harness.Sessions.TryGet(shell.SessionId, out TerminalSession session));
+
+        await EndToEndHarness.WaitUntilAsync(
+            () => Normalize(watcher.Render(80, 25)) == Normalize(session.Screen.Text())
+                && Normalize(rejoiner.Render(80, 25)) == Normalize(session.Screen.Text()),
+            "both phones to be showing the agent's screen");
     }
 
     /// <summary>Trailing blanks differ harmlessly between two renderings of the same screen.</summary>

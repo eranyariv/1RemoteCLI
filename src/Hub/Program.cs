@@ -13,6 +13,12 @@ builder.Services.AddEntraAuthentication(builder.Configuration);
 // instance would be invisible to a phone connected to another.
 builder.Services.AddSingleton<RelayRegistry>();
 
+// Per-client output queues, so the slowest phone attached to any session cannot stall
+// the agent connection that feeds all of them (spec §4.4).
+builder.Services.AddSingleton<OutboundLimits>();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<OutboundFanout>();
+
 builder.Services
     .AddSignalR(options =>
     {

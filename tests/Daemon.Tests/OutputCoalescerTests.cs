@@ -133,23 +133,6 @@ public sealed class OutputCoalescerTests
     }
 
     /// <summary>
-    /// Discarding leaves nothing behind. Used when a snapshot supersedes what is
-    /// buffered; a leftover byte would be drawn on top of a screen that already has it.
-    /// </summary>
-    [Fact]
-    public void DiscardingLeavesNothing()
-    {
-        OutputCoalescer coalescer = new();
-        Feeder feeder = new();
-
-        feeder.Append(coalescer, "buffered");
-        coalescer.Discard();
-
-        Assert.False(coalescer.TryTake(out _));
-        Assert.Equal(0, coalescer.Pending);
-    }
-
-    /// <summary>
     /// Frames concatenate back into the original stream.
     /// <para>
     /// The property that actually matters. Every other rule here is about *where* the

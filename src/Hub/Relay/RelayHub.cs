@@ -25,9 +25,10 @@ namespace OneRemoteCli.Hub.Relay;
 /// </para>
 /// </summary>
 [Authorize]
-public sealed class RelayHub(RelayRegistry registry, ILogger<RelayHub> logger) : Microsoft.AspNetCore.SignalR.Hub
+public sealed class RelayHub(RelayRegistry registry, OutboundFanout fanout, ILogger<RelayHub> logger) : Microsoft.AspNetCore.SignalR.Hub
 {
     private readonly RelayRegistry _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+    private readonly OutboundFanout _fanout = fanout ?? throw new ArgumentNullException(nameof(fanout));
     private readonly ILogger<RelayHub> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
     public override async Task OnConnectedAsync()
@@ -51,6 +52,8 @@ public sealed class RelayHub(RelayRegistry registry, ILogger<RelayHub> logger) :
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
+        _fanout.Forget(Context.ConnectionId);
+
         DisconnectResult result = _registry.Disconnect(Context.ConnectionId);
 
         if (result.UserKey is not null && result.MachineId is not null)
@@ -168,12 +171,17 @@ public sealed class RelayHub(RelayRegistry registry, ILogger<RelayHub> logger) :
     /// hub does not decode, buffer or inspect <c>Data</c>. Keeping it opaque is what
     /// lets end-to-end encryption be added later without touching the relay.
     /// </para>
+    /// <para>
+    /// It hands off rather than awaiting the send. SignalR processes one invocation at
+    /// a time per connection, so awaiting the fan-out here would let the slowest phone
+    /// attached to any session stop output for every session on the machine.
+    /// </para>
     /// </summary>
-    public async Task TerminalOutput(TerminalOutputNotification notification)
+    public Task TerminalOutput(TerminalOutputNotification notification)
     {
         if (notification is null || string.IsNullOrWhiteSpace(notification.SessionId))
         {
-            return;
+            return Task.CompletedTask;
         }
 
         SessionAddress? address = _registry.MarkAwaitingInput(
@@ -183,7 +191,7 @@ public sealed class RelayHub(RelayRegistry registry, ILogger<RelayHub> logger) :
 
         if (address is null)
         {
-            return;
+            return Task.CompletedTask;
         }
 
         IReadOnlyList<string> watchers = _registry.ClientsAttachedTo(
@@ -191,12 +199,12 @@ public sealed class RelayHub(RelayRegistry registry, ILogger<RelayHub> logger) :
             address.MachineId,
             address.SessionId);
 
-        if (watchers.Count == 0)
+        if (watchers.Count > 0)
         {
-            return;
+            _fanout.Publish(Context.ConnectionId, notification, watchers);
         }
 
-        await Clients.Clients(watchers).SendAsync(HubMethods.Client.TerminalOutput, notification);
+        return Task.CompletedTask;
     }
 
     /// <summary>The agent's idle heuristic fired. Every client of this user hears it, attached or not.</summary>
@@ -282,6 +290,12 @@ public sealed class RelayHub(RelayRegistry registry, ILogger<RelayHub> logger) :
         {
             return error;
         }
+
+        // Anything still queued belongs to the session this client just left, or to an
+        // earlier view of this one. Either way the agent is about to send a snapshot
+        // that supersedes it, and delivering the backlog first would draw the old
+        // session over the new one for as long as it took to drain.
+        _fanout.Reset(Context.ConnectionId);
 
         if (attached!.Displaced is { AgentConnectionId: { } previousAgent } displaced)
         {

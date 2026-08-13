@@ -274,9 +274,18 @@ The agent applies four rules:
 1. **Coalesce.** Output is accumulated and flushed on a fixed ~30 Hz tick (33 ms) rather than per read. This alone collapses most TUI redraw storms.
 2. **Cap.** A frame is capped at 24 KB, comfortably under the 32 KB default limit.
 3. **Split safely.** Frame boundaries are only taken when the VT parser is in the `GROUND` state, so a frame never ends mid-sequence.
-4. **Re-snapshot instead of replay when behind.** If the outbound queue for a client exceeds a threshold (default 256 KB or 2 seconds), the agent **discards the queued byte stream entirely and sends a fresh snapshot instead**.
+4. **Re-snapshot instead of replay when behind.** Queue depth is per client, and the queues live in the hub rather than the agent — the hub is where the difference between one slow phone and a slow session is visible. When a client's queue passes **256 KB** or its oldest frame passes **2 seconds**, the hub **discards that client's backlog entirely** and asks the agent to send it a fresh snapshot.
 
 Rule 4 is the payoff of the screen-state model. Because only the visible screen matters, throwing away a backlog is not lossy from the user's point of view — the snapshot already reflects everything the discarded bytes would have produced. A client on a bad link converges to the current screen instead of falling ever further behind.
+
+Two details make rule 4 survive contact with a genuinely bad link:
+
+- **Every client has its own queue and its own sending task.** SignalR processes one invocation at a time per connection, so if the hub awaited the fan-out inside the agent's call, one phone whose transport buffer was full would stop output for *every session on that machine*. Publishing is therefore non-blocking, and a stalled client can only ever stall itself.
+- **Forced repaints are throttled to one per client every 2 seconds.** A link too slow to carry the output is also too slow to carry a screen, so without a floor the hub would answer each overflow with a snapshot, overflow on the snapshot, and spend the whole link on repaints that never arrive. With the floor, a client that cannot keep up settles into a slow cadence of complete screens — the most useful thing a bad link can deliver.
+
+Because several clients may watch one session, frames that answer a *particular* client — an attach snapshot or a resume replay — carry a target and are delivered only to it. The others never missed those bytes; applying them again would write them onto the screen a second time.
+
+A targeted frame does not consume a sequence number. It carries the number of the state it depicts, so two consecutive frames may share a number, and a repaint sent to one client never appears as a hole to the others. Clients therefore treat sequence numbers as non-decreasing, and report missed output only on a genuine skip.
 
 A snapshot obeys the cap too. A densely coloured full screen re-serializes to well over 24 KB, so it is cut at the same `GROUND` boundaries and sent as several frames. Only the first carries `Kind = Snapshot` — that is what tells the client to clear what it holds — and the rest are ordinary deltas painted on top. All of them are emitted inside the session's exclusive region, so live output cannot interleave between two frames of the same snapshot.
 

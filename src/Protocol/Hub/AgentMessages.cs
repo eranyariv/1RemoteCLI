@@ -65,6 +65,23 @@ public sealed class TerminalOutputNotification
 
     [Key(3)]
     public byte[] Data { get; set; } = [];
+
+    /// <summary>
+    /// When set, only this client connection receives the frame.
+    /// <para>
+    /// Live output is for everyone watching a session, but a repaint is an answer to
+    /// one client's question — it attached, or it fell behind. Broadcasting it would
+    /// redraw screens that were already correct, and broadcasting a resume replay would
+    /// apply output a second time to a client that never missed it.
+    /// </para>
+    /// <para>
+    /// Targeted frames carry the session's current sequence number rather than
+    /// consuming a new one, so they leave no hole in the shared stream for the clients
+    /// that never receive them.
+    /// </para>
+    /// </summary>
+    [Key(4)]
+    public string? TargetConnectionId { get; set; }
 }
 
 /// <summary>Agent to hub. The idle heuristic thinks this session is waiting on the user.</summary>

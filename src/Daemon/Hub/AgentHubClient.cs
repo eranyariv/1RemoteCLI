@@ -213,12 +213,8 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
         byte[] data = bytes.ToArray();
         long seq = session.Tail.Record(kind, data);
 
-        if (!IsConnected)
-        {
-            return;
-        }
-
-        await TransmitAsync(session.SessionId, seq, kind, data, cancellationToken).ConfigureAwait(false);
+        await TransmitAsync(session.SessionId, seq, kind, data, target: null, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>Puts an already-numbered frame on the wire, unchanged.</summary>
@@ -227,8 +223,14 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
         long seq,
         TerminalOutputKind kind,
         byte[] data,
+        string? target,
         CancellationToken cancellationToken)
     {
+        if (!IsConnected)
+        {
+            return;
+        }
+
         try
         {
             // Sent, not invoked: awaiting an acknowledgement for every chunk would put
@@ -241,6 +243,7 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
                     Seq = seq,
                     Kind = kind,
                     Data = data,
+                    TargetConnectionId = target,
                 },
                 cancellationToken).ConfigureAwait(false);
         }
@@ -359,19 +362,22 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
                     {
                         // Resent with their original numbers, so the client sees an
                         // unbroken run and does not report a gap for output it is in
-                        // the middle of receiving.
+                        // the middle of receiving. Addressed to the client that asked,
+                        // because anyone else watching never missed them and would
+                        // apply them a second time.
                         await TransmitAsync(
                             session.SessionId,
                             frame.Seq,
                             frame.Kind,
                             frame.Data,
+                            notification.ClientConnectionId,
                             CancellationToken.None).ConfigureAwait(false);
                     }
 
                     return;
                 }
 
-                await SendSnapshotAsync(session).ConfigureAwait(false);
+                await SendSnapshotAsync(session, notification.ClientConnectionId).ConfigureAwait(false);
             })).ConfigureAwait(false);
 
         Log(resumed
@@ -380,7 +386,7 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     }
 
     /// <summary>
-    /// Sends the current screen, in as many frames as it takes.
+    /// Sends one client the current screen, in as many frames as it takes.
     /// <para>
     /// A snapshot is produced in one piece and can be larger than a single message may
     /// be, so it is cut at points where a terminal is between sequences. Only the first
@@ -388,25 +394,42 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     /// client to clear what it has, and the rest paint on top of the cleared screen.
     /// </para>
     /// <para>
+    /// The frames carry the session's current sequence number rather than new ones.
+    /// They are not part of the shared stream — nobody else receives them — so
+    /// numbering them would leave every other watcher with a gap it would report as
+    /// lost output.
+    /// </para>
+    /// <para>
     /// The caller holds the session's exclusive region, so live output cannot arrive
     /// between two frames of the same snapshot.
     /// </para>
     /// </summary>
-    private async ValueTask SendSnapshotAsync(TerminalSession session)
+    private async ValueTask SendSnapshotAsync(TerminalSession session, string? targetConnectionId)
     {
-        // Anything still buffered is already drawn on the screen being captured.
-        // Sending it after the snapshot would draw it twice.
-        session.Output.Discard();
+        // Everything already applied to the screen being captured goes out first, as
+        // ordinary numbered output. Holding it back would strand the other watchers,
+        // and sending it afterwards would draw it twice on top of a screen that
+        // already shows it. What stays behind is the tail of a sequence the emulator
+        // has not dispatched yet, which is therefore not in the snapshot and is
+        // correctly delivered later.
+        while (session.Output.TryTake(out byte[] pending))
+        {
+            await SendOutputAsync(session, pending, TerminalOutputKind.Delta, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
 
         byte[] snapshot = session.Screen.Snapshot();
         IReadOnlyList<byte[]> frames = VtChunker.Split(snapshot, OutputCoalescer.MaxFrameBytes);
+        long seq = session.Tail.LastSeq;
 
         for (int i = 0; i < frames.Count; i++)
         {
-            await SendOutputAsync(
-                session,
-                frames[i],
+            await TransmitAsync(
+                session.SessionId,
+                seq,
                 i == 0 ? TerminalOutputKind.Snapshot : TerminalOutputKind.Delta,
+                frames[i],
+                targetConnectionId,
                 CancellationToken.None).ConfigureAwait(false);
         }
     }

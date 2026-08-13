@@ -61,6 +61,26 @@ public sealed partial class TerminalScreen : IVtEventSink
     public ScreenBuffer Buffer => IsAlternateScreen ? _alternate : _primary;
 
     /// <summary>
+    /// The primary buffer, whether or not it is the one being drawn to.
+    /// <para>
+    /// A snapshot needs it even while a full-screen program is running: the shell prompt
+    /// underneath is what reappears when that program exits, and the terminal reveals it
+    /// rather than asking anyone to redraw it. A snapshot that only carried the
+    /// alternate screen would leave a client staring at a blank shell afterwards.
+    /// </para>
+    /// </summary>
+    public ScreenBuffer PrimaryBuffer => _primary;
+
+    /// <summary>The alternate buffer, whether or not it is the one being drawn to.</summary>
+    public ScreenBuffer AlternateBuffer => _alternate;
+
+    /// <summary>The cursor the primary screen will get back when the alternate screen is left.</summary>
+    public SavedCursor SavedPrimaryCursor => _savedPrimary;
+
+    /// <summary>The cursor saved while the alternate screen is active.</summary>
+    public SavedCursor SavedAlternateCursor => _savedAlternate;
+
+    /// <summary>
     /// True while a full-screen program is running. Load-bearing for the snapshot:
     /// restoring the wrong buffer means attaching to an editor shows the shell.
     /// </summary>

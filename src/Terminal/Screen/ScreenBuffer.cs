@@ -52,6 +52,18 @@ public sealed class ScreenBuffer
         {
             cells[x] = blank;
         }
+
+        // Erasing part of a row can cut a wide character in half. Only the two edges of
+        // the erased range can be affected, so there is no need to walk the row.
+        if (start > 0 && cells[start - 1].IsWideLeading)
+        {
+            cells[start - 1] = blank;
+        }
+
+        if (end < Columns && end > start && cells[end].IsWideTrailing)
+        {
+            cells[end] = blank;
+        }
     }
 
     public void FillAll(Cell blank)
@@ -145,6 +157,7 @@ public sealed class ScreenBuffer
 
         Array.Copy(cells, column, cells, column + count, Columns - column - count);
         Array.Fill(cells, blank, column, count);
+        RepairWidePairs(cells, Columns, blank);
     }
 
     /// <summary>Shifts a row left into <paramref name="column"/>, blanking the end.</summary>
@@ -160,6 +173,7 @@ public sealed class ScreenBuffer
 
         Array.Copy(cells, column + count, cells, column, Columns - column - count);
         Array.Fill(cells, blank, Columns - count, count);
+        RepairWidePairs(cells, Columns, blank);
     }
 
     /// <summary>
@@ -192,7 +206,7 @@ public sealed class ScreenBuffer
             {
                 Cell[] resized = NewRow(columns, blank);
                 Array.Copy(_rows[y], resized, Math.Min(columns, Columns));
-                RepairWideEdge(resized, columns, blank);
+                RepairWidePairs(resized, columns, blank);
                 _rows[y] = resized;
             }
 
@@ -228,20 +242,29 @@ public sealed class ScreenBuffer
     }
 
     /// <summary>
-    /// A truncated row can end with the left half of a wide character whose right half
-    /// was cut off. Leaving it would render a character in one column and desynchronise
-    /// every column after it.
+    /// Blanks any half of a wide character that has lost its partner.
+    /// <para>
+    /// Shifting a row can cut a pair anywhere in it: the shift moves one half and leaves
+    /// the other where it was. A surviving half is not a state a terminal can actually
+    /// be in, and it is not one that can be described in escape sequences either — so a
+    /// snapshot of such a screen could never reproduce it. Repairing here keeps the
+    /// model to states that are real.
+    /// </para>
     /// </summary>
-    private static void RepairWideEdge(Cell[] row, int columns, Cell blank)
+    private static void RepairWidePairs(Cell[] cells, int columns, Cell blank)
     {
-        if (row[columns - 1].IsWideLeading)
+        for (int x = 0; x < columns; x++)
         {
-            row[columns - 1] = blank;
-        }
+            if (cells[x].IsWideLeading && (x + 1 >= columns || !cells[x + 1].IsWideTrailing))
+            {
+                cells[x] = blank;
+                continue;
+            }
 
-        if (row[0].IsWideTrailing)
-        {
-            row[0] = blank;
+            if (cells[x].IsWideTrailing && (x == 0 || !cells[x - 1].IsWideLeading))
+            {
+                cells[x] = blank;
+            }
         }
     }
 

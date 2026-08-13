@@ -17,6 +17,15 @@ export interface Relay {
   /** Set when the status needs explaining — a refusal, or why we are offline. */
   detail: string | null
   machines: Machines
+  /**
+   * Whether the hub has ever told us what machines exist.
+   *
+   * Distinct from "there are no machines". A deep link tapped from a locked
+   * phone arrives before the socket is up, and without this the app would
+   * announce that the session no longer exists during the second it takes to
+   * find out — on precisely the path the notification feature exists to serve.
+   */
+  loaded: boolean
   lastError: HubError | null
   client: RelayClient
   refresh(): Promise<void>
@@ -39,6 +48,7 @@ export function useRelay(signedIn: boolean): Relay {
   const [status, setStatus] = useState<RelayStatus>('connecting')
   const [detail, setDetail] = useState<string | null>(null)
   const [machines, setMachines] = useState<Machines>([])
+  const [loaded, setLoaded] = useState(false)
   const [lastError, setLastError] = useState<HubError | null>(null)
 
   useEffect(() => {
@@ -48,7 +58,10 @@ export function useRelay(signedIn: boolean): Relay {
         setDetail(why ?? null)
       }),
 
-      client.on('machines', (list) => setMachines(replaceAll(list))),
+      client.on('machines', (list) => {
+        setMachines(replaceAll(list))
+        setLoaded(true)
+      }),
       client.on('machineOnline', (machine) => setMachines((m) => machineOnline(m, machine))),
       client.on('machineOffline', (machineId) => setMachines((m) => machineOffline(m, machineId))),
 
@@ -91,6 +104,7 @@ export function useRelay(signedIn: boolean): Relay {
     if (!signedIn) {
       setStatus('signed-out')
       setMachines([])
+      setLoaded(false)
       void client.stop()
       return
     }
@@ -133,7 +147,7 @@ export function useRelay(signedIn: boolean): Relay {
   const dismissError = useCallback(() => setLastError(null), [])
 
   return useMemo(
-    () => ({ status, detail, machines, lastError, client, refresh, dismissError }),
-    [status, detail, machines, lastError, client, refresh, dismissError],
+    () => ({ status, detail, machines, loaded, lastError, client, refresh, dismissError }),
+    [status, detail, machines, loaded, lastError, client, refresh, dismissError],
   )
 }

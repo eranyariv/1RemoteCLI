@@ -8,7 +8,28 @@ namespace OneRemoteCli.Hub.Relay;
 /// session itself. Every routing decision in the hub produces one of these, and it
 /// always carries the user key so a caller cannot accidentally act across partitions.
 /// </summary>
-public sealed record SessionAddress(string UserKey, string MachineId, string SessionId);
+/// <param name="MachineName">
+/// The machine's display name at the moment of the lookup, for anything that has to
+/// be shown to a human - a push notification, principally.
+/// </param>
+/// <param name="SessionName">The session's display name at the moment of the lookup.</param>
+/// <param name="AttachedClients">
+/// How many of this user's clients were watching this session when the lookup ran.
+/// <para>
+/// Reported here rather than fetched separately because it is used to decide whether
+/// to send a push, and a second lookup could see a different answer - someone attaches
+/// or their phone locks in the gap. Deciding from the same locked read as the routing
+/// is what makes "do not notify about a screen they are already looking at" true
+/// rather than usually true.
+/// </para>
+/// </param>
+public sealed record SessionAddress(
+    string UserKey,
+    string MachineId,
+    string SessionId,
+    string MachineName = "",
+    string SessionName = "",
+    int AttachedClients = 0);
 
 /// <summary>A client's current view of one session, and the agent that serves it.</summary>
 /// <param name="AgentConnectionId">Null when the machine has gone offline since the attach.</param>
@@ -231,22 +252,34 @@ public sealed class RelayRegistry
         lock (_gate)
         {
             RegisteredMachine? machine = MachineOf(connectionId, out string? userKey);
-            if (machine is null || userKey is null || !machine.Sessions.Remove(sessionId))
+            if (machine is null || userKey is null ||
+                !machine.Sessions.Remove(sessionId, out SessionInfo? removed))
             {
                 return null;
             }
 
             UserPartition partition = PartitionOf(userKey);
+            int watchers = 0;
+
             foreach (ClientRecord client in partition.Clients.Values)
             {
                 if (client.Attachment?.SessionId == sessionId &&
                     client.Attachment.MachineId == machine.MachineId)
                 {
+                    // Counted before it is cleared: whether to tell someone their build
+                    // finished depends on whether they were watching it finish.
+                    watchers++;
                     client.Attachment = null;
                 }
             }
 
-            return new SessionAddress(userKey, machine.MachineId, sessionId);
+            return new SessionAddress(
+                userKey,
+                machine.MachineId,
+                sessionId,
+                machine.DisplayName,
+                SessionName(removed),
+                watchers);
         }
     }
 
@@ -267,7 +300,13 @@ public sealed class RelayRegistry
 
             session.AwaitingInput = awaiting;
 
-            return new SessionAddress(userKey, machine.MachineId, sessionId);
+            return new SessionAddress(
+                userKey,
+                machine.MachineId,
+                sessionId,
+                machine.DisplayName,
+                SessionName(session),
+                CountWatchers(userKey, machine.MachineId, sessionId));
         }
     }
 
@@ -456,6 +495,25 @@ public sealed class RelayRegistry
     }
 
     // Internals.
+
+    /// <summary>
+    /// What to call a session on a lock screen.
+    /// <para>
+    /// The program, not the session id, when the agent gave it no name of its own.
+    /// The id is a machine-local handle that means nothing to the person reading the
+    /// notification; "claude is waiting" is the whole message, and
+    /// "9f3c-…-21 is waiting" is noise they have to open the app to decode.
+    /// </para>
+    /// </summary>
+    private static string SessionName(SessionInfo session) =>
+        string.IsNullOrWhiteSpace(session.DisplayName) ? session.Program : session.DisplayName;
+
+    /// <summary>Caller must hold the gate.</summary>
+    private int CountWatchers(string userKey, string machineId, string sessionId) =>
+        _partitions.TryGetValue(userKey, out UserPartition? partition)
+            ? partition.Clients.Values.Count(client =>
+                client.Attachment is { } slot && slot.MachineId == machineId && slot.SessionId == sessionId)
+            : 0;
 
     private UserPartition PartitionOf(string userKey)
     {

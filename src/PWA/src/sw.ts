@@ -27,6 +27,7 @@ import {
   staleCacheNames,
   type PrecacheEntry,
 } from './install/shellCache'
+import { readPushPayload } from './push/notification'
 
 declare const self: ServiceWorkerGlobalScope & {
   /** Injected at build time by vite-plugin-pwa: the hashed app shell. */
@@ -74,9 +75,34 @@ self.addEventListener('fetch', (event) => {
 })
 
 /**
- * Tapping a notification should land in the app that is already open rather than
- * stacking up copies of it. The deep link to a specific session arrives with the
- * push payload in 4.5; the focusing behaviour is the part worth having now.
+ * A session wants something. This is the product's reason for existing on a
+ * phone at all: without it, the app only helps if you happen to be looking.
+ *
+ * A notification is shown for every push, unconditionally. iOS revokes push
+ * permission from apps that receive pushes without showing anything, so
+ * "nothing worth saying" is not an available option — and having the OS quietly
+ * withdraw permission would cost every future notification, not just this one.
+ */
+self.addEventListener('push', (event) => {
+  const plan = readPushPayload(event.data?.text())
+
+  event.waitUntil(
+    self.registration.showNotification(plan.title, {
+      body: plan.body,
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      tag: plan.tag,
+      data: { url: plan.url },
+    }),
+  )
+})
+
+/**
+ * Tapping a notification should land in the session it is about, in the app
+ * that is already open rather than a second copy of it.
+ *
+ * Two taps from a locked phone — tap the notification, tap `y` — is the whole
+ * target, and every branch here exists to keep the machine list out of the way.
  */
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
@@ -87,9 +113,15 @@ self.addEventListener('notificationclick', (event) => {
       const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
       for (const client of clients) {
         await client.focus()
-        if (target !== '/') await client.navigate(target)
+
+        // A message rather than a navigation. The app is already running with a
+        // live socket and possibly an attached terminal; navigating would throw
+        // that away and make the user wait through a reconnect to answer a
+        // question that is sitting there now.
+        client.postMessage({ type: 'OPEN_SESSION', url: target })
         return
       }
+
       await self.clients.openWindow(target)
     })(),
   )

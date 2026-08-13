@@ -145,3 +145,43 @@ Verify:
 Invoke-WebRequest https://1remotecli-hub.azurewebsites.net/health -UseBasicParsing | Select-Object -Expand Content
 # {"status":"ok","version":"1.0.0.0","utcNow":"..."}
 ```
+
+## Notifications (VAPID)
+
+Web Push identifies the sender with a VAPID keypair — a P-256 key, base64url, with no padding. It is not an Azure resource and not an Entra credential; it is generated once and lives in app settings. Without it the hub starts, logs a warning, and serves 404 from `/push/vapid`, which the PWA reads as "notifications are off". Everything else keeps working.
+
+Generate one:
+
+```powershell
+dotnet run --project src\Hub\1RemoteCLI.Hub.csproj -- --generate-vapid
+```
+
+Or, with Node available:
+
+```powershell
+npx --yes web-push generate-vapid-keys
+```
+
+The **subject** must be a `mailto:` or `https:` URL that identifies you. Push services use it to reach the sender when a subscription misbehaves, and some reject a request without it.
+
+```powershell
+. .\scripts\az-env.ps1
+
+az webapp config appsettings set -g 1remotecli-rg -n 1remotecli-hub --settings `
+  "Push__Vapid__Subject=mailto:owner@example.com" `
+  "Push__Vapid__PublicKey=<public key>" `
+  "Push__Vapid__PrivateKey=<private key>"
+```
+
+The double underscore is how App Service nests configuration; these map to the `Push:Vapid` section.
+
+**The private key is a credential.** Anyone holding it can send a notification that arrives under this app's name and icon on every subscribed phone. Keep it out of the repo, out of `appsettings.json`, and out of shell history where you can. It is not needed locally unless you are testing notifications.
+
+**Rotating the keypair invalidates every existing subscription.** Browsers tie a subscription to the public key it was created with, so after a rotation every phone must open the app again to re-subscribe — which it does automatically on connect, but only once someone opens it. Rotate only if the private key leaks.
+
+Verify:
+
+```powershell
+Invoke-WebRequest https://1remotecli-hub.azurewebsites.net/push/vapid -UseBasicParsing | Select-Object -Expand Content
+# {"key":"BM...."}
+```

@@ -22,6 +22,7 @@ import {
   encodeClientHandshake,
   encodeDetachSession,
   encodeInterruptSession,
+  encodeRegisterPush,
   encodeResizeTerminal,
   encodeRefreshToken,
   encodeSendInput,
@@ -30,6 +31,7 @@ import {
   type SessionInfo,
   type TerminalOutput,
 } from '../protocol/wire'
+import type { PushRegistration } from '../push/subscription'
 import { resolveHubUrl } from './endpoint'
 import { ForeverRetryPolicy, reconnectDelay } from './backoff'
 
@@ -353,6 +355,14 @@ export class RelayClient {
 
   async interrupt(sessionId: string): Promise<HubError | null> {
     return this.request(Server.InterruptSession, encodeInterruptSession(sessionId))
+  }
+
+  /** Offers this browser's push subscription, so the hub can reach the phone when nothing is connected. */
+  async registerPush(registration: PushRegistration): Promise<HubError | null> {
+    return this.request(
+      Server.RegisterPush,
+      encodeRegisterPush(registration.endpoint, registration.keys.p256dh, registration.keys.auth),
+    )
   }
 
   /**

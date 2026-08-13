@@ -22,7 +22,7 @@ const DismissedKey = '1remotecli.notifications.dismissed'
  * Prompting inside an iOS tab yields a granted permission and total silence,
  * which is worse than not offering at all - the user believes it is set up.
  */
-export function NotificationsCard() {
+export function NotificationsCard({ onGranted }: { onGranted?: () => void }) {
   const [readiness, setReadiness] = useState<PushReadiness | null>(null)
   const [dismissed, setDismissed] = useState(() => {
     try {
@@ -64,10 +64,15 @@ export function NotificationsCard() {
       // caused by a gesture, and an await before this line is enough to lose it.
       const permission = await Notification.requestPermission()
       setReadiness(pushReadiness({ ...readPushEnvironment(window), permission }))
+
+      // Subscribe now rather than on the next reconnect. The user has just been
+      // told this will notify them; a gap of hours before it actually can is
+      // indistinguishable from it not working.
+      if (permission === 'granted') onGranted?.()
     } finally {
       setBusy(false)
     }
-  }, [])
+  }, [onGranted])
 
   /**
    * The end-to-end check the user can actually perform: if this arrives on the

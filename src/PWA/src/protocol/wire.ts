@@ -253,3 +253,13 @@ export function encodeResizeTerminal(sessionId: string, cols: number, rows: numb
 export function encodeInterruptSession(sessionId: string): unknown[] {
   return [sessionId]
 }
+
+/**
+ * `RegisterPushRequest`
+ *
+ * The nested array is `PushKeys`, which is its own `[MessagePackObject]` and so
+ * serialises as a positional array of its own rather than being flattened.
+ */
+export function encodeRegisterPush(endpoint: string, p256dh: string, auth: string): unknown[] {
+  return [endpoint, [p256dh, auth]]
+}

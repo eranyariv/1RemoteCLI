@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using OneRemoteCli.Hub.Auth;
+using OneRemoteCli.Hub.Push;
 using OneRemoteCli.Protocol;
 using OneRemoteCli.Protocol.Hub;
 
@@ -30,6 +31,8 @@ public sealed class RelayHub(
     OutboundFanout fanout,
     ConnectionTokens tokens,
     IAccessTokenValidator tokenValidator,
+    PushSubscriptionStore pushSubscriptions,
+    IPushNotifier push,
     ILogger<RelayHub> logger) : Microsoft.AspNetCore.SignalR.Hub
 {
     private readonly RelayRegistry _registry = registry ?? throw new ArgumentNullException(nameof(registry));
@@ -37,6 +40,9 @@ public sealed class RelayHub(
     private readonly ConnectionTokens _tokens = tokens ?? throw new ArgumentNullException(nameof(tokens));
     private readonly IAccessTokenValidator _tokenValidator =
         tokenValidator ?? throw new ArgumentNullException(nameof(tokenValidator));
+    private readonly PushSubscriptionStore _pushSubscriptions =
+        pushSubscriptions ?? throw new ArgumentNullException(nameof(pushSubscriptions));
+    private readonly IPushNotifier _push = push ?? throw new ArgumentNullException(nameof(push));
     private readonly ILogger<RelayHub> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
     public override async Task OnConnectedAsync()
@@ -175,6 +181,19 @@ public sealed class RelayHub(
                 ExitCode = notification.ExitCode,
             });
 
+        // Not pushed to someone who was watching it end. They saw the exit code on the
+        // screen a moment ago; a lock-screen copy of it is pure noise.
+        if (address.AttachedClients == 0)
+        {
+            _push.Enqueue(
+                address.UserKey,
+                PushPayload.Finished(
+                    Name(address.MachineName, address.MachineId),
+                    Name(address.SessionName, notification.SessionId),
+                    notification.ExitCode,
+                    PushPayload.DeepLink(address.MachineId, notification.SessionId)));
+        }
+
         return null;
     }
 
@@ -250,10 +269,58 @@ public sealed class RelayHub(
                 Hint = notification.Hint,
             });
 
+        // The push, however, is only for a phone that is *not* looking. Notifying
+        // someone about a prompt already on their screen is how a user learns that
+        // these notifications do not mean anything.
+        if (address.AttachedClients == 0)
+        {
+            _push.Enqueue(
+                address.UserKey,
+                PushPayload.AwaitingInput(
+                    Name(address.MachineName, address.MachineId),
+                    Name(address.SessionName, notification.SessionId),
+                    notification.Hint,
+                    PushPayload.DeepLink(address.MachineId, notification.SessionId)));
+        }
+
         return null;
     }
 
     // Client to hub.
+
+    /// <summary>
+    /// A client offers a Web Push subscription for this user.
+    /// <para>
+    /// Stored against the user, not the connection. A phone gets a new connection
+    /// every time it wakes; the subscription is meant to outlive all of them, since
+    /// its whole purpose is to be reachable when nothing is connected.
+    /// </para>
+    /// </summary>
+    public Task<ErrorNotification?> RegisterPush(RegisterPushRequest request)
+    {
+        if (request is null ||
+            string.IsNullOrWhiteSpace(request.Endpoint) ||
+            request.Keys is null ||
+            string.IsNullOrWhiteSpace(request.Keys.P256dh) ||
+            string.IsNullOrWhiteSpace(request.Keys.Auth))
+        {
+            return Task.FromResult<ErrorNotification?>(
+                Error(ErrorCodes.InvalidRequest, "RegisterPush needs an endpoint and both keys."));
+        }
+
+        bool changed = _pushSubscriptions.Register(
+            RequireUserKey(),
+            new PushSubscription(request.Endpoint, request.Keys.P256dh, request.Keys.Auth));
+
+        if (changed)
+        {
+            // The endpoint is a capability URL for waking somebody's phone, so it is
+            // never logged - only the fact that one arrived.
+            _logger.LogInformation("Registered a push subscription.");
+        }
+
+        return Task.FromResult<ErrorNotification?>(null);
+    }
 
     /// <summary>
     /// A client's protocol handshake.
@@ -541,4 +608,14 @@ public sealed class RelayHub(
 
     private static ErrorNotification Error(string code, string message, string? sessionId = null) =>
         new() { Code = code, Message = message, SessionId = sessionId };
+
+    /// <summary>
+    /// A display name if there is one, otherwise the id.
+    /// <para>
+    /// An id on a lock screen is useless, but it is still better than a blank line -
+    /// it at least tells the user which notification this is not a duplicate of.
+    /// </para>
+    /// </summary>
+    private static string Name(string displayName, string id) =>
+        string.IsNullOrWhiteSpace(displayName) ? id : displayName;
 }

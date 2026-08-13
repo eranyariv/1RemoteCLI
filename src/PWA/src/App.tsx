@@ -1,9 +1,11 @@
-import { Suspense, lazy, useCallback, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 import { useIsAuthenticated, useMsal } from '@azure/msal-react'
 
 import { signOut } from './auth/msal'
 import { describeError } from './protocol/errors'
 import type { MachineInfo, SessionInfo } from './protocol/wire'
+import { readDeepLink, withoutDeepLink, type DeepLink } from './push/subscription'
+import { usePushRegistration } from './push/usePush'
 import { useRelay } from './relay/useRelay'
 import { Banner, StatusPill } from './ui/Chrome'
 import { MachineList } from './ui/MachineList'
@@ -21,11 +23,48 @@ const TerminalView = lazy(() =>
   import('./ui/TerminalView').then((module) => ({ default: module.TerminalView })),
 )
 
+/**
+ * The session named in the URL, taken out of the address bar as it is read.
+ *
+ * Consumed once, at start-up, so that closing the terminal and reloading — which
+ * is what a backgrounded phone eventually does on its own — returns to the
+ * machine list rather than reopening the session the user deliberately left.
+ */
+function takeDeepLink(): DeepLink | null {
+  const link = readDeepLink(window.location.search)
+  if (link) {
+    window.history.replaceState(null, '', withoutDeepLink(window.location.href))
+  }
+
+  return link
+}
+
 export default function App() {
   const isAuthenticated = useIsAuthenticated()
   const { inProgress, accounts } = useMsal()
   const relay = useRelay(isAuthenticated)
-  const [opened, setOpened] = useState<{ machineId: string; sessionId: string } | null>(null)
+  const [opened, setOpened] = useState<DeepLink | null>(takeDeepLink)
+
+  const registerPush = usePushRegistration(relay.client, relay.status === 'connected')
+
+  // A notification tapped while the app is already running. The service worker
+  // sends a message rather than navigating, because navigating would drop the
+  // live socket and make the user wait through a reconnect to answer a question
+  // that is sitting on the screen right now.
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return
+
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string; url?: string } | undefined
+      if (data?.type !== 'OPEN_SESSION' || typeof data.url !== 'string') return
+
+      const link = readDeepLink(new URL(data.url, window.location.origin).search)
+      if (link) setOpened(link)
+    }
+
+    navigator.serviceWorker.addEventListener('message', onMessage)
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage)
+  }, [])
 
   // Held as ids, not objects: the machine list is replaced wholesale on every
   // refresh, and a captured object would freeze the terminal's idea of the session
@@ -112,14 +151,17 @@ export default function App() {
 
         <MachineList machines={relay.machines} onOpenSession={openSession} />
 
-        <NotificationsCard />
+        <NotificationsCard onGranted={registerPush} />
 
         {/*
           A session that vanished while its terminal was open — the program exited
           and the list was refreshed — is worth saying out loud. Silently returning
-          to the list looks like a mis-tap.
+          to the list looks like a mis-tap. Held back until the machine list has
+          actually arrived: a notification tapped from a locked phone opens the app
+          before the socket is up, and announcing that the session is gone while we
+          are still finding out would be wrong on the one path that matters most.
         */}
-        {opened && !session ? (
+        {opened && !session && relay.loaded ? (
           <Banner
             tone="info"
             title="That session is no longer running"

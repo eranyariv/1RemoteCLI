@@ -511,11 +511,29 @@ The notification carries a hint: the last non-blank line, trimmed and truncated.
 
 ### 6.2 Delivery
 
-Web Push with VAPID. The PWA subscribes via the service worker and sends its subscription to the hub with `RegisterPush`; the hub pushes to every subscription belonging to that `UserKey` when a `SessionAwaitingInput` arrives and that user has no client currently attached to the session. The notification deep-links straight into the session view.
+Web Push with VAPID, via `Lib.Net.Http.WebPush`. Hand-rolling RFC 8291's ECDH and HKDF was rejected: getting the encryption subtly wrong yields a payload the browser silently discards, and there is no way to observe that from the server.
 
-**iOS constraints**, since iPhone is the primary target: Web Push requires **iOS 16.4 or later** *and* the PWA to be installed to the home screen — Safari tabs cannot receive push. Permission must be requested from a user gesture. First-run onboarding therefore walks through *Share → Add to Home Screen*, then requests notification permission on an explicit tap.
+**Who gets woken.** The PWA subscribes through the service worker and offers the subscription to the hub with `RegisterPush`, which stores it against `UserKey` — never against the connection, since a phone gets a new connection every time it wakes. Subscriptions are keyed by endpoint within the user, because the endpoint is the browser's own identity for the subscription and re-registering must replace rather than accumulate; keyed any other way, an overnight phone would end up buzzing once per reconnect.
 
-Subscriptions live in the hub's memory, so a hub restart drops them until each PWA reconnects and re-registers. §9 records this.
+**When.** On `SessionAwaitingInput` and on `SessionClosed`, and in both cases only when that user has **no client attached to that session**. Buzzing about the terminal already open in the user's hand is how a person learns to ignore notifications, which costs the ones that matter. The attached-client count is read inside the same lock as the routing decision — a second query could see a different answer if somebody attached in the gap — and so `SessionAddress` carries it out of the registry alongside the machine and session names.
+
+**Naming.** A session is named by its own display name if the agent gave it one, otherwise by its program. Never by its session id: "claude is waiting" is the whole message, where the id would mean nothing to somebody reading a lock screen.
+
+**Perishability.** "Waiting for input" is sent with `Urgency: high` and a **10-minute TTL**; a question that has since been answered is a lie on a lock screen, and the push service should drop it rather than deliver it on wake. "Finished" gets an hour, since it stays true however late it arrives. Both carry a `Topic` — the first 22 characters of the base64url SHA-256 of the tag — so the push service itself collapses supersedable notifications for one session while the phone is offline, and a `tag` so the browser collapses them after delivery.
+
+**Never inline.** SignalR processes one invocation at a time per connection, so a hub method that awaited a push service would let a slow third party stall every session on the reporting agent. `IPushNotifier.Enqueue` is deliberately `void`, backed by a bounded channel (512, `DropOldest`) drained by a background service. An unbounded queue would turn a push outage into hub memory growth; dropping the newest would discard the notification the user most needs.
+
+**Expiry.** A 404 or 410 from the push service means the app was uninstalled or the subscription rotated, and the subscription is forgotten. Anything else is logged and swallowed — a notification is never worth failing a session over. A user whose last subscription goes is removed entirely, so the hub does not accumulate an entry per account that ever registered.
+
+**Payload trust.** The payload is authenticated by nothing the browser checks: anyone holding the endpoint and keys can send one. The service worker therefore keeps only `pathname + search` from whatever URL arrives, and rejects anything that does not resolve to a leading `/` — `new URL` accepts `javascript:` and `data:` against any base and hands back an opaque path that would otherwise pass as relative. A notification tap can never leave this origin under this app's name and icon. For the same reason the service worker **always shows something**, even for a malformed payload: iOS revokes push permission from an app that receives a push and displays nothing, so a dropped notification costs every future one too.
+
+**Tapping.** The deep link is `/?machine=…&session=…` — a query rather than a path, because the app is a single static page and a path would need a rewrite rule or a router. Tapped while the app is already running, the service worker posts `OPEN_SESSION` to the existing client instead of navigating; navigating would tear down the live socket and make the user wait through a reconnect to answer a question already on screen. The link is consumed on read and stripped from the address bar, so a later reload returns to the machine list rather than reopening a session the user deliberately left.
+
+**Configuration.** `GET /push/vapid` returns the public key, unauthenticated — it is public by definition. It returns 404 when no keypair is configured, and the PWA reads that as "push is off" rather than as an error, so a hub running without keys degrades to a working app with no notifications instead of a broken one.
+
+**iOS constraints**, since iPhone is the primary target: Web Push requires **iOS 16.4 or later** *and* the PWA to be installed to the home screen — Safari tabs cannot receive push. Permission must be requested from a user gesture, and any `await` before the request loses it. First-run onboarding therefore walks through *Share → Add to Home Screen*, then requests permission on an explicit tap and subscribes immediately, rather than waiting for the next reconnect.
+
+Subscriptions live in the hub's memory, so a hub restart drops them until each PWA reconnects and re-registers — which it does on every connection, precisely so that recovers by itself. §9 records this.
 
 ---
 

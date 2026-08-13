@@ -16,6 +16,7 @@ using OneRemoteCli.Daemon.Ipc;
 using OneRemoteCli.Daemon.Pty;
 using OneRemoteCli.Daemon.Wrapper;
 using OneRemoteCli.Hub.Auth;
+using OneRemoteCli.Hub.Push;
 using OneRemoteCli.Hub.Relay;
 using OneRemoteCli.Protocol.Hub;
 using OneRemoteCli.Terminal.Screen;
@@ -134,6 +135,14 @@ internal sealed class EndToEndHarness : IAsyncDisposable
             sp.GetRequiredService<AccountAllowlist>(),
             sp.GetRequiredService<IOptions<EntraOptions>>().Value.RequiredScope));
         builder.Services.AddSingleton<TokenExpirySweeper>();
+
+        // Push, which the hub depends on but this harness never exercises: the
+        // notification path has its own tests, and a real push service has no place
+        // in an end-to-end test of the terminal. The queue is left unread, which is
+        // exactly what a hub with no VAPID keys does in production.
+        builder.Services.AddSingleton<PushSubscriptionStore>();
+        builder.Services.AddSingleton<IPushNotifier, DiscardingNotifier>();
+
         builder.Services.AddSignalR(RelayLiveness.Apply).AddMessagePackProtocol();
 
         WebApplication app = builder.Build();
@@ -944,3 +953,12 @@ internal sealed class FakeLocalTerminal(int cols, int rows) : ILocalTerminal
         }
     }
 }
+
+/// <summary>Accepts notifications and drops them: the harness has no phone to wake.</summary>
+internal sealed class DiscardingNotifier : IPushNotifier
+{
+    public void Enqueue(string userKey, PushPayload payload)
+    {
+    }
+}
+

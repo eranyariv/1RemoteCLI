@@ -123,4 +123,70 @@ public sealed class SessionScreen
             return _screen.GetText();
         }
     }
+
+    /// <summary>
+    /// Reads the few facts the awaiting-input heuristic needs, in one pass under the
+    /// same lock the parser holds.
+    /// <para>
+    /// Taken together rather than as three separate properties because they only mean
+    /// anything as a set: a cursor position read a moment after the visibility flag
+    /// could describe a screen that never existed, and this runs on a timer while the
+    /// program is free to be writing.
+    /// </para>
+    /// </summary>
+    public ScreenPosture Posture()
+    {
+        lock (_gate)
+        {
+            int row = _screen.CursorRow;
+            int column = _screen.CursorColumn;
+
+            bool textBefore = false;
+            bool textAfter = false;
+
+            if (row >= 0 && row < _screen.Rows)
+            {
+                ReadOnlySpan<Cell> cells = _screen.GetRow(row);
+
+                for (int x = 0; x < cells.Length; x++)
+                {
+                    if (cells[x].IsBlank)
+                    {
+                        continue;
+                    }
+
+                    // The cursor's own cell counts as "after": a program that parked it
+                    // on top of drawn text is rendering, not asking.
+                    if (x < column)
+                    {
+                        textBefore = true;
+                    }
+                    else
+                    {
+                        textAfter = true;
+                    }
+                }
+            }
+
+            return new ScreenPosture(
+                _screen.Modes.CursorVisible,
+                textBefore && !textAfter,
+                LastNonBlankLine());
+        }
+    }
+
+    /// <summary>Caller must hold the gate.</summary>
+    private string LastNonBlankLine()
+    {
+        for (int row = _screen.Rows - 1; row >= 0; row--)
+        {
+            string line = _screen.GetLine(row);
+            if (line.Trim().Length > 0)
+            {
+                return line;
+            }
+        }
+
+        return string.Empty;
+    }
 }

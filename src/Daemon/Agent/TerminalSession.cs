@@ -40,6 +40,8 @@ public sealed class TerminalSession
 
     private int _cols;
     private int _rows;
+    private long _outputCount;
+    private long _lastOutputTicks;
 
     public TerminalSession(
         string sessionId,
@@ -61,6 +63,7 @@ public sealed class TerminalSession
         Channel = channel;
         Screen = new SessionScreen(cols, rows);
         StartedUtc = DateTimeOffset.UtcNow;
+        _lastOutputTicks = StartedUtc.UtcTicks;
     }
 
     public string SessionId { get; }
@@ -81,6 +84,27 @@ public sealed class TerminalSession
 
     /// <summary>What a terminal would be showing for this session right now.</summary>
     public SessionScreen Screen { get; }
+
+    /// <summary>
+    /// When the program last wrote anything.
+    /// <para>
+    /// Seeded with the start time rather than left at zero, so a session that has
+    /// never produced a byte is measured from when it began instead of appearing to
+    /// have been silent since the epoch.
+    /// </para>
+    /// </summary>
+    public DateTimeOffset LastOutputUtc => new(Volatile.Read(ref _lastOutputTicks), TimeSpan.Zero);
+
+    /// <summary>
+    /// How many times the program has written.
+    /// <para>
+    /// A monotonic counter, not a timestamp, because it is used as a token: something
+    /// that observed the session at one moment can tell whether anything has happened
+    /// since without holding a lock or comparing clocks. The awaiting-input monitor
+    /// uses it to re-arm itself.
+    /// </para>
+    /// </summary>
+    public long OutputCount => Interlocked.Read(ref _outputCount);
 
     /// <summary>Output waiting to be framed and sent.</summary>
     public OutputCoalescer Output { get; } = new();
@@ -123,6 +147,20 @@ public sealed class TerminalSession
         Volatile.Write(ref _cols, cols);
         Volatile.Write(ref _rows, rows);
         Screen.Resize(cols, rows);
+    }
+
+    /// <summary>
+    /// Records that the program wrote something.
+    /// <para>
+    /// Called where the bytes reach the screen rather than where they reach the wire,
+    /// because a session that is producing output while the hub is unreachable is
+    /// still not waiting for anybody.
+    /// </para>
+    /// </summary>
+    internal void NoteOutput(DateTimeOffset now)
+    {
+        Volatile.Write(ref _lastOutputTicks, now.UtcTicks);
+        Interlocked.Increment(ref _outputCount);
     }
 }
 

@@ -162,7 +162,13 @@ public static class Program
             },
             log: Console.Error.WriteLine);
 
-        await using var host = new AgentHost(identity, sessions, hub, log: Console.Error.WriteLine);
+        await using var host = new AgentHost(
+            identity,
+            sessions,
+            hub,
+            log: Console.Error.WriteLine,
+            awaitingInput: AwaitingInputOptions.Load(log: Console.Error.WriteLine));
+
 
         using var stopping = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) =>

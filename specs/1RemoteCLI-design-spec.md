@@ -491,11 +491,23 @@ Windows offers no signal for "this process is blocked on a console read", so det
 1. No output for `QuietPeriod` seconds (default 8, configurable).
 2. The child process is still running.
 3. The cursor is visible.
-4. The screen looks like it is waiting: the cursor sits at the end of a non-empty line, on a line that does not end in a newline — the shape of a prompt awaiting a response.
+4. The screen looks like it is waiting: the cursor sits just past text on its own line with nothing after it — the shape of a prompt awaiting a response.
 
-To keep it from being noisy: at most one notification per quiet episode, re-armed only when new output arrives; a session is never flagged within the first few seconds of starting; and `SessionClosed` fires its own separate "finished" notification carrying the exit code.
+Condition 4 is the discriminator, and it is the reason the agent keeps a screen model rather than a ring of bytes. A build that is merely slow is exactly as quiet as a prompt; what separates them is that the build ended its last line with a newline, which leaves the cursor at column zero of a blank row, while `? Allow this edit? (y/n) ` leaves it against the question. A byte stream cannot answer where the cursor ended up, whether the program hid it, or whether the last thing drawn was a question or the tail of a progress bar. The three facts are read as one record under the screen's lock, because a cursor position sampled a moment after the visibility flag could describe a screen that never existed.
 
-Optional user-configured regexes (`(y/n)`, `Continue?`, `Press any key`) can force a match before the quiet period elapses. The heuristic is intentionally the primary mechanism, since patterns vary per tool and per version.
+The second condition is structural rather than a check: a session exists in the registry only while its wrapper is connected, and the wrapper owns the child, so a sweep only ever sees live sessions.
+
+Detection polls rather than reacting to output, because the event being detected is the *absence* of output and nothing arrives to announce it. The sweep is a few field reads per session on a one-second tick.
+
+To keep it from being noisy: at most one notification per quiet episode, re-armed only when new output arrives; a session is never flagged within `MinimumUptime` of starting (default 5 s), since programs are quiet while they start; and `SessionClosed` fires its own separate "finished" notification carrying the exit code. The arming rule is load-bearing — without it, a prompt left unanswered overnight would notify once a second until morning, and a user who turns notifications off does not turn them back on.
+
+Where sensitivity and silence conflict, the heuristic stays silent. A missed prompt costs the user a few minutes; a false one costs the feature, because a notification that fires when nothing is waiting teaches its recipient to ignore every notification after it. One accepted piece of noise: an idle full-screen editor on the alternate buffer has prompt-shaped posture and will be announced once. That is tolerable, since the hub only pushes when no client is attached.
+
+Optional user-configured regexes (`(y/n)`, `Continue?`, `Press any key`) can force a match before the quiet period elapses. They are matched against the last non-blank line rather than the cursor's line, because prompts like `Press any key` are often followed by a newline. A match bypasses both the quiet period and the shape test, but still requires a visible cursor and the minimum uptime. Patterns are compiled with a 50 ms match timeout — they come from a file the user edits, and one catastrophically backtracking pattern must not stall the sweep for every session on the machine. A pattern that will not compile is logged and dropped; it costs the user that pattern, not the feature.
+
+The heuristic is intentionally the primary mechanism, since prompt wording varies per tool and per version and a shipped pattern list would rot silently. Every number is a guess about somebody else's tools, so none of it is compiled in: `%LOCALAPPDATA%\1RemoteCLI\settings.json` supplies `quietPeriodSeconds`, `minimumUptimeSeconds`, `pollIntervalSeconds`, and `promptPatterns`, and `ONEREMOTE_QUIET_PERIOD_SECONDS` / `ONEREMOTE_MINIMUM_UPTIME_SECONDS` override the file. A malformed settings file is logged and ignored rather than fatal — losing every session on the machine over a stray comma costs far more than the setting being edited.
+
+The notification carries a hint: the last non-blank line, trimmed and truncated. For a prompt that is the question itself, which is more use on a lock screen than the program's name — the user knows what they started, not what it decided to ask.
 
 ### 6.2 Delivery
 

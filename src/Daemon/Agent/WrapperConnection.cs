@@ -108,6 +108,7 @@ public sealed class WrapperConnection : ISessionChannel
                         {
                             int safe = live.Screen.Feed(bytes.Span);
                             live.Output.Append(bytes.Span, safe);
+                            live.NoteOutput(DateTimeOffset.UtcNow);
                             return ValueTask.CompletedTask;
                         },
                         cancellationToken).ConfigureAwait(false);

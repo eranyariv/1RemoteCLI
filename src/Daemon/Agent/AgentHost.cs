@@ -27,6 +27,7 @@ public sealed class AgentHost : IAsyncDisposable
 {
     private readonly AgentPipeServer _server;
     private readonly ISessionSink _sink;
+    private readonly AwaitingInputMonitor _awaitingInput;
     private readonly Action<string>? _log;
     private readonly List<Task> _connections = [];
     private readonly object _connectionsLock = new();
@@ -36,13 +37,15 @@ public sealed class AgentHost : IAsyncDisposable
         SessionRegistry? registry = null,
         ISessionSink? sink = null,
         AgentPipeServer? server = null,
-        Action<string>? log = null)
+        Action<string>? log = null,
+        AwaitingInputOptions? awaitingInput = null)
     {
         Identity = identity ?? throw new ArgumentNullException(nameof(identity));
         Sessions = registry ?? new SessionRegistry();
         _sink = sink ?? NullSessionSink.Instance;
         _server = server ?? new AgentPipeServer();
         _log = log;
+        _awaitingInput = new AwaitingInputMonitor(Sessions, _sink, awaitingInput, log: log);
     }
 
     public MachineIdentity Identity { get; }
@@ -59,6 +62,27 @@ public sealed class AgentHost : IAsyncDisposable
     /// </para>
     /// </summary>
     public async Task RunAsync(CancellationToken cancellationToken = default)
+    {
+        // Detached rather than interleaved with the accept loop: the sweep is about
+        // sessions that already exist, and it must keep running while the loop is
+        // blocked waiting for the next wrapper to connect - which is most of the time.
+        using var stopping = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task monitor = Task.Run(() => _awaitingInput.RunAsync(stopping.Token), CancellationToken.None);
+
+        try
+        {
+            await AcceptAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            await stopping.CancelAsync().ConfigureAwait(false);
+            await monitor.ConfigureAwait(false);
+        }
+
+        await DrainAsync().ConfigureAwait(false);
+    }
+
+    private async Task AcceptAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -82,8 +106,6 @@ public sealed class AgentHost : IAsyncDisposable
             var wrapper = new WrapperConnection(connection, Sessions, _sink, _log);
             Track(Task.Run(() => wrapper.RunAsync(cancellationToken), CancellationToken.None));
         }
-
-        await DrainAsync().ConfigureAwait(false);
     }
 
     private void Track(Task connection)

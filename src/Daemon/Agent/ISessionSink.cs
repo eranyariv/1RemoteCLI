@@ -18,6 +18,20 @@ public interface ISessionSink
         CancellationToken cancellationToken = default);
 
     ValueTask OnClosedAsync(TerminalSession session, int exitCode, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The session looks like it is waiting for the user to answer something.
+    /// <para>
+    /// A guess, not a fact - see <see cref="AwaitingInputHeuristic"/> - and given a
+    /// default implementation so that a sink which has no way to reach the user is not
+    /// obliged to pretend otherwise.
+    /// </para>
+    /// </summary>
+    /// <param name="hint">The line that appears to be the question, if there is one.</param>
+    ValueTask OnAwaitingInputAsync(
+        TerminalSession session,
+        string? hint,
+        CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
 }
 
 /// <summary>Drops everything. The default until a real consumer is wired in.</summary>

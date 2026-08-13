@@ -266,6 +266,19 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
             cancellationToken).ConfigureAwait(false);
     }
 
+    public async ValueTask OnAwaitingInputAsync(
+        TerminalSession session,
+        string? hint,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+
+        await TryInvokeAsync(
+            HubMethods.Server.SessionAwaitingInput,
+            new SessionAwaitingInputNotification { SessionId = session.SessionId, Hint = hint },
+            cancellationToken).ConfigureAwait(false);
+    }
+
     // Internals.
 
     private void RegisterHandlers()

@@ -1,0 +1,25 @@
+<Solution>
+  <Folder Name="/src/" />
+  <Folder Name="/src/Daemon/">
+    <Project Path="src/Daemon/1RemoteCLI.Daemon.csproj" />
+  </Folder>
+  <Folder Name="/src/Hub/">
+    <Project Path="src/Hub/1RemoteCLI.Hub.csproj" />
+  </Folder>
+  <Folder Name="/src/Protocol/">
+    <Project Path="src/Protocol/1RemoteCLI.Protocol.csproj" />
+  </Folder>
+  <Folder Name="/src/Terminal/">
+    <Project Path="src/Terminal/1RemoteCLI.Terminal.csproj" />
+  </Folder>
+  <Folder Name="/tests/" />
+  <Folder Name="/tests/Daemon.Tests/">
+    <Project Path="tests/Daemon.Tests/1RemoteCLI.Daemon.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tests/Hub.Tests/">
+    <Project Path="tests/Hub.Tests/1RemoteCLI.Hub.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tests/Terminal.Tests/">
+    <Project Path="tests/Terminal.Tests/1RemoteCLI.Terminal.Tests.csproj" />
+  </Folder>
+</Solution>

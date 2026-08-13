@@ -4,6 +4,7 @@ import { MsalProvider } from '@azure/msal-react'
 
 import App from './App.tsx'
 import { initialiseMsal, msal } from './auth/msal.ts'
+import { registerServiceWorker } from './install/serviceWorker.ts'
 import './index.css'
 
 /*
@@ -22,3 +23,19 @@ createRoot(document.getElementById('root')!).render(
     </MsalProvider>
   </StrictMode>,
 )
+
+/*
+ * Registered after the first render, not before it.
+ *
+ * The service worker earns nothing on the first load - it has nothing cached yet
+ * - and registering it costs the browser work at exactly the moment the user is
+ * waiting for the app to appear. It matters on the second load and afterwards,
+ * where it is what makes the app installable, and installable is what makes
+ * notifications possible on iOS.
+ */
+registerServiceWorker((activate) => {
+  // Not a prompt. Sitting on a stale build is the worse failure for a client
+  // that talks a versioned protocol to a hub that moves, and there is no unsaved
+  // work in this app to lose - the session lives on the machine, not the phone.
+  activate()
+})

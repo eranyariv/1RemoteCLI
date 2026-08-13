@@ -392,6 +392,14 @@ The encodings are the ones a real terminal puts on the wire, since the whole des
 
 **Connection handling.** SignalR automatic reconnect with backoff; on reconnect, reattach with the last `seq`. The status bar distinguishes *live*, *reconnecting*, and *session ended*.
 
+**Installation is a feature, not packaging.** The PWA ships a web app manifest, generated PNG icons, and a service worker — not for offline use, which a live terminal client cannot have, but because on iOS an app that is not installed to the Home Screen can never receive a push notification, whatever permission it holds. Everything in §6.2 is downstream of the user performing *Share → Add to Home Screen* by hand, a step nothing in the browser can prompt for. The app therefore asks: it detects whether it is running standalone and, if not, shows the three-step instruction; only once installed does it offer a permission button, and only from a tap. Prompting inside a Safari tab is worse than not offering at all, because the permission is granted, nothing is ever delivered, and the user believes it is set up.
+
+The same detection distinguishes the cases that look alike and are not: an iPhone below iOS 16.4 is told its OS is too old rather than being sent to install an app that still could not notify; an iPad, which since iPadOS 13 claims in its user agent to be a Macintosh and is caught by its touch-point count, gets iPhone instructions rather than desktop ones; an unreadable user agent is assumed capable, because refusing on an unfamiliar string would break the app on every iOS released after the code was written. After granting, the user can send themselves a local test notification — the one end-to-end check they can perform themselves, and the half of the pipeline that is hard to get right.
+
+**Caching.** Navigations are network-first, which is the opposite of the usual PWA default and correct here: a cached shell is never more useful than a fresh one, and serving last week's client to a phone with a working connection risks talking a superseded protocol to a hub that has moved on. The cache exists so that opening the app in a lift shows the app reporting no connection rather than the browser's error page. Hashed assets are served cache-first, because a hit on a content-hashed URL is always correct. The cache is named after a fingerprint of the build's own asset list, so it rolls exactly when the contents do, with no version constant for anybody to forget. A new worker takes over immediately rather than waiting for every tab to close: there is no unsaved work on the phone to lose — the session lives on the machine — and a stale build is the failure that matters.
+
+Only same-origin `GET`s are intercepted. The hub is a WebSocket to another origin and the identity provider is a redirect to a third; a service worker that intercepts an auth redirect is a very confusing thing to debug.
+
 ---
 
 ## 5. Protocol specification

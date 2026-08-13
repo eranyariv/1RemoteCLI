@@ -1,11 +1,65 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { VitePWA } from 'vite-plugin-pwa'
 
 import pkg from './package.json' with { type: 'json' }
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    VitePWA({
+      // The service worker is hand-written rather than generated: a terminal
+      // client has an unusual caching story, and the rules are worth reading.
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
+      registerType: 'prompt',
+      // The registration is done by hand in main.tsx so the update prompt is the
+      // app's own UI rather than an injected script.
+      injectRegister: null,
+
+      injectManifest: {
+        // An IIFE, not a module: it emits sw.js rather than sw.mjs, and a classic
+        // worker is the one shape every browser that matters registers without
+        // argument.
+        rollupFormat: 'iife',
+        // xterm alone is a little over the default 2 MB ceiling, and it is
+        // exactly the file a phone on a cellular link should not be fetching
+        // twice.
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
+      },
+
+      manifest: {
+        name: '1RemoteCLI',
+        short_name: '1RemoteCLI',
+        description: 'Attach to the terminal sessions already running on your machines.',
+        // Standalone is not cosmetic on iOS: a tab can never receive a push
+        // notification, so this is what makes the notification feature possible.
+        display: 'standalone',
+        orientation: 'portrait',
+        start_url: '/',
+        scope: '/',
+        background_color: '#020617',
+        theme_color: '#020617',
+        icons: [
+          { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+          { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+          // A maskable icon is cropped to whatever shape the launcher likes, so
+          // it is a separate drawing with the artwork pulled inside the safe area.
+          { src: '/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+        ],
+      },
+
+      devOptions: {
+        // Without this the install prompt cannot be exercised until a production
+        // build is deployed, and the iOS behaviour is the whole risk here.
+        enabled: true,
+        type: 'module',
+      },
+    }),
+  ],
 
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),

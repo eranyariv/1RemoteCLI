@@ -4,6 +4,23 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <!--
+      iOS ignores the web app manifest's icons entirely and uses this instead,
+      which is why a PNG has to exist even though everything else is vector.
+    -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!--
+      Without this, adding to the Home Screen produces a bookmark that opens in
+      Safari - and a Safari tab can never receive a push notification, however
+      the permission ends up.
+    -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="1RemoteCLI" />
+    <!--
+      black-translucent puts the app under the status bar, which is what the
+      safe-area insets in the CSS are already accounting for.
+    -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!--
       viewport-fit=cover lets the layout reach under the notch and the home
       indicator; the safe-area insets in the CSS keep content out of them.
     -->

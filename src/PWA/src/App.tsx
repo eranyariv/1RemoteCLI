@@ -7,6 +7,7 @@ import type { MachineInfo, SessionInfo } from './protocol/wire'
 import { useRelay } from './relay/useRelay'
 import { Banner, StatusPill } from './ui/Chrome'
 import { MachineList } from './ui/MachineList'
+import { NotificationsCard } from './ui/NotificationsCard'
 import { SignInScreen } from './ui/SignInScreen'
 
 /**
@@ -110,6 +111,8 @@ export default function App() {
         ) : null}
 
         <MachineList machines={relay.machines} onOpenSession={openSession} />
+
+        <NotificationsCard />
 
         {/*
           A session that vanished while its terminal was open — the program exited

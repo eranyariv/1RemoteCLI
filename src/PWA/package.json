@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test": "vitest run",
+    "icons": "node scripts/generate-icons.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

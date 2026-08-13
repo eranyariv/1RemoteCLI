@@ -1,17 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { RelayClient } from '../relay/client'
+import { ErrorCodes } from '../protocol/errors'
 import type { HubError, TerminalOutputKind } from '../protocol/wire'
 import { EMPTY_STATS, Sampler, type LatencyStats } from './latency'
 import { TraceRecorder } from './trace'
 
-export type AttachState = 'attaching' | 'attached' | 'closed' | 'failed'
+export type AttachState = 'attaching' | 'attached' | 'reconnecting' | 'closed' | 'failed'
 
 export interface AttachedSession {
   state: AttachState
   error: HubError | null
   /** Set once the program exits, so the view can say why the screen stopped. */
   exitCode: number | null
+  /**
+   * True when the session was already gone by the time we got back to it, so the
+   * view can say that rather than reporting an exit code it never saw.
+   */
+  endedWhileAway: boolean
   /** Highest output sequence seen, so a re-attach can ask for the gap. */
   lastSeq: number | null
   /** True when a re-attach found a gap the hub could not fill. */
@@ -73,10 +79,18 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
   const recorder = recorderRef.current
 
   const lastSeq = useRef<number | null>(null)
+
+  // Set once the session is known to be over. Read by the attach effect, which
+  // must not go looking for a session it watched exit — the hub would answer
+  // "no such session" and the view would report it as having ended while we were
+  // away, which is a different and less true story.
+  const finished = useRef(false)
+
   const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState<AttachState>('attaching')
   const [error, setError] = useState<HubError | null>(null)
   const [exitCode, setExitCode] = useState<number | null>(null)
+  const [endedWhileAway, setEndedWhileAway] = useState(false)
   const [missedOutput, setMissedOutput] = useState(false)
   const [latency, setLatency] = useState<LatencyStats>(EMPTY_STATS)
   const [recording, setRecording] = useState(false)
@@ -102,6 +116,7 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
       client.on('sessionClosed', (closedMachine, closedSession, code) => {
         if (closedMachine !== machineId || closedSession !== sessionId) return
         sampler.discardPending()
+        finished.current = true
         setExitCode(code)
         setState('closed')
       }),
@@ -127,7 +142,17 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
   // registry is keyed by connection, so a reconnected socket has no attachment at
   // all — re-attaching is the normal path after a phone unlocks, not error recovery.
   useEffect(() => {
-    if (!connected) return
+    if (finished.current) return
+
+    if (!connected) {
+      // Say so. While the socket is down no output can arrive, and a terminal that
+      // looks live but has quietly stopped updating is worse than one that admits
+      // it is offline, because the user will read the stale screen and type into
+      // it. States that are already final are left alone: a session that ended has
+      // not become uncertain just because the network did.
+      setState((current) => (current === 'attaching' || current === 'attached' ? 'reconnecting' : current))
+      return
+    }
 
     let cancelled = false
     setState('attaching')
@@ -139,6 +164,16 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
       if (cancelled) return
 
       if (problem) {
+        // The session being gone is not a failure to recover from — it is the
+        // answer. Offering a retry button for a terminal that was closed at the
+        // desk half an hour ago invites the user to keep pressing it.
+        if (problem.code === ErrorCodes.SessionNotFound) {
+          finished.current = true
+          setEndedWhileAway(true)
+          setState('closed')
+          return
+        }
+
         setError(problem)
         setState('failed')
         return
@@ -196,12 +231,17 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
     setRecording(false)
   }, [recorder])
 
-  const retry = useCallback(() => setAttempt((n) => n + 1), [])
+  const retry = useCallback(() => {
+    finished.current = false
+    setEndedWhileAway(false)
+    setAttempt((n) => n + 1)
+  }, [])
 
   return {
     state,
     error,
     exitCode,
+    endedWhileAway,
     lastSeq: lastSeq.current,
     missedOutput,
     latency,

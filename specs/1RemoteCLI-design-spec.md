@@ -305,7 +305,21 @@ Two rules keep the fast path honest:
 * **Numbering happens before sending, not after.** Output produced while the hub is unreachable still consumes a sequence number and still enters the tail. Otherwise a client resuming across a hub outage would receive an unbroken run of sequence numbers with the outage's output missing from it — a screen that is wrong while claiming to be continuous, which is worse than any repaint. A long outage simply evicts its way out of the tail and the reattach is answered with a snapshot.
 * **A reshape disqualifies replay.** If the attaching client's geometry differs from the session's, the missed frames were produced for a screen of another shape and replaying them would place wrapped lines where they used to belong. That failure looks plausible rather than obviously broken, so the agent repaints instead.
 
-### 4.6 Relay hub
+### 4.6 Reconnection
+
+Connections are expected to fail. A phone walks into a lift, a laptop suspends, the hub restarts on deploy. None of these are errors worth reporting to anyone; all of them are handled by retrying.
+
+**Both ends retry forever.** Delay starts at zero, then 1 second doubling to a 30-second cap, with up to 1 second of jitter **added** to each delay so that a hub coming back does not receive every client at the same instant. The jitter is additive rather than multiplicative so it can only ever lengthen a wait, never shorten one below the intended floor.
+
+There is no attempt limit. A retry policy that gives up is a policy that requires a human to notice and act — which is precisely the situation the product exists to avoid, since the human is not at the desk.
+
+**The agent re-registers on every reconnect.** The hub's routing registry is in memory, so a restarted hub has never heard of anybody. On reconnect the agent republishes its machine and every live session. Without this, a routine deployment would silently strand every machine: the sessions keep running perfectly at the desk, and only the phone can tell that anything is wrong — the hardest possible shape of failure to diagnose.
+
+**The client retries its first connection too.** The SignalR client's automatic reconnect covers a connection that was established and then dropped; it does not cover a `start()` that never succeeded. The PWA therefore wraps the initial connect in the same policy, so opening the app while the hub is down waits and recovers rather than failing to a dead screen.
+
+**The UI must not lie about it.** A phone whose socket is down shows *Reconnecting*, not a green dot over a screen that quietly stopped updating. States that are already final are left alone: a session that ended has not become uncertain because the network did. And a session whose exit the client actually witnessed is remembered as ended, so that reattaching after a reconnect reports the exit code it saw rather than the weaker "this session is gone" that the hub would otherwise answer with.
+
+### 4.7 Relay hub
 
 ASP.NET Core 8 with self-hosted SignalR on a **single instance** of App Service or Container Apps. Azure SignalR Service was rejected because it bills per message and a live terminal is extremely chatty; a single self-hosted instance comfortably serves the target scale.
 
@@ -328,7 +342,7 @@ Everything is reconstructed by agents and clients reconnecting after a restart. 
 
 **Liveness.** SignalR keep-alive at 15 seconds, client timeout at 30 seconds. A dropped agent connection marks the machine offline and notifies that user's attached clients; its sessions are removed, since sessions cannot outlive their wrapper.
 
-### 4.7 Mobile PWA
+### 4.8 Mobile PWA
 
 React + Vite + Tailwind, `@xterm/xterm` with `@xterm/addon-fit` and `@xterm/addon-web-links`, and a service worker for installability and Web Push.
 

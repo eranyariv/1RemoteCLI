@@ -259,12 +259,23 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
         </div>
       ) : null}
 
+      {attached.state === 'reconnecting' ? (
+        <div className="px-3 pt-3">
+          <Banner tone="warning" title="Reconnecting">
+            The connection dropped. What is on screen is from before it did — nothing
+            you type will reach the machine until this clears.
+          </Banner>
+        </div>
+      ) : null}
+
       {attached.state === 'closed' ? (
         <div className="px-3 pt-3">
           <Banner tone="info" title="This session has ended">
-            {attached.exitCode === null
-              ? 'The program exited.'
-              : `The program exited with code ${attached.exitCode}. The screen above is the last thing it printed.`}
+            {attached.endedWhileAway
+              ? 'It was gone by the time the connection came back — the terminal was closed at the desk. The screen above is the last thing we saw.'
+              : attached.exitCode === null
+                ? 'The program exited.'
+                : `The program exited with code ${attached.exitCode}. The screen above is the last thing it printed.`}
           </Banner>
         </div>
       ) : null}
@@ -373,7 +384,7 @@ function StateDot({ state }: { state: string }) {
   const colour =
     state === 'attached'
       ? 'bg-emerald-400'
-      : state === 'attaching'
+      : state === 'attaching' || state === 'reconnecting'
         ? 'bg-amber-400'
         : state === 'closed'
           ? 'bg-slate-600'

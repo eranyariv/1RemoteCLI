@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Encodings.Web;
@@ -50,6 +52,7 @@ internal sealed class EndToEndHarness : IAsyncDisposable
     private AgentHost? _host;
     private AgentHubClient? _agentClient;
     private string _pipeName = string.Empty;
+    private int _hubPort;
 
     private EndToEndHarness()
     {
@@ -95,8 +98,12 @@ internal sealed class EndToEndHarness : IAsyncDisposable
     {
         WebApplicationBuilder builder = WebApplication.CreateBuilder();
 
-        // Port zero: tests running side by side must not fight over a fixed one.
-        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        // A port chosen once and reused, so the hub can be restarted at the same
+        // address. Picked from the ephemeral range rather than fixed, because tests
+        // running side by side must not fight over it.
+        _hubPort = _hubPort == 0 ? FreePort() : _hubPort;
+
+        builder.WebHost.UseUrls($"http://127.0.0.1:{_hubPort}");
         builder.Logging.ClearProviders();
 
         builder.Services.Configure<EntraOptions>(options =>
@@ -130,6 +137,40 @@ internal sealed class EndToEndHarness : IAsyncDisposable
 
         _hub = app;
         HubUri = new Uri(new Uri(app.Urls.First()), "hub");
+    }
+
+    /// <summary>
+    /// Takes the hub down and brings a new one up at the same address.
+    /// <para>
+    /// The registry is in memory, so the replacement knows nothing about anybody. That
+    /// is the point: it is exactly the state a deployment leaves behind, and the agent
+    /// has to put itself back without anyone touching the desk.
+    /// </para>
+    /// </summary>
+    public async Task RestartHubAsync()
+    {
+        WebApplication? old = _hub;
+        _hub = null;
+
+        if (old is not null)
+        {
+            await old.StopAsync().ConfigureAwait(false);
+            await old.DisposeAsync().ConfigureAwait(false);
+        }
+
+        await StartHubAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>Asks the operating system for a port nobody is using.</summary>
+    private static int FreePort()
+    {
+        using TcpListener listener = new(IPAddress.Loopback, 0);
+        listener.Start();
+
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+
+        return port;
     }
 
     private async Task StartAgentAsync()

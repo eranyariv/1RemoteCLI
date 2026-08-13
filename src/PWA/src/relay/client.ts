@@ -30,6 +30,7 @@ import {
   type TerminalOutput,
 } from '../protocol/wire'
 import { resolveHubUrl } from './endpoint'
+import { ForeverRetryPolicy, reconnectDelay } from './backoff'
 
 /** What the app shows about the connection itself. */
 export type RelayStatus =
@@ -69,6 +70,12 @@ export class RelayClient {
   private starting: Promise<void> | null = null
   private stopped = false
 
+  /** Set while a retry is pending, so it can be cancelled by `stop`. */
+  private retryTimer: ReturnType<typeof setTimeout> | null = null
+
+  /** How many consecutive attempts have failed, which is what sets the delay. */
+  private attempts = 0
+
   constructor(url: string = resolveHubUrl()) {
     this.url = url
   }
@@ -105,6 +112,8 @@ export class RelayClient {
     if (this.starting) return this.starting
 
     this.stopped = false
+    this.cancelRetry()
+
     this.starting = this.connect().finally(() => {
       this.starting = null
     })
@@ -114,10 +123,39 @@ export class RelayClient {
 
   async stop(): Promise<void> {
     this.stopped = true
+    this.cancelRetry()
+
     const connection = this.connection
     this.connection = null
 
     await connection?.stop()
+  }
+
+  /**
+   * Tries again later, forever.
+   *
+   * SignalR's automatic reconnect only covers a connection that was established
+   * and then dropped. A first attempt that fails — the usual case when the app is
+   * opened with no signal — is not its problem, and without this the app would sit
+   * on "offline" until something else happened to nudge it.
+   */
+  private scheduleRetry(): void {
+    if (this.stopped || this.retryTimer !== null) return
+
+    const delay = reconnectDelay(this.attempts)
+    this.attempts += 1
+
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null
+      if (!this.stopped) void this.start()
+    }, delay)
+  }
+
+  private cancelRetry(): void {
+    if (this.retryTimer === null) return
+
+    clearTimeout(this.retryTimer)
+    this.retryTimer = null
   }
 
   private async connect(): Promise<void> {
@@ -142,7 +180,7 @@ export class RelayClient {
       // MessagePack because terminal output is binary, and JSON would base64
       // every frame on the one path that is hot.
       .withHubProtocol(new MessagePackHubProtocol())
-      .withAutomaticReconnect([0, 2000, 5000, 10000, 30000])
+      .withAutomaticReconnect(new ForeverRetryPolicy())
       .configureLogging(import.meta.env.DEV ? LogLevel.Information : LogLevel.Warning)
       .build()
 
@@ -154,6 +192,7 @@ export class RelayClient {
     } catch (error) {
       this.connection = null
       this.emit('status', 'offline', errorText(error))
+      this.scheduleRetry()
       return
     }
 
@@ -175,6 +214,7 @@ export class RelayClient {
       return
     }
 
+    this.attempts = 0
     this.emit('status', 'connected')
     await this.refreshMachines()
   }
@@ -215,6 +255,7 @@ export class RelayClient {
     connection.onreconnecting(() => this.emit('status', 'reconnecting'))
 
     connection.onreconnected(async () => {
+      this.attempts = 0
       this.emit('status', 'connected')
       // The hub's registry is per connection, so a new connection id means it has
       // never heard of us. Re-listing is the normal path, not a repair.
@@ -222,7 +263,13 @@ export class RelayClient {
     })
 
     connection.onclose(() => {
-      if (!this.stopped) this.emit('status', 'offline')
+      if (this.stopped) return
+
+      // SignalR only closes for good once its own policy gives up, and ours never
+      // does — but the close also fires when the handshake or transport fails
+      // outside a reconnect, and those are the cases we have to cover ourselves.
+      this.emit('status', 'offline')
+      this.scheduleRetry()
     })
   }
 

@@ -1,0 +1,194 @@
+import { act, renderHook, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { ErrorCodes } from '../protocol/errors'
+import type { RelayClient } from '../relay/client'
+import type { HubError } from '../protocol/wire'
+import { useAttachedSession } from './useAttachedSession'
+
+/**
+ * What the terminal says about itself while the network misbehaves.
+ *
+ * The rule under test is honesty. A terminal that has quietly stopped receiving
+ * output but still looks live is the worst state this app can be in, because the
+ * user reads a stale screen and acts on it — answering a prompt that has already
+ * timed out, or assuming a build is still running when it finished ten minutes
+ * ago.
+ */
+
+type Handler = (...args: never[]) => void
+
+class FakeRelay {
+  private readonly listeners = new Map<string, Set<Handler>>()
+
+  attach = vi.fn<
+    (m: string, s: string, c: number, r: number, seq: number | null) => Promise<HubError | null>
+  >(async () => null)
+
+  detach = vi.fn(async () => null)
+  sendInput = vi.fn(async () => null)
+  interrupt = vi.fn(async () => null)
+  resize = vi.fn(async () => null)
+
+  on(event: string, handler: Handler): () => void {
+    let set = this.listeners.get(event)
+
+    if (!set) {
+      set = new Set()
+      this.listeners.set(event, set)
+    }
+
+    set.add(handler)
+    return () => set.delete(handler)
+  }
+
+  emit(event: string, ...args: unknown[]): void {
+    for (const handler of [...(this.listeners.get(event) ?? [])]) {
+      ;(handler as (...a: unknown[]) => void)(...args)
+    }
+  }
+
+  get client(): RelayClient {
+    return this as unknown as RelayClient
+  }
+}
+
+function options(relay: FakeRelay, connected: boolean) {
+  return {
+    client: relay.client,
+    machineId: 'machine-1',
+    sessionId: 'session-1',
+    cols: 80,
+    rows: 25,
+    connected,
+    onOutput: () => {},
+  }
+}
+
+describe('useAttachedSession', () => {
+  let relay: FakeRelay
+
+  beforeEach(() => {
+    relay = new FakeRelay()
+  })
+
+  it('reports reconnecting when the socket goes away, rather than staying green', async () => {
+    const { result, rerender } = renderHook((connected: boolean) => useAttachedSession(options(relay, connected)), {
+      initialProps: true,
+    })
+
+    await waitFor(() => expect(result.current.state).toBe('attached'))
+
+    rerender(false)
+
+    expect(result.current.state).toBe('reconnecting')
+  })
+
+  it('resumes from the last sequence it saw', async () => {
+    const { result, rerender } = renderHook((connected: boolean) => useAttachedSession(options(relay, connected)), {
+      initialProps: true,
+    })
+
+    await waitFor(() => expect(result.current.state).toBe('attached'))
+
+    act(() => {
+      relay.emit('terminalOutput', {
+        sessionId: 'session-1',
+        seq: 41,
+        kind: 0,
+        data: new Uint8Array([104, 105]),
+      })
+    })
+
+    rerender(false)
+    rerender(true)
+
+    // Not a fresh attach. Asking for a repaint the agent could have answered with
+    // the handful of frames we actually missed wastes the one resource a phone on
+    // cellular does not have.
+    await waitFor(() => expect(relay.attach).toHaveBeenLastCalledWith('machine-1', 'session-1', 80, 25, 41))
+  })
+
+  it('says the session ended when it is gone on the way back', async () => {
+    const { result, rerender } = renderHook((connected: boolean) => useAttachedSession(options(relay, connected)), {
+      initialProps: true,
+    })
+
+    await waitFor(() => expect(result.current.state).toBe('attached'))
+
+    relay.attach.mockResolvedValue({
+      code: ErrorCodes.SessionNotFound,
+      message: 'No such session.',
+      sessionId: 'session-1',
+    })
+
+    rerender(false)
+    rerender(true)
+
+    // Not 'failed'. The desk terminal was closed while we were away; there is
+    // nothing to retry, and offering a retry button invites the user to keep
+    // pressing it at a session that no longer exists.
+    await waitFor(() => expect(result.current.state).toBe('closed'))
+    expect(result.current.endedWhileAway).toBe(true)
+    expect(result.current.error).toBeNull()
+  })
+
+  it('still offers a retry when the failure is one that might clear', async () => {
+    relay.attach.mockResolvedValue({
+      code: ErrorCodes.MachineOffline,
+      message: 'That machine is offline.',
+      sessionId: 'session-1',
+    })
+
+    const { result } = renderHook(() => useAttachedSession(options(relay, true)))
+
+    // A machine that is asleep may well come back, unlike a session that ended.
+    await waitFor(() => expect(result.current.state).toBe('failed'))
+    expect(result.current.error?.code).toBe(ErrorCodes.MachineOffline)
+    expect(result.current.endedWhileAway).toBe(false)
+  })
+
+  it('does not go looking for a session it watched exit', async () => {
+    const { result, rerender } = renderHook((connected: boolean) => useAttachedSession(options(relay, connected)), {
+      initialProps: true,
+    })
+
+    await waitFor(() => expect(result.current.state).toBe('attached'))
+
+    act(() => {
+      relay.emit('sessionClosed', 'machine-1', 'session-1', 0)
+    })
+
+    expect(result.current.state).toBe('closed')
+    expect(result.current.exitCode).toBe(0)
+
+    const attachesSoFar = relay.attach.mock.calls.length
+
+    rerender(false)
+    rerender(true)
+
+    // Re-attaching would be answered with "no such session", and the view would
+    // then report that it ended while we were away — a worse and less true story
+    // than the exit code we actually watched arrive.
+    expect(relay.attach.mock.calls.length).toBe(attachesSoFar)
+    expect(result.current.state).toBe('closed')
+    expect(result.current.endedWhileAway).toBe(false)
+  })
+
+  it('leaves a finished session finished when the network drops', async () => {
+    const { result, rerender } = renderHook((connected: boolean) => useAttachedSession(options(relay, connected)), {
+      initialProps: true,
+    })
+
+    await waitFor(() => expect(result.current.state).toBe('attached'))
+
+    act(() => {
+      relay.emit('sessionClosed', 'machine-1', 'session-1', 1)
+    })
+
+    rerender(false)
+
+    // A session that ended has not become uncertain just because the network did.
+    expect(result.current.state).toBe('closed')
+  })
+})

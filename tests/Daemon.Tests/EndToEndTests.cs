@@ -715,6 +715,52 @@ public sealed class EndToEndTests : IAsyncLifetime
             "both phones to be showing the agent's screen");
     }
 
+    /// <summary>
+    /// Restarting the hub brings every machine and session back, with nobody touching
+    /// the desk.
+    /// <para>
+    /// The hub's registry is in memory, so a deployment leaves a hub that has never
+    /// heard of anyone. If the agent did not put itself back, a routine deploy would
+    /// silently strand every machine until each user noticed and restarted something —
+    /// and the sessions themselves would still be running perfectly well at their
+    /// desks, which is what makes the failure so confusing to diagnose.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task RestartingTheHubBringsTheMachineAndItsSessionsBack()
+    {
+        WrappedShell shell = await _harness.StartShellAsync();
+
+        PhoneClient before = await _harness.ConnectPhoneAsync();
+        await WaitForSessionAsync(before, shell.SessionId);
+
+        await _harness.RestartHubAsync();
+
+        // A fresh phone, because a phone that reconnects is the other half of 3.4 and
+        // this test is about the agent. Nothing here touched the desk.
+        PhoneClient after = await _harness.ConnectPhoneAsync();
+
+        await EndToEndHarness.WaitUntilAsync(
+            async () =>
+            {
+                MachineListNotification list = await after.ListMachinesAsync();
+                return list.Machines.Any(m => m.MachineId == _harness.MachineId)
+                    && list.Machines.SelectMany(m => m.Sessions).Any(s => s.SessionId == shell.SessionId);
+            },
+            "the machine and its session to reappear on the replacement hub");
+
+        // Registered is not the same as usable. The session has to actually work.
+        Assert.Null(await after.AttachAsync(shell.MachineIdHint, shell.SessionId));
+
+        string token = $"survived-{Guid.NewGuid():n}";
+
+        await RetryUntilAsync(
+            async () => await after.TypeAsync(shell.SessionId, $"echo {token}\r") is null,
+            "the session to accept input again");
+
+        await after.WaitForScreenAsync(token);
+    }
+
     /// <summary>Trailing blanks differ harmlessly between two renderings of the same screen.</summary>
     private static string Normalize(string screen) =>
         string.Join(

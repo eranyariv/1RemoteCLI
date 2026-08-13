@@ -14,6 +14,12 @@ Before starting any new work or bug fix:
 
 This applies both to work the user requests and to problems discovered while working.
 
+## Branching and committing
+
+**All work goes directly on `main`.** Do not create feature branches, and do not open pull requests, unless explicitly asked to.
+
+Commit and push without waiting to be asked. When a unit of work is complete, commit it with a clear message referencing the relevant issue (`Closes #<n>`) and push to `origin main` in the same turn.
+
 ## Specs
 
 Functional and technical specifications live in `specs/`.

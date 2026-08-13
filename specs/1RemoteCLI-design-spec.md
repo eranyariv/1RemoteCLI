@@ -665,7 +665,16 @@ Run as a property test over generated streams and over recorded real traces from
 
 **Agent and wrapper.** Integration tests over a real named pipe with a scripted child process: session open/close, exit-code propagation, input from both sources interleaving safely, resize propagation to `ResizePseudoConsole`, and cleanup of PTY handles on normal exit, crash, and kill. Flow control is tested with a deliberately slow consumer, asserting that a flooding session converges to a snapshot rather than growing an unbounded queue.
 
-**Hub.** Authorization is the priority: expired, wrong-audience, wrong-issuer, missing-scope, and non-allowlisted tokens are all rejected; a client from user A cannot address user B's machine even when given a valid `machineId`; a token refresh that changes `UserKey` aborts the connection; a connection whose token expires without refresh is dropped. Plus registry lifecycle tests for agent disconnect, reconnect, and duplicate registration.
+**Hub.** Authorization is the priority, because this product grants full control of a developer's machine and the hub is the only thing between an attacker and that. Token validation covers expired, wrong-audience, wrong-issuer (including a token from a *different* tenant that is otherwise perfectly valid, which a static issuer validator gets wrong), missing-scope, no-scope-at-all, unsigned, wrong-key, `alg: none`, missing `tid`, and missing `oid`. Isolation covers a client from user A addressing user B's machine **while holding valid ids for it** — one test per hub method, so a regression names the method that broke — an agent registering into another partition, the same machine id in two partitions, a refresh that changes `UserKey` aborting the connection, and a refresh with an unacceptable token being *refused but not fatal*. Plus registry lifecycle tests for agent disconnect, reconnect, and duplicate registration.
+
+Two of these are structural rather than behavioural, and they are the ones that will still be working in a year — a test that Bob cannot attach to Alice's session proves today's methods are safe and says nothing about the method somebody adds next month:
+
+| Test | Enforces |
+| --- | --- |
+| `NoRequestTheHubAcceptsCanCarryAnIdentity` | No request type has a `UserKey`, `TenantId`, `ObjectId`, `Upn` or similar field, so no hub method — present or future — *can* read the caller's identity from the caller |
+| `EveryHubMethodResolvesTheIdentityFromTheConnection` | Every method either calls `RequireUserKey()` or hands `Context.ConnectionId` to the registry. A method that routed by a machine id alone fails the build |
+
+Both have been verified to fail when the mistake is deliberately introduced. The whole suite runs in CI on every push and pull request to `main`.
 
 **PWA.** Unit tests for the accessory bar's key encoding (sticky modifiers, arrows, `Ctrl+C` → `0x03`) and for viewport-to-columns/rows arithmetic. Playwright end-to-end tests against a local hub and agent driving a scripted CLI: attach, see the snapshot, answer a prompt, resize, interrupt, and survive a simulated disconnect.
 

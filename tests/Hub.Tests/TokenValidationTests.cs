@@ -165,6 +165,78 @@ public class TokenValidationTests
         Assert.Equal(AccessDecision.MissingScope, allowlist.Check(principal, Scope).Decision);
     }
 
+    /// <summary>
+    /// A token with no <c>oid</c> is not the same as a token with no scope: it passes
+    /// signature validation cleanly, because <c>oid</c> is not something the signature
+    /// says anything about. It fails at admission, where the hub tries to work out who
+    /// it is talking to and cannot. This is the case a hub that keyed on <c>tid</c>
+    /// alone would get wrong, and it would get it wrong in the worst possible
+    /// direction: everybody in the tenant sharing one partition.
+    /// </summary>
+    [Fact]
+    public async Task AValidTokenWithNoObjectIdCannotBeAdmitted()
+    {
+        TokenValidationResult result = await ValidateAsync(Token(objectId: null));
+
+        Assert.True(result.IsValid);
+
+        var principal = new ClaimsPrincipal(result.ClaimsIdentity);
+
+        Assert.Null(UserKey.From(principal));
+        Assert.Equal(AccessDecision.NoUserKey, new AccountAllowlist(["anything"]).Check(principal, Scope).Decision);
+    }
+
+    /// <summary>
+    /// The classic JWT attack: strip the signature and set <c>alg</c> to <c>none</c>,
+    /// hoping the library treats an unsigned token as one whose signature it has
+    /// already checked. Distinct from <see cref="RejectsAnUnsignedToken"/> because that
+    /// one lets the handler build the token; this one hand-assembles the header so the
+    /// literal string <c>"alg":"none"</c> is on the wire.
+    /// </summary>
+    [Fact]
+    public async Task RejectsATokenClaimingToNeedNoSignature()
+    {
+        static string Encode(string json) =>
+            Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(json))
+                .TrimEnd('=')
+                .Replace('+', '-')
+                .Replace('/', '_');
+
+        long expires = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds();
+
+        string forged =
+            Encode("""{"alg":"none","typ":"JWT"}""")
+            + "."
+            + Encode($$"""
+                {"iss":"https://login.microsoftonline.com/{{Tenant}}/v2.0","aud":"{{ClientId}}",
+                 "tid":"{{Tenant}}","oid":"{{ObjectId}}","scp":"{{Scope}}","exp":{{expires}}}
+                """)
+            + ".";
+
+        TokenValidationResult result = await ValidateAsync(forged);
+
+        Assert.False(result.IsValid);
+    }
+
+    /// <summary>
+    /// No <c>scp</c> claim at all, as distinct from the wrong one. A token issued for a
+    /// different flow — an app-only token, say — has no scopes, and the check that
+    /// looks for the right scope must not read a missing claim as an empty pass.
+    /// </summary>
+    [Fact]
+    public async Task RejectsATokenWithNoScopesWhatsoever()
+    {
+        TokenValidationResult result = await ValidateAsync(Token(scope: null));
+
+        Assert.True(result.IsValid);
+
+        var principal = new ClaimsPrincipal(result.ClaimsIdentity);
+
+        Assert.Equal(
+            AccessDecision.MissingScope,
+            new AccountAllowlist([$"{Tenant}:{ObjectId}"]).Check(principal, Scope).Decision);
+    }
+
     private static async Task<TokenValidationResult> ValidateAsync(string token)
     {
         TokenValidationParameters parameters = EntraTokenValidation.CreateParameters(new EntraOptions
@@ -189,13 +261,18 @@ public class TokenValidationTests
         string? scope = Scope,
         DateTime? issuedAt = null,
         DateTime? expires = null,
-        SecurityKey? signingKey = null)
+        SecurityKey? signingKey = null,
+        string? objectId = ObjectId)
     {
         var claims = new Dictionary<string, object>
         {
-            ["oid"] = ObjectId,
             ["preferred_username"] = "someone@example.com",
         };
+
+        if (objectId is not null)
+        {
+            claims["oid"] = objectId;
+        }
 
         if (tenantId is not null)
         {

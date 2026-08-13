@@ -20,11 +20,12 @@ namespace OneRemoteCli.Daemon.Hub;
 /// identical lifetimes.
 /// </para>
 /// <para>
-/// <b>Deliberately raw at this stage.</b> Bytes go out exactly as they arrive: no VT
-/// emulator, no snapshot, no coalescing. That is knowingly wrong in three ways —
-/// attaching mid-session shows a blank screen until the program next writes, a flood
-/// is forwarded verbatim, and a disconnection loses the view. Stages 2 and 3 fix each
-/// one. Keeping them out of here is what makes the path provable now.
+/// Output is forwarded as it arrives, and every session's bytes are also fed to a VT
+/// emulator so an attach can be answered with the screen as it stands rather than a
+/// blank one. What is still missing is coalescing and backpressure: a flood is
+/// forwarded verbatim, and output produced while the hub is unreachable is dropped
+/// from the wire (though not from the emulator, so the next attach is still correct).
+/// Stage 3 covers both.
 /// </para>
 /// </summary>
 public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
@@ -184,11 +185,35 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(session);
 
-        if (bytes.IsEmpty || !IsConnected)
+        if (bytes.IsEmpty)
+        {
+            return;
+        }
+
+        await SendOutputAsync(session, bytes, TerminalOutputKind.Delta, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Puts one chunk of output on the wire.
+    /// <para>
+    /// Callers are expected to be inside the session's exclusive region, which is what
+    /// makes the sequence numbers match the order the bytes actually arrive in. That
+    /// matters most for a snapshot: it is generated from a screen, so it is only
+    /// correct relative to a specific point in the delta stream.
+    /// </para>
+    /// </summary>
+    private async ValueTask SendOutputAsync(
+        TerminalSession session,
+        ReadOnlyMemory<byte> bytes,
+        TerminalOutputKind kind,
+        CancellationToken cancellationToken)
+    {
+        if (!IsConnected)
         {
             // Dropped rather than queued. There is no tail buffer until Stage 3, and
             // an unbounded queue behind an unreachable hub would turn a network
-            // problem into a memory problem on the user's own machine.
+            // problem into a memory problem on the user's own machine. The emulator
+            // has already seen these bytes, so the next attach still shows the truth.
             return;
         }
 
@@ -204,7 +229,7 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
                 {
                     SessionId = session.SessionId,
                     Seq = seq,
-                    Kind = TerminalOutputKind.Delta,
+                    Kind = kind,
                     Data = bytes.ToArray(),
                 },
                 cancellationToken).ConfigureAwait(false);
@@ -257,25 +282,7 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
 
         _connection.On<AttachRequestedNotification>(
             HubMethods.Agent.AttachRequested,
-            async notification =>
-            {
-                // The phone is authoritative while attached (spec §4.7), so its
-                // geometry is applied immediately rather than waiting for the client
-                // to send a separate resize it should not have to send.
-                if (notification.Cols > 0 && notification.Rows > 0)
-                {
-                    await RouteAsync(
-                        notification.SessionId,
-                        () => _sessions.ResizeAsync(
-                            notification.SessionId,
-                            notification.Cols,
-                            notification.Rows)).ConfigureAwait(false);
-                }
-
-                // No snapshot to send: there is no emulator yet, so an attach shows a
-                // blank screen until the program next writes. Stage 2 fixes this.
-                Log($"hub: client attached to session {notification.SessionId}.");
-            });
+            async notification => await OnAttachRequestedAsync(notification).ConfigureAwait(false));
 
         _connection.On<DetachRequestedNotification>(
             HubMethods.Agent.DetachRequested,
@@ -288,6 +295,50 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
         _connection.On<ErrorNotification>(
             HubMethods.Agent.Error,
             notification => Complain($"hub: {notification.Code} — {notification.Message}"));
+    }
+
+    /// <summary>
+    /// Answers an attach with the screen as it stands.
+    /// <para>
+    /// The resize comes first and on purpose. The phone is authoritative while
+    /// attached (spec §4.7), so its geometry reaches the real pseudoconsole before
+    /// the screen is captured — capturing first would send a snapshot at the desk's
+    /// width that the client is about to render at its own, and every wrapped line
+    /// would sit in the wrong place until the program next redrew.
+    /// </para>
+    /// </summary>
+    private async Task OnAttachRequestedAsync(AttachRequestedNotification notification)
+    {
+        if (notification.Cols > 0 && notification.Rows > 0)
+        {
+            await RouteAsync(
+                notification.SessionId,
+                () => _sessions.ResizeAsync(
+                    notification.SessionId,
+                    notification.Cols,
+                    notification.Rows)).ConfigureAwait(false);
+        }
+
+        if (!_sessions.TryGet(notification.SessionId, out TerminalSession session))
+        {
+            Complain($"hub: cannot snapshot session {notification.SessionId}, which is not running here.");
+            return;
+        }
+
+        await RouteAsync(
+            notification.SessionId,
+            () => session.RunExclusiveAsync(async () =>
+            {
+                byte[] snapshot = session.Screen.Snapshot();
+
+                await SendOutputAsync(
+                    session,
+                    snapshot,
+                    TerminalOutputKind.Snapshot,
+                    CancellationToken.None).ConfigureAwait(false);
+            })).ConfigureAwait(false);
+
+        Log($"hub: client attached to session {notification.SessionId}.");
     }
 
     /// <summary>

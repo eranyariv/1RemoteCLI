@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using OneRemoteCli.Daemon.Agent;
 using OneRemoteCli.Protocol;
 using OneRemoteCli.Protocol.Hub;
 
@@ -327,6 +328,148 @@ public sealed class EndToEndTests : IAsyncLifetime
         Assert.NotNull(refusal);
         Assert.Equal(ErrorCodes.UnsupportedProtocolVersion, refusal.Code);
     }
+
+    /// <summary>
+    /// Attaching to something already running shows what is on its screen.
+    /// <para>
+    /// This is the product's whole premise. The phone in this test never saw the
+    /// output arrive — a different client typed the command and left — so the only
+    /// way the text can be on screen is if the agent reconstructed it from the
+    /// emulator. Replaying recent bytes could not do this: the shell wrote a prompt,
+    /// echoed a command and printed a result, and what matters is the resulting
+    /// screen, not the transcript.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task AttachingShowsTheScreenThatIsAlreadyThere()
+    {
+        WrappedShell shell = await _harness.StartShellAsync();
+
+        // The first phone does the work and goes away, so nothing about the second
+        // phone's view can come from having watched it happen.
+        string token = $"snap-{Guid.NewGuid():n}";
+
+        await using (PhoneClient typist = await _harness.ConnectPhoneAsync())
+        {
+            await AttachAsync(typist, shell);
+            Assert.Null(await typist.TypeAsync(shell.SessionId, $"echo {token}\r"));
+            await typist.WaitForScreenAsync(token);
+            Assert.Null(await typist.DetachAsync(shell.SessionId));
+        }
+
+        PhoneClient latecomer = await _harness.ConnectPhoneAsync();
+        await AttachAsync(latecomer, shell);
+
+        await latecomer.WaitForScreenAsync(token);
+
+        // The first thing it was sent, not merely something it was sent. A snapshot
+        // arriving after a delta would be applied over newer output and undo it.
+        OutputFrame first = Assert.Single(latecomer.Frames.Take(1));
+        Assert.Equal(TerminalOutputKind.Snapshot, first.Kind);
+    }
+
+    /// <summary>
+    /// The snapshot reproduces the agent's screen, not merely its text.
+    /// <para>
+    /// Checking that a word appeared would pass on a stream that put every line in
+    /// the wrong column. Rendering the frames the phone received through the same
+    /// emulator the agent used and comparing the grids is the assertion that actually
+    /// covers cursor position, wrapping and blank runs.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task TheSnapshotRedrawsTheAgentsScreenExactly()
+    {
+        WrappedShell shell = await _harness.StartShellAsync();
+        PhoneClient phone = await _harness.ConnectPhoneAsync();
+
+        await AttachAsync(phone, shell);
+
+        string token = $"grid-{Guid.NewGuid():n}";
+        Assert.Null(await phone.TypeAsync(shell.SessionId, $"echo {token}\r"));
+        await phone.WaitForScreenAsync(token);
+
+        // Re-attaching is the cheapest way to ask for a fresh snapshot of a screen
+        // that now has real content on it.
+        phone.ClearScreen();
+        Assert.Null(await phone.AttachAsync(shell.MachineIdHint, shell.SessionId, cols: 80, rows: 25));
+
+        await EndToEndHarness.WaitUntilAsync(
+            () => phone.Frames.Any(f => f.Kind == TerminalOutputKind.Snapshot),
+            "a snapshot to arrive");
+
+        Assert.True(_harness.Sessions.TryGet(shell.SessionId, out TerminalSession session));
+
+        // Compared as text rather than cell by cell because the shell keeps writing —
+        // a prompt redraw between the snapshot and the comparison is normal, and the
+        // useful claim is that the phone's grid says the same thing the agent's does.
+        await EndToEndHarness.WaitUntilAsync(
+            () => Normalize(phone.Render(80, 25)) == Normalize(session.Screen.Text()),
+            "the phone's rendering to match the agent's screen");
+    }
+
+    /// <summary>
+    /// Attaching from a phone-shaped screen reshapes the emulator too, not just the
+    /// pseudoconsole. If only the console were resized, the snapshot would still be
+    /// drawn at the desk's width and every wrapped line would land in the wrong place.
+    /// </summary>
+    [Fact]
+    public async Task AttachingAtThePhonesSizeReshapesTheEmulatorAsWell()
+    {
+        WrappedShell shell = await _harness.StartShellAsync();
+        PhoneClient phone = await _harness.ConnectPhoneAsync();
+
+        await WaitForSessionAsync(phone, shell.SessionId);
+        Assert.Null(await phone.AttachAsync(shell.MachineIdHint, shell.SessionId, cols: 45, rows: 30));
+
+        await EndToEndHarness.WaitUntilAsync(
+            () => shell.Pty.Cols == 45 && shell.Pty.Rows == 30,
+            "the attach geometry to reach the pseudoconsole");
+
+        Assert.True(_harness.Sessions.TryGet(shell.SessionId, out TerminalSession session));
+
+        await EndToEndHarness.WaitUntilAsync(
+            () => session.Screen.Cols == 45 && session.Screen.Rows == 30,
+            "the attach geometry to reach the emulator");
+    }
+
+    /// <summary>
+    /// Output produced while no phone is connected still reaches the screen.
+    /// <para>
+    /// The wire drops it, deliberately — there is nowhere to queue it. But the
+    /// emulator must not, or a session that was busy while the user was away would
+    /// show them a screen from before it started.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task WorkDoneWhileNobodyWasWatchingIsStillOnTheScreen()
+    {
+        WrappedShell shell = await _harness.StartShellAsync();
+
+        string token = $"away-{Guid.NewGuid():n}";
+
+        // Typed straight into the pseudoconsole rather than through the hub, which is
+        // how a program that keeps working after the user walks away behaves.
+        await shell.Pty.WriteAsync($"echo {token}\r");
+
+        await EndToEndHarness.WaitUntilAsync(
+            () => shell.Desk.Screen.Contains(token, StringComparison.Ordinal),
+            "the command to run at the desk");
+
+        PhoneClient phone = await _harness.ConnectPhoneAsync();
+        await AttachAsync(phone, shell);
+
+        await phone.WaitForScreenAsync(token);
+    }
+
+    /// <summary>Trailing blanks differ harmlessly between two renderings of the same screen.</summary>
+    private static string Normalize(string screen) =>
+        string.Join(
+            '\n',
+            screen.Replace("\r\n", "\n", StringComparison.Ordinal)
+                .Split('\n')
+                .Select(line => line.TrimEnd()))
+            .TrimEnd();
 
     /// <summary>Attaches, once the session the agent opened has crossed the hub and become visible.</summary>
     private static async Task AttachAsync(PhoneClient phone, WrappedShell shell)

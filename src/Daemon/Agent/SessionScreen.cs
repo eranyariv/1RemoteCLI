@@ -1,0 +1,116 @@
+using OneRemoteCli.Terminal.Screen;
+using OneRemoteCli.Terminal.Vt;
+
+namespace OneRemoteCli.Daemon.Agent;
+
+/// <summary>
+/// One session's live screen: every byte the program has written, reduced to what a
+/// terminal would be showing right now.
+/// <para>
+/// This is what makes attaching to something already running work at all. Replaying
+/// recent output instead would be right only for a program that appends line by line;
+/// anything that addresses the cursor — an editor, a pager, a coding agent's
+/// interactive view — would arrive as the tail end of a redraw, which is noise.
+/// </para>
+/// <para>
+/// It costs one screen's worth of cells per session and no history, so a machine with
+/// a dozen sessions open pays a few megabytes and never grows from there. That is the
+/// whole reason there is no scrollback: an unbounded buffer on the user's own machine
+/// would be a memory leak with a feature attached.
+/// </para>
+/// </summary>
+public sealed class SessionScreen
+{
+    /// <summary>
+    /// Guards the parser and the screen together.
+    /// <para>
+    /// They are one unit: the parser holds half-finished escape sequences and partial
+    /// UTF-8 characters between calls, so a second thread feeding it would splice two
+    /// streams into one and produce a screen neither of them wrote.
+    /// </para>
+    /// </summary>
+    private readonly object _gate = new();
+
+    private readonly VtParser _parser = new();
+    private readonly TerminalScreen _screen;
+
+    public SessionScreen(int cols, int rows)
+    {
+        _screen = new TerminalScreen(Math.Max(1, rows), Math.Max(1, cols));
+    }
+
+    public int Cols
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _screen.Columns;
+            }
+        }
+    }
+
+    public int Rows
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _screen.Rows;
+            }
+        }
+    }
+
+    /// <summary>Applies output from the program.</summary>
+    public void Feed(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.IsEmpty)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            _parser.Parse(bytes, _screen);
+        }
+    }
+
+    /// <summary>
+    /// Reshapes the grid to match the pseudoconsole.
+    /// <para>
+    /// Kept in step with the real console rather than tracked separately, because a
+    /// snapshot taken at the wrong width would tell the phone to render a screen the
+    /// program is not drawing.
+    /// </para>
+    /// </summary>
+    public void Resize(int cols, int rows)
+    {
+        if (cols <= 0 || rows <= 0)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            _screen.Resize(rows, cols);
+        }
+    }
+
+    /// <summary>The current screen as the byte stream that reproduces it.</summary>
+    public byte[] Snapshot()
+    {
+        lock (_gate)
+        {
+            return VtSnapshotWriter.Serialize(_screen);
+        }
+    }
+
+    /// <summary>The screen as plain text. For diagnostics and tests, never for the wire.</summary>
+    public string Text()
+    {
+        lock (_gate)
+        {
+            return _screen.GetText();
+        }
+    }
+}

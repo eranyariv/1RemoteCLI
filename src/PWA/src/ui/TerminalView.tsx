@@ -5,9 +5,10 @@ import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 
 import { describeError } from '../protocol/errors'
-import type { MachineInfo, SessionInfo } from '../protocol/wire'
+import type { MachineInfo, SessionInfo, TerminalOutputKind } from '../protocol/wire'
 import type { RelayClient } from '../relay/client'
 import { ExtraKeys, KeyBarLayout, encodeBinary, encodeText, type KeyDefinition } from '../terminal/keys'
+import { applyOutput } from '../terminal/apply'
 import { verdict } from '../terminal/latency'
 import { downloadTrace } from '../terminal/trace'
 import { useAttachedSession } from '../terminal/useAttachedSession'
@@ -58,8 +59,9 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
   // the one that existed on the render where they were registered.
   const sendRef = useRef<(bytes: Uint8Array) => void>(() => {})
 
-  const write = useCallback((data: Uint8Array) => {
-    termRef.current?.write(data)
+  const write = useCallback((data: Uint8Array, kind: TerminalOutputKind) => {
+    const term = termRef.current
+    if (term) applyOutput(term, data, kind)
   }, [])
 
   const attached = useAttachedSession({
@@ -75,8 +77,8 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
   sendRef.current = attached.send
 
   // Create the terminal exactly once. Recreating it on any dependency change would
-  // throw away the screen, and the screen is the only copy of what happened — there
-  // is no scrollback to replay from until Stage 2.
+  // throw away the screen, and the screen is the only copy of what happened here —
+  // the agent holds the authoritative one and only sends it on attach.
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
@@ -92,7 +94,8 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
       lineHeight: 1.2,
       theme: THEME,
       // Enough to scroll back through a build, not enough to exhaust a phone's
-      // memory. Real scrollback recovery arrives with the emulator.
+      // memory. This is scrollback for output seen *while attached* — a snapshot
+      // carries only the screen, because the agent keeps no history either.
       scrollback: 5_000,
       // The phone keyboard's Return must produce CR, which is what a PTY in
       // canonical mode expects; LF here would submit nothing at most prompts.
@@ -276,15 +279,12 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
       ) : null}
 
       {/*
-        Attaching mid-session shows an empty screen until the program prints again,
-        because Stage 1 has no scrollback to replay. Saying so is the difference
-        between a known limitation and an app that looks broken.
+        Between the attach and the snapshot arriving there is a real, if short, gap:
+        the agent has to reshape the console to this screen's geometry first. Saying
+        so beats an unexplained blank rectangle, which reads as a failure.
       */}
       {attached.state === 'attached' && attached.lastSeq === null ? (
-        <p className="px-4 pt-3 text-xs text-slate-500">
-          Attached. The screen fills in as the program produces output — press Return to
-          make it redraw.
-        </p>
+        <p className="px-4 pt-3 text-xs text-slate-500">Restoring the screen…</p>
       ) : null}
 
       <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden px-1 py-1" />

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { RelayClient } from '../relay/client'
-import type { HubError } from '../protocol/wire'
+import type { HubError, TerminalOutputKind } from '../protocol/wire'
 import { EMPTY_STATS, Sampler, type LatencyStats } from './latency'
 import { TraceRecorder } from './trace'
 
@@ -34,7 +34,7 @@ export interface AttachOptions {
   cols: number
   rows: number
   /** Called for every output frame. Deliberately not React state — see below. */
-  onOutput(data: Uint8Array): void
+  onOutput(data: Uint8Array, kind: TerminalOutputKind): void
   /** Whether the relay connection is currently up. Drives re-attach. */
   connected: boolean
 }
@@ -96,7 +96,7 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
 
         sampler.output()
         recorder.frame(output.seq, output.kind, output.data)
-        onOutput.current(output.data)
+        onOutput.current(output.data, output.kind)
       }),
 
       client.on('sessionClosed', (closedMachine, closedSession, code) => {

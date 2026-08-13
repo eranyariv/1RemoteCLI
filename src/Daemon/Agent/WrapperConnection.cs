@@ -91,9 +91,17 @@ public sealed class WrapperConnection : ISessionChannel
             case PipeMessageKind.Output:
                 if (_session is TerminalSession live)
                 {
-                    await _sink.OnOutputAsync(
-                        live,
-                        PipeFraming.DecodePayload<OutputMessage>(envelope).Bytes,
+                    ReadOnlyMemory<byte> bytes = PipeFraming.DecodePayload<OutputMessage>(envelope).Bytes;
+
+                    // The emulator is fed and the bytes forwarded as one step, so a
+                    // snapshot can never be taken between the two and hand a client a
+                    // screen that already includes output it is about to receive again.
+                    await live.RunExclusiveAsync(
+                        async () =>
+                        {
+                            live.Screen.Feed(bytes.Span);
+                            await _sink.OnOutputAsync(live, bytes, cancellationToken).ConfigureAwait(false);
+                        },
                         cancellationToken).ConfigureAwait(false);
                 }
 

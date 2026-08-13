@@ -16,6 +16,8 @@ using OneRemoteCli.Daemon.Wrapper;
 using OneRemoteCli.Hub.Auth;
 using OneRemoteCli.Hub.Relay;
 using OneRemoteCli.Protocol.Hub;
+using OneRemoteCli.Terminal.Screen;
+using OneRemoteCli.Terminal.Vt;
 
 namespace OneRemoteCli.Daemon.Tests;
 
@@ -57,6 +59,12 @@ internal sealed class EndToEndHarness : IAsyncDisposable
 
     /// <summary>The machine the agent published.</summary>
     public string MachineId { get; private set; } = null!;
+
+    /// <summary>
+    /// The agent's own sessions, so a test can compare what the phone was sent against
+    /// the screen the agent believes it has — the only ground truth available here.
+    /// </summary>
+    public SessionRegistry Sessions { get; private set; } = null!;
 
     /// <summary>
     /// Brings up the hub and the agent, but no sessions.
@@ -128,6 +136,7 @@ internal sealed class EndToEndHarness : IAsyncDisposable
         MachineId = identity.MachineId;
 
         var sessions = new SessionRegistry();
+        Sessions = sessions;
 
         _agentClient = new AgentHubClient(
             HubUri,
@@ -418,6 +427,7 @@ internal sealed class PhoneClient : IAsyncDisposable
     private readonly HubConnection _connection;
     private readonly StringBuilder _screen = new();
     private readonly List<long> _sequences = [];
+    private readonly List<OutputFrame> _frames = [];
     private readonly List<ClientSessionOpenedNotification> _opened = [];
     private readonly List<ClientSessionClosedNotification> _closed = [];
     private readonly object _gate = new();
@@ -435,6 +445,7 @@ internal sealed class PhoneClient : IAsyncDisposable
             lock (_gate)
             {
                 _sequences.Add(notification.Seq);
+                _frames.Add(new OutputFrame(notification.Seq, notification.Kind, notification.Data));
                 _screen.Append(Encoding.UTF8.GetString(notification.Data));
             }
         });
@@ -499,6 +510,47 @@ internal sealed class PhoneClient : IAsyncDisposable
                 return [.. _sequences];
             }
         }
+    }
+
+    /// <summary>
+    /// Every frame in the order it arrived, kind included.
+    /// <para>
+    /// Order is the point. A snapshot is only correct relative to a position in the
+    /// delta stream, so a test that only checked the bytes arrived would pass on a
+    /// stream that renders wrongly.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<OutputFrame> Frames
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return [.. _frames];
+            }
+        }
+    }
+
+    /// <summary>Replays everything received into a screen, the way the phone's emulator does.</summary>
+    public string Render(int cols, int rows)
+    {
+        TerminalScreen screen = new(rows, cols);
+        VtParser parser = new();
+
+        foreach (OutputFrame frame in Frames)
+        {
+            if (frame.Kind == TerminalOutputKind.Snapshot)
+            {
+                // Matches the client: a snapshot replaces the screen rather than
+                // drawing over it. Compositing would leave old text showing wherever
+                // the new screen is blank.
+                screen.FullReset();
+            }
+
+            parser.Parse(frame.Data, screen);
+        }
+
+        return screen.GetText();
     }
 
     /// <summary>Opens the socket without handshaking.</summary>
@@ -571,11 +623,15 @@ internal sealed class PhoneClient : IAsyncDisposable
         lock (_gate)
         {
             _screen.Clear();
+            _frames.Clear();
         }
     }
 
     public async ValueTask DisposeAsync() => await _connection.DisposeAsync().ConfigureAwait(false);
 }
+
+/// <summary>One frame as the phone received it.</summary>
+internal sealed record OutputFrame(long Seq, TerminalOutputKind Kind, byte[] Data);
 
 /// <summary>
 /// The desk terminal, in memory. Real enough for the tee to be observable: the

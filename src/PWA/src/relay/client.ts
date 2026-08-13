@@ -46,7 +46,7 @@ export interface RelayEvents {
   machineOnline(machine: MachineInfo): void
   machineOffline(machineId: string): void
   sessionOpened(machineId: string, session: SessionInfo): void
-  sessionClosed(machineId: string, sessionId: string): void
+  sessionClosed(machineId: string, sessionId: string, exitCode: number): void
   awaitingInput(machineId: string, sessionId: string, hint: string | null): void
   terminalOutput(output: TerminalOutput): void
   error(error: HubError): void
@@ -63,7 +63,7 @@ const CLIENT_VERSION = `pwa/${__APP_VERSION__}`
  * component lifecycle is how you end up with two connections and a leak.
  */
 export class RelayClient {
-  private readonly listeners: Partial<RelayEvents> = {}
+  private readonly listeners = new Map<keyof RelayEvents, Set<(...args: never[]) => void>>()
   private readonly url: string
   private connection: HubConnection | null = null
   private starting: Promise<void> | null = null
@@ -73,8 +73,27 @@ export class RelayClient {
     this.url = url
   }
 
-  on<K extends keyof RelayEvents>(event: K, handler: RelayEvents[K]): void {
-    this.listeners[event] = handler
+  /**
+   * Subscribes to an event and returns the unsubscribe.
+   *
+   * Several listeners per event, not one: the machine list and whichever terminal
+   * is on screen both need to see output, and a single-handler design would have
+   * the second subscriber silently evict the first — a bug that presents as the
+   * session list going stale only while a terminal is open.
+   */
+  on<K extends keyof RelayEvents>(event: K, handler: RelayEvents[K]): () => void {
+    let set = this.listeners.get(event)
+
+    if (!set) {
+      set = new Set()
+      this.listeners.set(event, set)
+    }
+
+    set.add(handler as (...args: never[]) => void)
+
+    return () => {
+      set.delete(handler as (...args: never[]) => void)
+    }
   }
 
   get connected(): boolean {
@@ -173,8 +192,8 @@ export class RelayClient {
     })
 
     connection.on(Client.SessionClosed, (n) => {
-      const { machineId, sessionId } = decodeSessionClosed(n)
-      this.emit('sessionClosed', machineId, sessionId)
+      const { machineId, sessionId, exitCode } = decodeSessionClosed(n)
+      this.emit('sessionClosed', machineId, sessionId, exitCode)
     })
 
     connection.on(Client.SessionAwaitingInput, (n) => {
@@ -273,8 +292,14 @@ export class RelayClient {
   }
 
   private emit<K extends keyof RelayEvents>(event: K, ...args: Parameters<RelayEvents[K]>): void {
-    const handler = this.listeners[event] as ((...a: unknown[]) => void) | undefined
-    handler?.(...args)
+    const set = this.listeners.get(event)
+    if (!set) return
+
+    // A copy, because a handler is allowed to unsubscribe itself — a terminal that
+    // detaches on `sessionClosed` does exactly that.
+    for (const handler of [...set]) {
+      ;(handler as (...a: unknown[]) => void)(...args)
+    }
   }
 }
 

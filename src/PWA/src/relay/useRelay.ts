@@ -42,43 +42,49 @@ export function useRelay(signedIn: boolean): Relay {
   const [lastError, setLastError] = useState<HubError | null>(null)
 
   useEffect(() => {
-    client.on('status', (next, why) => {
-      setStatus(next)
-      setDetail(why ?? null)
-    })
+    const off = [
+      client.on('status', (next, why) => {
+        setStatus(next)
+        setDetail(why ?? null)
+      }),
 
-    client.on('machines', (list) => setMachines(replaceAll(list)))
-    client.on('machineOnline', (machine) => setMachines((m) => machineOnline(m, machine)))
-    client.on('machineOffline', (machineId) => setMachines((m) => machineOffline(m, machineId)))
+      client.on('machines', (list) => setMachines(replaceAll(list))),
+      client.on('machineOnline', (machine) => setMachines((m) => machineOnline(m, machine))),
+      client.on('machineOffline', (machineId) => setMachines((m) => machineOffline(m, machineId))),
 
-    client.on('sessionOpened', (machineId, session) =>
-      setMachines((m) => sessionOpened(m, machineId, session)),
-    )
-
-    client.on('sessionClosed', (machineId, sessionId) =>
-      setMachines((m) => sessionClosed(m, machineId, sessionId)),
-    )
-
-    client.on('awaitingInput', (machineId, sessionId) =>
-      setMachines((m) => sessionAwaitingInput(m, machineId, sessionId, true)),
-    )
-
-    // Output clears the flag: a session that just wrote something is, by
-    // definition, not sitting waiting for you.
-    client.on('terminalOutput', (output) =>
-      setMachines((m) =>
-        m.map((machine) => ({
-          ...machine,
-          sessions: machine.sessions.map((session) =>
-            session.sessionId === output.sessionId && session.awaitingInput
-              ? { ...session, awaitingInput: false }
-              : session,
-          ),
-        })),
+      client.on('sessionOpened', (machineId, session) =>
+        setMachines((m) => sessionOpened(m, machineId, session)),
       ),
-    )
 
-    client.on('error', setLastError)
+      client.on('sessionClosed', (machineId, sessionId) =>
+        setMachines((m) => sessionClosed(m, machineId, sessionId)),
+      ),
+
+      client.on('awaitingInput', (machineId, sessionId) =>
+        setMachines((m) => sessionAwaitingInput(m, machineId, sessionId, true)),
+      ),
+
+      // Output clears the flag: a session that just wrote something is, by
+      // definition, not sitting waiting for you.
+      client.on('terminalOutput', (output) =>
+        setMachines((m) =>
+          m.map((machine) => ({
+            ...machine,
+            sessions: machine.sessions.map((session) =>
+              session.sessionId === output.sessionId && session.awaitingInput
+                ? { ...session, awaitingInput: false }
+                : session,
+            ),
+          })),
+        ),
+      ),
+
+      client.on('error', setLastError),
+    ]
+
+    return () => {
+      for (const unsubscribe of off) unsubscribe()
+    }
   }, [client])
 
   useEffect(() => {

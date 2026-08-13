@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { Suspense, lazy, useCallback, useState } from 'react'
 import { useIsAuthenticated, useMsal } from '@azure/msal-react'
 
 import { signOut } from './auth/msal'
@@ -9,22 +9,38 @@ import { Banner, StatusPill } from './ui/Chrome'
 import { MachineList } from './ui/MachineList'
 import { SignInScreen } from './ui/SignInScreen'
 
+/**
+ * The terminal — xterm and its addons — is over half the bundle and is not needed
+ * until something is tapped. On the cellular link this app is designed for, making
+ * the first screen wait for it is the difference between "it opened" and "it is
+ * loading". Splitting it means the machine list arrives immediately and the terminal
+ * downloads while the user is deciding which session they want.
+ */
+const TerminalView = lazy(() =>
+  import('./ui/TerminalView').then((module) => ({ default: module.TerminalView })),
+)
+
 export default function App() {
   const isAuthenticated = useIsAuthenticated()
   const { inProgress, accounts } = useMsal()
   const relay = useRelay(isAuthenticated)
-  const [opened, setOpened] = useState<{ machine: MachineInfo; session: SessionInfo } | null>(null)
+  const [opened, setOpened] = useState<{ machineId: string; sessionId: string } | null>(null)
 
+  // Held as ids, not objects: the machine list is replaced wholesale on every
+  // refresh, and a captured object would freeze the terminal's idea of the session
+  // at the moment it was opened — including whether the machine is still online.
   const openSession = useCallback((machine: MachineInfo, session: SessionInfo) => {
-    // Task 1.10 replaces this with the terminal view. Until then it says so,
-    // rather than silently doing nothing — which reads as a bug in a list whose
-    // entire purpose is to be tapped.
-    setOpened({ machine, session })
+    setOpened({ machineId: machine.machineId, sessionId: session.sessionId })
   }, [])
+
+  const closeSession = useCallback(() => setOpened(null), [])
 
   if (!isAuthenticated) {
     return <SignInScreen busy={inProgress !== 'none'} />
   }
+
+  const machine = opened ? relay.machines.find((m) => m.machineId === opened.machineId) : undefined
+  const session = machine?.sessions.find((s) => s.sessionId === opened?.sessionId)
 
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-xl flex-col">
@@ -95,15 +111,47 @@ export default function App() {
 
         <MachineList machines={relay.machines} onOpenSession={openSession} />
 
-        {opened ? (
+        {/*
+          A session that vanished while its terminal was open — the program exited
+          and the list was refreshed — is worth saying out loud. Silently returning
+          to the list looks like a mis-tap.
+        */}
+        {opened && !session ? (
           <Banner
             tone="info"
-            title={`${opened.session.displayName} on ${opened.machine.displayName}`}
+            title="That session is no longer running"
+            action={
+              <button
+                type="button"
+                onClick={closeSession}
+                className="min-h-10 rounded-lg border border-sky-500/40 px-4 text-sm"
+              >
+                Dismiss
+              </button>
+            }
           >
-            The terminal view is not built yet. It arrives with the next task.
+            It ended, or its machine went offline.
           </Banner>
         ) : null}
       </main>
+
+      {machine && session ? (
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 z-20 flex items-center justify-center bg-slate-950 text-sm text-slate-500">
+              Opening {session.displayName}…
+            </div>
+          }
+        >
+          <TerminalView
+            client={relay.client}
+            connected={relay.status === 'connected'}
+            machine={machine}
+            session={session}
+            onClose={closeSession}
+          />
+        </Suspense>
+      ) : null}
     </div>
   )
 }

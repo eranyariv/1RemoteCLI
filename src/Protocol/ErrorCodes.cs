@@ -1,0 +1,39 @@
+namespace OneRemoteCli.Protocol;
+
+/// <summary>
+/// Error codes carried by <see cref="Hub.ErrorNotification"/>. Stable strings rather
+/// than an enum so a newer peer can send a code an older peer has never heard of
+/// without the deserializer throwing.
+/// </summary>
+public static class ErrorCodes
+{
+    /// <summary>The peer speaks a protocol version this hub cannot serve.</summary>
+    public const string UnsupportedProtocolVersion = "unsupported_protocol_version";
+
+    /// <summary>The signed-in account is not on the hub's allowlist.</summary>
+    public const string AccountNotAllowed = "account_not_allowed";
+
+    /// <summary>The named machine is not registered, or not registered to this user.</summary>
+    public const string MachineNotFound = "machine_not_found";
+
+    /// <summary>The machine is known but currently has no live agent connection.</summary>
+    public const string MachineOffline = "machine_offline";
+
+    /// <summary>The named session does not exist on that machine.</summary>
+    public const string SessionNotFound = "session_not_found";
+
+    /// <summary>The caller is not attached to the session it is trying to drive.</summary>
+    public const string NotAttached = "not_attached";
+
+    /// <summary>The access token expired mid-connection and was not refreshed in time.</summary>
+    public const string TokenExpired = "token_expired";
+
+    /// <summary>A refreshed token resolved to a different user than the one that connected.</summary>
+    public const string IdentityChanged = "identity_changed";
+
+    /// <summary>The request was malformed or failed validation.</summary>
+    public const string InvalidRequest = "invalid_request";
+
+    /// <summary>Unexpected server-side failure.</summary>
+    public const string InternalError = "internal_error";
+}

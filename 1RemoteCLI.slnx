@@ -19,6 +19,9 @@
   <Folder Name="/tests/Hub.Tests/">
     <Project Path="tests/Hub.Tests/1RemoteCLI.Hub.Tests.csproj" />
   </Folder>
+  <Folder Name="/tests/Protocol.Tests/">
+    <Project Path="tests/Protocol.Tests/1RemoteCLI.Protocol.Tests.csproj" />
+  </Folder>
   <Folder Name="/tests/Terminal.Tests/">
     <Project Path="tests/Terminal.Tests/1RemoteCLI.Terminal.Tests.csproj" />
   </Folder>

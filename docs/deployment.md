@@ -84,6 +84,8 @@ Entries can be an email address, a UPN, or a tenant-qualified object id. The hub
 
 Setting app settings restarts the app. Every attached phone reconnects automatically and re-attaches to its session; expect a couple of seconds of *Reconnecting*, not a lost session.
 
+**But a restart does drop every push subscription.** They are held in memory — the accepted cost of the no-database design — so after any restart, redeploy or App Service platform maintenance, notifications stop arriving until each phone opens the app once and re-registers. Nothing tells the user this has happened; their phone just goes quiet. If you restart the hub, tell people to open the app. Persisting only the subscriptions is the natural fix and is listed in spec §9.
+
 An account that is signed in but not on the allowlist gets a clean refusal from the hub, not a sign-in failure. If someone reports "I can log in but there are no machines", check this first.
 
 ### VAPID keys

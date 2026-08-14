@@ -100,17 +100,18 @@ On a managed machine, policy sometimes refuses task registration outright. `1rem
 
 Then, in order:
 
-1. **iOS 16.4 or later.** No web push at all before that.
-2. **Did you ever tap "Don't Allow"?** The page cannot ask a second time. iOS: Settings → Notifications → 1RemoteCLI. Chrome: site settings → Notifications → reset.
-3. **Is the hub configured for push?**
+1. **Has the hub restarted since you last opened the app?** Push subscriptions are held in memory, so a redeploy, a configuration change or App Service platform maintenance silently drops all of them. Nothing warns you — the phone just goes quiet. **Open the app once and it re-registers.** If notifications stopped working for everybody at the same moment, this is why.
+2. **iOS 16.4 or later.** No web push at all before that.
+3. **Did you ever tap "Don't Allow"?** The page cannot ask a second time. iOS: Settings → Notifications → 1RemoteCLI. Chrome: site settings → Notifications → reset.
+4. **Is the hub configured for push?**
 
    ```powershell
    (Invoke-WebRequest 'https://1remotecli-hub.azurewebsites.net/push/vapid').Content
    ```
 
    A 404 or an empty key means `Push__Vapid__*` is not set — see [VAPID keys](deployment.md#vapid-keys).
-4. **Were the VAPID keys rotated?** Every existing subscription is dead. Open the app and re-enable notifications.
-5. **Focus modes and Low Power Mode** delay or suppress delivery. This is the OS, and there is nothing the app can do about it.
+5. **Were the VAPID keys rotated?** Every existing subscription is dead. Open the app and re-enable notifications.
+6. **Focus modes and Low Power Mode** delay or suppress delivery. This is the OS, and there is nothing the app can do about it.
 
 Notifications fire when a session goes quiet at a prompt. A program that prints continuously while waiting will not trigger one, by design — otherwise anything with a spinner would notify constantly.
 

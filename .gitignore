@@ -16,12 +16,18 @@ coverage.*.xml
 # --- Node / PWA ---
 node_modules/
 dist/
+dist-e2e/
 dist-ssr/
 .vite/
 *.local
 npm-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# --- Playwright ---
+playwright-report/
+test-results/
+.playwright/
 
 # --- Editors ---
 .idea/

@@ -1,7 +1,6 @@
-import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
-import { useIsAuthenticated, useMsal } from '@azure/msal-react'
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 
-import { signOut } from './auth/msal'
+import { auth } from './auth/impl'
 import { describeError } from './protocol/errors'
 import type { MachineInfo, SessionInfo } from './protocol/wire'
 import { readDeepLink, withoutDeepLink, type DeepLink } from './push/subscription'
@@ -40,10 +39,12 @@ function takeDeepLink(): DeepLink | null {
 }
 
 export default function App() {
-  const isAuthenticated = useIsAuthenticated()
-  const { inProgress, accounts } = useMsal()
-  const relay = useRelay(isAuthenticated)
+  const { signedIn, busy, username } = auth.useSession()
+  const relay = useRelay(signedIn)
   const [opened, setOpened] = useState<DeepLink | null>(takeDeepLink)
+
+  // What the terminal was last given. See the note where it is used.
+  const lastOpen = useRef<{ machine: MachineInfo; session: SessionInfo } | null>(null)
 
   const registerPush = usePushRegistration(relay.client, relay.status === 'connected')
 
@@ -75,12 +76,31 @@ export default function App() {
 
   const closeSession = useCallback(() => setOpened(null), [])
 
-  if (!isAuthenticated) {
-    return <SignInScreen busy={inProgress !== 'none'} />
+  if (!signedIn) {
+    return <SignInScreen busy={busy} />
   }
 
   const machine = opened ? relay.machines.find((m) => m.machineId === opened.machineId) : undefined
   const session = machine?.sessions.find((s) => s.sessionId === opened?.sessionId)
+
+  // Keep the terminal up after its session leaves the list.
+  //
+  // A session that ends is dropped from the next machine list, and the two things
+  // arrive independently: the notification that says it ended, and the refreshed list
+  // that no longer mentions it. If the list wins, the terminal is unmounted mid-sentence
+  // and the last thing the program printed — the error, the test summary, the thing the
+  // session was being watched for — is gone, replaced by a banner that explains nothing.
+  //
+  // So the view holds on to the description it was opened with and stays up until the
+  // user leaves it deliberately. TerminalView already has its own, better account of a
+  // session that has ended, and it keeps the screen.
+  if (machine && session) {
+    lastOpen.current = { machine, session }
+  } else if (!opened || lastOpen.current?.session.sessionId !== opened.sessionId) {
+    lastOpen.current = null
+  }
+
+  const showing = machine && session ? { machine, session } : lastOpen.current
 
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-xl flex-col">
@@ -100,9 +120,9 @@ export default function App() {
 
         <button
           type="button"
-          onClick={() => void signOut()}
+          onClick={() => void auth.signOut()}
           className="min-h-10 rounded-lg px-3 text-sm text-slate-400 transition active:bg-slate-800"
-          title={accounts[0]?.username}
+          title={username}
         >
           Sign out
         </button>
@@ -161,7 +181,7 @@ export default function App() {
           before the socket is up, and announcing that the session is gone while we
           are still finding out would be wrong on the one path that matters most.
         */}
-        {opened && !session && relay.loaded ? (
+        {opened && !session && relay.loaded && !showing ? (
           <Banner
             tone="info"
             title="That session is no longer running"
@@ -180,19 +200,19 @@ export default function App() {
         ) : null}
       </main>
 
-      {machine && session ? (
+      {showing ? (
         <Suspense
           fallback={
             <div className="fixed inset-0 z-20 flex items-center justify-center bg-slate-950 text-sm text-slate-500">
-              Opening {session.displayName}…
+              Opening {showing.session.displayName}…
             </div>
           }
         >
           <TerminalView
             client={relay.client}
             connected={relay.status === 'connected'}
-            machine={machine}
-            session={session}
+            machine={showing.machine}
+            session={showing.session}
             onClose={closeSession}
           />
         </Suspense>

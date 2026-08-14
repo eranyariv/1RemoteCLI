@@ -9,7 +9,8 @@
     "lint": "oxlint",
     "test": "vitest run",
     "icons": "node scripts/generate-icons.mjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@azure/msal-browser": "^5.18.0",
@@ -26,6 +27,7 @@
     "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^24.13.3",

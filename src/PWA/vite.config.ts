@@ -2,10 +2,32 @@ import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
+import { fileURLToPath } from 'node:url'
 
 import pkg from './package.json' with { type: 'json' }
 
+/**
+ * Builds the app against a stand-in identity provider instead of Entra.
+ *
+ * Set only by `npm run build:e2e` and by the Playwright config's web server. An
+ * alias rather than a runtime flag, so that the substitute is not merely unused in
+ * a production build but absent from it — see `src/auth/adapter.ts`, and the test
+ * in `src/auth/authBundle.test.ts` that checks the claim.
+ */
+const e2e = process.env.VITE_E2E === '1'
+
 export default defineConfig({
+  resolve: {
+    alias: e2e
+      ? [
+          {
+            find: /^.*\/auth\/impl(\.tsx)?$/,
+            replacement: fileURLToPath(new URL('./src/auth/impl.e2e.tsx', import.meta.url)),
+          },
+        ]
+      : [],
+  },
+
   plugins: [
     react(),
     tailwindcss(),
@@ -83,6 +105,6 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: false,
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'tests/**/*.test.ts'],
   },
 })

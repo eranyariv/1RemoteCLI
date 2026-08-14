@@ -676,9 +676,29 @@ Two of these are structural rather than behavioural, and they are the ones that 
 
 Both have been verified to fail when the mistake is deliberately introduced. The whole suite runs in CI on every push and pull request to `main`.
 
-**PWA.** Unit tests for the accessory bar's key encoding (sticky modifiers, arrows, `Ctrl+C` → `0x03`) and for viewport-to-columns/rows arithmetic. Playwright end-to-end tests against a local hub and agent driving a scripted CLI: attach, see the snapshot, answer a prompt, resize, interrupt, and survive a simulated disconnect.
+**PWA.** Unit tests for the accessory bar's key encoding (sticky modifiers, arrows, `Ctrl+C` → `0x03`), for viewport-to-columns/rows arithmetic, and for the relay client's connection lifecycle.
 
-**Manual device matrix.** iPhone Safari (installed to home screen, since push depends on it) as the primary target, then Android Chrome, covering orientation change, keyboard show/hide, backgrounding and resuming, and Wi-Fi ⇄ cellular handover.
+### 8.3 End to end, from a browser
+
+The layers above are each tested against a substitute for their neighbours. The end-to-end suite is the only place where nothing is substituted except the identity provider: one process holds a real hub, a real agent, real pseudoconsoles and the built PWA served from the same origin, and Playwright drives a phone-sized Chromium against it.
+
+| Piece | Where | What it is |
+| :--- | :--- | :--- |
+| `tests/E2E.Host` | `1remote-e2e-host.exe` | Hub, agent, wrapper sessions and the built app on one port, plus a small control API (`/e2e/ready`, `/e2e/sessions`, `/e2e/sessions/{id}/size`) for the things a phone cannot do |
+| `tests/E2E.Script` | `1remote-e2e-script.exe` | A deterministic CLI at the far end: colour and emphasis, a prompt, and single-key commands that report what the *program* sees — including the width the operating system is telling it about |
+| `src/PWA/e2e` | Playwright specs | Seventeen scenarios: finding and attaching, snapshot restore, colour and emphasis, cross-user isolation, keystrokes and interrupts, resizing and rotation, losing the connection, and a session that ends |
+
+Two things are worth stating plainly, because both are places where a test suite can quietly stop meaning anything.
+
+**Sign-in is the one substitution.** `AuthAdapter` (`src/PWA/src/auth/adapter.ts`) has two implementations, and Vite swaps them by module alias when `VITE_E2E=1`. The stand-in reads a user name from the URL; the hub's `NameTokenHandler` turns that name into claims and then runs the *real* allowlist and the *real* `UserKey` derivation, so isolation is genuinely enforced rather than assumed. Signature validation is covered properly in `Hub.Tests`, at the level where it belongs. Automating a real Entra sign-in would need a service-account credential in CI and would depend on a flow Microsoft can change without notice. `src/PWA/tests/authBundle.test.ts` runs a real production build and fails if the stand-in appears in the output, so the claim that it cannot ship is checked rather than trusted.
+
+**Assertions are made against the program, not the browser.** A resize that reflowed the browser's copy of the screen without reaching the pseudoconsole would look identical from the outside, so the resize tests ask the script how wide it believes it is. A snapshot of plain text would pass with every attribute dropped, so the styling test reads xterm's rendered classes, and was verified by removing bold from the re-serializer and watching it fail.
+
+The suite runs in CI on `windows-latest` — the host targets `net8.0-windows` and opens ConPTY — with `retries: 0`, because a retry converts a flake into a pass and a flake is a defect.
+
+### 8.4 Manual device matrix
+
+iPhone Safari (installed to home screen, since push depends on it) as the primary target, then Android Chrome, covering orientation change, keyboard show/hide, backgrounding and resuming, and Wi-Fi ⇄ cellular handover.
 
 ---
 

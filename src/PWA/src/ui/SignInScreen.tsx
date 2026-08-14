@@ -1,4 +1,4 @@
-import { signIn } from '../auth/msal'
+import { auth } from '../auth/impl'
 
 /**
  * The signed-out screen.
@@ -20,7 +20,7 @@ export function SignInScreen({ busy }: { busy: boolean }) {
       <button
         type="button"
         disabled={busy}
-        onClick={() => void signIn()}
+        onClick={() => void auth.signIn()}
         className="min-h-12 w-full max-w-xs rounded-xl bg-slate-100 px-5 text-[15px] font-medium text-slate-900 transition active:bg-slate-300 disabled:opacity-50"
       >
         {busy ? 'Signing in…' : 'Sign in with Microsoft'}

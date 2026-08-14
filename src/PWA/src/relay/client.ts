@@ -6,7 +6,7 @@ import {
 } from '@microsoft/signalr'
 import { MessagePackHubProtocol } from '@microsoft/signalr-protocol-msgpack'
 
-import { getAccessToken } from '../auth/msal'
+import { auth } from '../auth/impl'
 import { Client, PROTOCOL_VERSION, Server } from '../protocol/methods'
 import { ErrorCodes, describeError } from '../protocol/errors'
 import {
@@ -162,7 +162,7 @@ export class RelayClient {
   }
 
   private async connect(): Promise<void> {
-    const token = await getAccessToken()
+    const token = await auth.getAccessToken()
 
     if (!token) {
       this.emit('status', 'signed-out')
@@ -178,7 +178,7 @@ export class RelayClient {
         // present the token it was born with. Returning the empty string rather
         // than throwing lets the hub reject the connection cleanly, which we can
         // report, instead of failing inside the transport, which we cannot.
-        accessTokenFactory: async () => (await getAccessToken()) ?? '',
+        accessTokenFactory: async () => (await auth.getAccessToken()) ?? '',
       })
       // MessagePack because terminal output is binary, and JSON would base64
       // every frame on the one path that is hot.
@@ -201,25 +201,41 @@ export class RelayClient {
 
     // The handshake is separate from everything else so an incompatible client is
     // turned away before it can issue any other method, rather than half-working.
+    if (!(await this.handshake(connection))) return
+
+    this.attempts = 0
+    this.emit('status', 'connected')
+    await this.refreshMachines()
+  }
+
+  /**
+   * Introduces this connection to the hub.
+   *
+   * Done on every connection, including the ones SignalR makes for us when it
+   * reconnects. The hub's record of a client is keyed by connection id and a reconnect
+   * produces a new one, so a connection that skipped this is one the hub has never
+   * heard of: it will refuse to attach and refuse to carry a keystroke. That is not a
+   * corner case on a phone — a lift, a tunnel or a locked screen is enough — and the
+   * failure is silent until the user types something.
+   *
+   * Returns false when the hub turned us away, having already reported it.
+   */
+  private async handshake(connection: HubConnection): Promise<boolean> {
     const rejection = await connection.invoke(
       Server.ClientHandshake,
       encodeClientHandshake(PROTOCOL_VERSION, CLIENT_VERSION),
     )
 
-    if (rejection) {
-      const problem = decodeError(rejection)
-      this.emit('status', 'rejected', describeError(problem.code, problem.message))
-      this.emit('error', problem)
+    if (!rejection) return true
 
-      // Retrying a refusal would produce a login loop against a hub that has
-      // already made its answer clear.
-      await this.stop()
-      return
-    }
+    const problem = decodeError(rejection)
+    this.emit('status', 'rejected', describeError(problem.code, problem.message))
+    this.emit('error', problem)
 
-    this.attempts = 0
-    this.emit('status', 'connected')
-    await this.refreshMachines()
+    // Retrying a refusal would produce a login loop against a hub that has
+    // already made its answer clear.
+    await this.stop()
+    return false
   }
 
   /**
@@ -237,7 +253,7 @@ export class RelayClient {
     let token: string | null = null
 
     try {
-      token = await getAccessToken()
+      token = await auth.getAccessToken()
     } catch {
       token = null
     }
@@ -302,6 +318,12 @@ export class RelayClient {
     connection.onreconnecting(() => this.emit('status', 'reconnecting'))
 
     connection.onreconnected(async () => {
+      // Introduce ourselves again before claiming to be connected. The hub keys its
+      // record of a client by connection id and this is a new one, so until the
+      // handshake lands we are a stranger to it — and the app, believing itself
+      // connected, would let the user type into a session the hub will not route.
+      if (!(await this.handshake(connection))) return
+
       this.attempts = 0
       this.emit('status', 'connected')
       // The hub's registry is per connection, so a new connection id means it has

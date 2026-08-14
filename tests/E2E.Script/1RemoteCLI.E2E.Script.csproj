@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>OneRemoteCli.E2E.Script</RootNamespace>
+    <AssemblyName>1remote-e2e-script</AssemblyName>
+    <IsPackable>false</IsPackable>
+
+    <!-- Deliberately not a test project. It is a program the tests run, and marking
+         it as one would have the test runner try to discover cases inside it. -->
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+
+</Project>

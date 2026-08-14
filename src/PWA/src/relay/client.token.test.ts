@@ -5,7 +5,7 @@ const invoke = vi.fn<(method: string, ...args: unknown[]) => Promise<unknown>>()
 const stop = vi.fn(async () => {})
 const getAccessToken = vi.fn<() => Promise<string | null>>()
 
-vi.mock('../auth/msal', () => ({ getAccessToken: () => getAccessToken() }))
+vi.mock('../auth/impl', () => ({ auth: { getAccessToken: () => getAccessToken() } }))
 
 vi.mock('@microsoft/signalr', () => {
   class HubConnectionBuilder {

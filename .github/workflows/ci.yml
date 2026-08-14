@@ -56,5 +56,54 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Test
+        run: npm run test
+
       - name: Build
         run: npm run build
+
+  # The browser end of the system, driven from a phone-sized Chromium against a real
+  # hub, a real agent and a real pseudoconsole. Windows, not Ubuntu: the host that
+  # stands all that up targets net8.0-windows and opens ConPTY, which does not exist
+  # anywhere else.
+  e2e:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: src/PWA/package-lock.json
+
+      - name: Install
+        run: npm ci
+        working-directory: src/PWA
+
+      # Only Chromium. The suite is about this app's behaviour rather than about
+      # cross-browser rendering, and the other two would double the job for nothing.
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: src/PWA
+
+      # Built ahead of the run so that a compile error is reported as one, rather than
+      # as a web server that failed to become ready.
+      - name: Build the test host
+        run: dotnet build tests/E2E.Host --configuration Release
+
+      - name: Test
+        run: npm run test:e2e
+        working-directory: src/PWA
+
+      - name: Upload the report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: src/PWA/playwright-report
+          if-no-files-found: ignore

@@ -13,6 +13,12 @@
     <Project Path="src/Terminal/1RemoteCLI.Terminal.csproj" />
   </Folder>
   <Folder Name="/tests/" />
+  <Folder Name="/tests/E2E.Host/">
+    <Project Path="tests/E2E.Host/1RemoteCLI.E2E.Host.csproj" />
+  </Folder>
+  <Folder Name="/tests/E2E.Script/">
+    <Project Path="tests/E2E.Script/1RemoteCLI.E2E.Script.csproj" />
+  </Folder>
   <Folder Name="/tests/Daemon.Tests/">
     <Project Path="tests/Daemon.Tests/1RemoteCLI.Daemon.Tests.csproj" />
   </Folder>

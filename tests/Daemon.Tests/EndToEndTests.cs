@@ -665,7 +665,6 @@ public sealed class EndToEndTests : IAsyncLifetime
         await rejoiner.WaitForScreenAsync(before);
 
         long resumeFrom = rejoiner.LastSeq!.Value;
-        int watcherSaw = watcher.Frames.Count;
 
         Assert.Null(await rejoiner.DetachAsync(shell.SessionId));
 
@@ -676,6 +675,8 @@ public sealed class EndToEndTests : IAsyncLifetime
         int watcherAfterOutput = watcher.Frames.Count;
         long watcherHighest = watcher.LastSeq!.Value;
 
+        int rejoinerSaw = rejoiner.Frames.Count;
+
         Assert.Null(await rejoiner.AttachAsync(
             shell.MachineIdHint,
             shell.SessionId,
@@ -685,8 +686,12 @@ public sealed class EndToEndTests : IAsyncLifetime
 
         await rejoiner.WaitForScreenAsync(during);
 
-        // The frames the returning phone was sent to catch it up.
-        IReadOnlyList<OutputFrame> caughtUp = [.. rejoiner.Frames.Skip(watcherSaw)];
+        // The frames the returning phone was sent to catch it up. Counted from its own
+        // frames, not the watcher's: the two connections have received different
+        // numbers of frames by this point, and skipping one list by the other's length
+        // silently drops or keeps the wrong ones depending on which happens to be
+        // longer.
+        IReadOnlyList<OutputFrame> caughtUp = [.. rejoiner.Frames.Skip(rejoinerSaw)];
         Assert.NotEmpty(caughtUp);
 
         // Give anything mistakenly fanned out time to arrive, so this is an assertion

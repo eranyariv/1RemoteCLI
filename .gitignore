@@ -24,6 +24,10 @@ npm-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# The phone app, staged into the hub at deploy time by scripts/publish-hub.ps1.
+# It is build output that happens to live under src/, not source.
+src/Hub/wwwroot/
+
 # --- Playwright ---
 playwright-report/
 test-results/

@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Security.Claims;
 using Lib.Net.Http.WebPush;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.Extensions.Options;
 using OneRemoteCli.Hub.Auth;
 using OneRemoteCli.Hub.Push;
@@ -72,6 +73,21 @@ builder.Services
 
 var app = builder.Build();
 
+// The app is served by the hub, from the hub's own origin. That is not a packaging
+// convenience: same-origin means no CORS on the SignalR endpoint, one TLS
+// certificate, one redirect URI registered in Entra, and no second thing to deploy
+// and keep in step. The phone fetches the app and opens its socket back to the host
+// it came from.
+//
+// Static files come before authentication because the app shell is public. It has to
+// be: the sign-in screen is part of the bundle, so a pipeline that demanded a token
+// to serve it could never hand anybody the page that obtains one.
+app.UseStaticFiles(new StaticFileOptions
+{
+    ContentTypeProvider = WebManifestAware(),
+    OnPrepareResponse = context => CacheFor(context),
+});
+
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -81,8 +97,6 @@ app.MapGet("/health", () => Results.Ok(new HealthResponse(
     Status: "ok",
     Version: Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown",
     UtcNow: DateTimeOffset.UtcNow)));
-
-app.MapGet("/", () => Results.Text("1RemoteCLI hub", "text/plain"));
 
 // The VAPID public key, which the browser needs before it can subscribe.
 //
@@ -108,6 +122,26 @@ app.MapGet("/whoami", [Authorize] (ClaimsPrincipal user) => Results.Ok(new WhoAm
 // is accepted from the query string.
 app.MapHub<RelayHub>("/hub");
 
+// The app itself, when a build has been staged into wwwroot. A hub without one is
+// still a working relay — that is how the tests and `dotnet run` use it — so a
+// missing bundle is a different deployment, not a broken one.
+if (File.Exists(Path.Combine(app.Environment.WebRootPath ?? string.Empty, "index.html")))
+{
+    // Every path the app routes to client-side has to return the shell, because a
+    // phone that reloads on a deep link asks the server for a path only the browser
+    // knows about. The `:nonfile` constraint keeps a genuinely missing asset a 404
+    // rather than an HTML page delivered under a .js content type.
+    app.MapFallbackToFile("index.html", new StaticFileOptions
+    {
+        ContentTypeProvider = WebManifestAware(),
+        OnPrepareResponse = CacheFor,
+    });
+}
+else
+{
+    app.MapGet("/", () => Results.Text("1RemoteCLI hub", "text/plain"));
+}
+
 if (!app.Services.GetRequiredService<IOptions<VapidOptions>>().Value.Configured)
 {
     app.Logger.LogWarning(
@@ -117,6 +151,45 @@ if (!app.Services.GetRequiredService<IOptions<VapidOptions>>().Value.Configured)
 }
 
 app.Run();
+
+/// <summary>
+/// Content types, plus the one the framework does not know.
+/// <para>
+/// A web app manifest served as <c>application/octet-stream</c> is ignored by every
+/// browser, and the symptom is not an error: the app simply cannot be installed to a
+/// home screen. On iOS that also means it can never receive a notification, so this
+/// one missing MIME entry would quietly remove the feature this product exists for.
+/// </para>
+/// </summary>
+static FileExtensionContentTypeProvider WebManifestAware()
+{
+    var provider = new FileExtensionContentTypeProvider();
+    provider.Mappings[".webmanifest"] = "application/manifest+json";
+
+    return provider;
+}
+
+/// <summary>
+/// How long the phone may keep each file.
+/// <para>
+/// Two rules, and the split is what makes an update actually arrive. Vite names every
+/// bundled asset after a hash of its contents, so those files can never change meaning
+/// and are cached for a year. Everything else — the shell, the service worker, the
+/// manifest — keeps its name across releases, so it must be revalidated every time.
+/// Caching <c>sw.js</c> is the classic way to ship a service worker that can never be
+/// replaced: the browser keeps serving the old one, which keeps serving the old app,
+/// and no amount of redeploying fixes it.
+/// </para>
+/// </summary>
+static void CacheFor(StaticFileResponseContext context)
+{
+    bool fingerprinted = context.Context.Request.Path
+        .StartsWithSegments("/assets", StringComparison.OrdinalIgnoreCase);
+
+    context.Context.Response.Headers.CacheControl = fingerprinted
+        ? "public, max-age=31536000, immutable"
+        : "no-cache";
+}
 
 internal sealed record VapidKeyResponse(string Key);
 

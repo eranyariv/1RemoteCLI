@@ -132,14 +132,13 @@ Why each of those matters:
 ### Redeploying
 
 ```powershell
-dotnet publish src\Hub\1RemoteCLI.Hub.csproj -c Release -o "$env:TEMP\hubpub"
-Compress-Archive -Path "$env:TEMP\hubpub\*" -DestinationPath "$env:TEMP\hub.zip" -Force
-
 . .\scripts\az-env.ps1
-az webapp deploy -g 1remotecli-rg -n 1remotecli-hub --src-path "$env:TEMP\hub.zip" --type zip
+.\scripts\publish-hub.ps1
 ```
 
-Verify:
+**Use the script, not a bare `dotnet publish`.** The hub serves the phone app from its own `wwwroot`, so a publish that skips the app build deploys whatever bundle was last left there — on a developer machine, possibly a development one, and in CI, nothing at all. The script builds the app, stages it, publishes, deploys and then verifies. See [Deployment](deployment.md).
+
+Verify by hand:
 
 ```powershell
 Invoke-WebRequest https://1remotecli-hub.azurewebsites.net/health -UseBasicParsing | Select-Object -Expand Content

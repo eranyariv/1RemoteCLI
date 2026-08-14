@@ -108,6 +108,16 @@ export async function signIn(page: Page, user: 'alice' | 'bob' = 'alice'): Promi
   // The header only exists once the app believes somebody is signed in, so waiting for
   // it is waiting for the thing the test actually depends on rather than for a delay.
   await expect(page.getByRole('heading', { name: 'Machines' })).toBeVisible()
+
+  // Then wait for the relay, which signing in does not imply. Every scenario starts a
+  // session *after* this returns and expects to see it appear, and that only holds if
+  // the app was registered with the hub when the session opened -- a client that is
+  // still connecting is not in the group the hub broadcasts to. It does recover, via
+  // the machine list it asks for once connected, so the gap does not lose the session
+  // forever; it just makes the moment a test starts racing something invisible, which
+  // is how a suite ends up with one test that fails on a loaded machine and nowhere
+  // else.
+  await expect(page.getByText('Connected', { exact: true })).toBeVisible()
 }
 
 /**
@@ -118,7 +128,24 @@ export async function signIn(page: Page, user: 'alice' | 'bob' = 'alice'): Promi
  * bug worth catching when a machine has two.
  */
 export async function attach(page: Page, displayName: string): Promise<void> {
-  await page.getByRole('button', { name: new RegExp(displayName) }).first().click()
+  const session = page.getByRole('button', { name: new RegExp(displayName) }).first()
+
+  // Waited for explicitly, rather than relying on `click`'s own wait, so that a
+  // failure says what the machine list was actually showing. The bare click reports
+  // only that a selector never matched, which is the same message whether the session
+  // is missing, the machine is offline, or the app never connected at all -- three
+  // very different bugs.
+  try {
+    await expect(session).toBeVisible()
+  } catch (cause) {
+    throw new Error(
+      `No session matching /${displayName}/ appeared. The screen showed:\n` +
+        (await page.locator('body').innerText()),
+      { cause },
+    )
+  }
+
+  await session.click()
   await expect(page.getByRole('button', { name: '‹ Back' })).toBeVisible()
 }
 

@@ -1,4 +1,4 @@
-import { attach, expect, expectScreen, screen, test, type } from './fixtures'
+import { attach, expect, expectScreen, test, type } from './fixtures'
 
 /**
  * The two ways a session stops answering, which are different in one way that matters:
@@ -47,7 +47,12 @@ test.describe('losing the connection', () => {
     // The banner printed at start-up is far enough up the scrollback that a re-attach
     // which quietly started from a blank screen would drop it. A terminal that comes
     // back empty is a terminal you cannot trust.
-    expect(await screen(app)).toContain('1RemoteCLI end-to-end script')
+    //
+    // Polled, not read once. The banner clearing means the socket is back; the screen
+    // is redrawn from the snapshot that follows, so there is a window in which the
+    // connection is up and the terminal is still empty. Asserting inside that window
+    // is a race that fails on a loaded machine and nowhere else.
+    await expectScreen(app, '1RemoteCLI end-to-end script')
   })
 })
 
@@ -72,7 +77,12 @@ test.describe('a session that ends', () => {
 
     // The last screen stays. It is usually the reason the session was being watched at
     // all — the error message, the test summary, the thing you went to look at.
-    expect(await screen(app)).toContain('E2E-BYE')
+    //
+    // Polled for the same reason as the re-attach above: the banner is driven by the
+    // close notification, and the frame carrying the program's final output is a
+    // separate message. Reading the screen once, the instant the banner appears, is
+    // asserting that two independent messages arrived in a particular order.
+    await expectScreen(app, 'E2E-BYE')
   })
 
   test('drops it from the machine list afterwards', async ({ app, desk }) => {

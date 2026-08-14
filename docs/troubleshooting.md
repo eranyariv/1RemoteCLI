@@ -117,7 +117,7 @@ Notifications fire when a session goes quiet at a prompt. A program that prints 
 
 ## The screen looks wrong
 
-**Garbled or misplaced output.** The agent keeps its own model of the terminal, so this is a real emulator bug and worth reporting. Use the record button in the session toolbar to capture a trace and attach it to the issue — it contains the exact byte stream, which is the only thing that makes such a bug reproducible.
+**Garbled or misplaced output.** The agent keeps its own model of the terminal, so this is a real emulator bug and worth reporting. Use the record button in the session toolbar to capture a trace, then stop it — the browser saves a `.trace.json`, which on a phone lands in Files. Attach that to the issue: it contains the exact byte stream, which is the only thing that makes such a bug reproducible.
 
 **"Some output was missed".** Not a bug. The program produced more than the buffer holds while nobody was attached, so scrollback before that point is gone. What you are looking at is current.
 

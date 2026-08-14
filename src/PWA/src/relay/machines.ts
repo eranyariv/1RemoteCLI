@@ -45,8 +45,14 @@ function withMachine(
 
   // A notification for a machine we have never heard of is dropped rather than
   // used to invent one. We would have no name, no OS and no online state for it,
-  // and a row reading "unknown machine" is worse than a row that is not there;
-  // the next ListMachines fills the gap anyway.
+  // and a row reading "unknown machine" is worse than a row that is not there.
+  //
+  // Nothing re-lists to fill the gap: ListMachines runs on connect and on reconnect,
+  // and nowhere else. What makes that survivable is machineOnline, which *adds* an
+  // unknown machine instead of dropping it -- so a desk that comes up mid-session
+  // arrives with everything we need. Reaching this line takes a session notification
+  // for a machine whose machineOnline we never saw, and the reconnect handshake is
+  // what recovers from that.
   return changed ? ordered(next) : machines
 }
 

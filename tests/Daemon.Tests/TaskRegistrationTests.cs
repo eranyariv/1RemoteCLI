@@ -95,9 +95,18 @@ public sealed class StartMenuTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_folder))
+        // Best effort. This is a temp folder; failing to remove it says nothing about
+        // the code under test, and throwing here would turn a scanner holding a handle
+        // into a red build.
+        try
         {
-            Directory.Delete(_folder, recursive: true);
+            if (Directory.Exists(_folder))
+            {
+                Directory.Delete(_folder, recursive: true);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
         }
     }
 
@@ -112,16 +121,65 @@ public sealed class StartMenuTests : IDisposable
 
         // One to sign in, one to start the agent by hand. Both are the entire
         // discoverable surface for a user who never opens a terminal.
-        Assert.Equal(2, links.Length);
+        Assert.True(links.Length == 2, $"Expected 2 shortcuts, found {links.Length}: {Describe(_folder)}");
 
         // A zero-byte .lnk is what a mismatched vtable produces: the call appears to
         // succeed and the shell writes nothing.
-        Assert.All(links, link => Assert.True(new FileInfo(link).Length > 0));
+        Assert.All(links, link => Assert.True(
+            new FileInfo(link).Length > 0,
+            $"{Path.GetFileName(link)} was written empty."));
 
         StepResult removed = StartMenu.Remove(_folder);
 
         Assert.True(removed.Ok, removed.Message);
-        Assert.False(Directory.Exists(_folder));
+
+        // Polled rather than read once, because a Windows directory does not always
+        // vanish the instant Delete returns. Anything holding a handle opened with
+        // FILE_SHARE_DELETE -- which is exactly how a virus scanner opens files, so as
+        // not to block deletes -- leaves the entry in a pending-delete state: gone as
+        // far as Delete is concerned, still visible to Exists until the last handle
+        // closes. Freshly written .lnk files are precisely what a scanner opens.
+        //
+        // This does not weaken the test. A Remove that genuinely left files behind
+        // still fails, five seconds later.
+        Assert.True(
+            WaitUntil(() => !Directory.Exists(_folder)),
+            $"The folder outlived its removal: {Describe(_folder)}");
+    }
+
+    private static bool WaitUntil(Func<bool> condition)
+    {
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition())
+            {
+                return true;
+            }
+
+            Thread.Sleep(25);
+        }
+
+        return condition();
+    }
+
+    /// <summary>
+    /// Named so a failure says which step went wrong rather than which line did. Every
+    /// assertion above can only fail on a machine under load, and this test's whole
+    /// value is telling us what the shell actually did.
+    /// </summary>
+    private static string Describe(string folder)
+    {
+        if (!Directory.Exists(folder))
+        {
+            return $"{folder} does not exist";
+        }
+
+        string[] entries = Directory.GetFileSystemEntries(folder);
+
+        return entries.Length == 0
+            ? $"{folder} exists and is empty"
+            : $"{folder} contains {string.Join(", ", entries.Select(Path.GetFileName))}";
     }
 
     [Fact]

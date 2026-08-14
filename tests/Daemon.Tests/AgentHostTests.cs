@@ -314,9 +314,18 @@ public class AgentHostTests
             var fixture = new AgentFixture(host, sink, directory);
             fixture._run = Task.Run(() => host.RunAsync(fixture._stopping.Token));
 
-            // The accept loop must be listening before a client tries to connect;
-            // the client's own retry covers the rest.
-            await Task.Delay(50);
+            // Waited for, not slept through. A named pipe shows up in the object
+            // namespace the moment its first instance is created, so this asks the
+            // question directly rather than guessing how long Task.Run takes to be
+            // scheduled.
+            //
+            // A sleep was enough for most tests here only because the client retries
+            // until the timeout. RefusesToStartWhenAnotherAgentOwnsThePipe has no
+            // client: it races a second host against this one, and if this one has not
+            // reached NamedPipeServerStreamAcl.Create yet, the second takes the name
+            // with FirstPipeInstance and succeeds -- so the test fails claiming the
+            // agent allows two copies of itself. That failed on CI and never here.
+            await WaitUntilAsync(() => File.Exists($@"\\.\pipe\{host.PipeName}"));
             return fixture;
         }
 

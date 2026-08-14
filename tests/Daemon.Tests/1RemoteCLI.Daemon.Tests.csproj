@@ -36,6 +36,14 @@
          hub's wiring that can drift from the thing being shipped — which is exactly
          the class of bug this test exists to catch. -->
     <ProjectReference Include="..\..\src\Hub\1RemoteCLI.Hub.csproj" />
+
+    <!-- The scripted CLI, built alongside and copied in. The latency measurements
+         need a program that reports the instant a keystroke reached it, which no
+         shell will do. -->
+    <ProjectReference Include="..\E2E.Script\1RemoteCLI.E2E.Script.csproj"
+                      ReferenceOutputAssembly="false"
+                      OutputItemType="Content"
+                      CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

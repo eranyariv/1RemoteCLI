@@ -596,6 +596,11 @@ internal sealed class PhoneClient : IAsyncDisposable
                 _frames.Add(new OutputFrame(notification.Seq, notification.Kind, notification.Data));
                 _screen.Append(Encoding.UTF8.GetString(notification.Data));
             }
+
+            // Raised outside the lock, and after the frame has been recorded, so a
+            // handler is free to read the screen. Only the latency measurements use
+            // this: everything else asserts on what arrived, not on when.
+            FrameArrived?.Invoke(new OutputFrame(notification.Seq, notification.Kind, notification.Data));
         });
 
         _connection.On<ClientSessionOpenedNotification>(HubMethods.Client.SessionOpened, notification =>
@@ -614,6 +619,9 @@ internal sealed class PhoneClient : IAsyncDisposable
             }
         });
     }
+
+    /// <summary>Raised as each frame lands, for tests that measure when rather than what.</summary>
+    public event Action<OutputFrame>? FrameArrived;
 
     public IReadOnlyList<ClientSessionOpenedNotification> Opened
     {

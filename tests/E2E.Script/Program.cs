@@ -168,6 +168,21 @@ internal static class Program
                     Prompt();
                     break;
 
+                case 't':
+                    // The instant this keystroke arrived, in UTC ticks, printed by the
+                    // program that received it.
+                    //
+                    // This is how the latency measurements get an honest number for each
+                    // leg separately. A test can time a round trip on its own, but a
+                    // round trip is input latency plus output latency plus however long
+                    // the program took to answer, and the three are not separable from
+                    // outside. With a stamp taken inside the program the caller can
+                    // subtract: its own send time to this stamp is the input leg, this
+                    // stamp to the frame landing is the output leg. Both processes are on
+                    // one machine, so the clock is shared and the subtraction is valid.
+                    Console.WriteLine($"E2E-TS {DateTime.UtcNow.Ticks}");
+                    break;
+
                 case '\u0003':
                     Interrupted();
                     break;

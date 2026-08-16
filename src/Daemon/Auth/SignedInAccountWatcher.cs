@@ -91,6 +91,13 @@ public sealed class SignedInAccountWatcher : IDisposable
     {
         _account = await ReadQuietlyAsync(cancellationToken).ConfigureAwait(false);
         _watcher.EnableRaisingEvents = true;
+
+        // Both halves, because the failure this catches is the watcher being pointed
+        // somewhere nothing happens, and that is invisible from either half alone.
+        _logger.LogInformation(
+            "Watching {Path} for sign-in changes; signed in as {Account}",
+            _watcher.Path,
+            _account?.Username ?? "nobody");
     }
 
     /// <summary>Who was signed in as of the last look.</summary>
@@ -102,8 +109,35 @@ public sealed class SignedInAccountWatcher : IDisposable
     /// </summary>
     public event Action? Changed;
 
-    private void OnFileEvent(object sender, FileSystemEventArgs e) =>
+    private void OnFileEvent(object sender, FileSystemEventArgs e)
+    {
+        _logger.LogDebug("Token cache {Change}", e.ChangeType);
+
         _settling.Change(Settle, Timeout.InfiniteTimeSpan);
+    }
+
+    /// <summary>
+    /// Tells the observers, one bad one at a time.
+    /// <para>
+    /// Isolated because they are decoration and the caller is not: a tray icon that
+    /// throws while redrawing must not be able to make the agent look like it handled
+    /// a sign-out when it did not.
+    /// </para>
+    /// </summary>
+    private void NotifyObservers()
+    {
+        foreach (Action observer in Changed?.GetInvocationList().Cast<Action>() ?? [])
+        {
+            try
+            {
+                observer();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Telling an observer about the new account failed");
+            }
+        }
+    }
 
     /// <summary>Re-reads the account and reports it only if it is somebody else.</summary>
     internal async Task CheckAsync()
@@ -126,11 +160,17 @@ public sealed class SignedInAccountWatcher : IDisposable
 
             _account = current;
 
-            // Before the callback, so an observer redrawing on this already sees the
-            // new account rather than the one being replaced.
-            Changed?.Invoke();
+            _logger.LogInformation(
+                "Signed-in account changed to {Account}",
+                current?.Username ?? "nobody");
 
+            // The mandatory callback first, and observers after: it is what stops the
+            // agent relaying for somebody who signed out, while they are only redrawing
+            // an icon. Raising the event first would let a decorative observer throwing
+            // into the shared catch below cost the user a sign-out that never lands.
             await _onChanged(current).ConfigureAwait(false);
+
+            NotifyObservers();
         }
         catch (Exception ex)
         {

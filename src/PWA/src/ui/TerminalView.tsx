@@ -300,7 +300,7 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
       className="fixed inset-x-0 top-0 z-20 flex flex-col bg-slate-950"
       style={{ height: '100dvh', ...viewportStyle(box) }}
     >
-      <header className="flex items-center gap-2 border-b border-slate-800 px-2 py-2">
+      <header className="flex items-center gap-2 border-b border-slate-800 pb-2 pl-[max(0.5rem,env(safe-area-inset-left))] pr-[max(0.5rem,env(safe-area-inset-right))] pt-[max(0.5rem,env(safe-area-inset-top))]">
         <button
           type="button"
           onClick={onClose}

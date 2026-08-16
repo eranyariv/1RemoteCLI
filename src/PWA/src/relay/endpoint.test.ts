@@ -1,10 +1,19 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { DEFAULT_HUB, resolveHubUrl } from './endpoint'
 
 describe('resolving the hub address', () => {
-  it('falls back to the deployed hub when nothing is configured', () => {
-    expect(resolveHubUrl('')).toBe(`${DEFAULT_HUB}/hub`)
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  /**
+   * The hub serves this app, so the hub is whoever served it. Compiling one hostname
+   * in instead meant the app could not reach the hub from any other domain, and
+   * failed as an opaque `TypeError: Load failed` well after sign-in had succeeded.
+   */
+  it('dials the origin it was served from when nothing is configured', () => {
+    expect(resolveHubUrl('')).toBe(`${window.location.origin}/hub`)
   })
 
   it('appends the hub path to a base address', () => {
@@ -24,7 +33,14 @@ describe('resolving the hub address', () => {
     )
   })
 
-  it('falls back rather than breaking on a mistyped override', () => {
-    expect(resolveHubUrl('not a url')).toBe(`${DEFAULT_HUB}/hub`)
+  it('falls back to the serving origin rather than breaking on a mistyped override', () => {
+    expect(resolveHubUrl('not a url')).toBe(`${window.location.origin}/hub`)
+  })
+
+  /** Unit tests and anything else without a page. A browser never gets here. */
+  it('uses the compiled default only when there is no page to ask', () => {
+    vi.stubGlobal('window', undefined)
+
+    expect(resolveHubUrl('')).toBe(`${DEFAULT_HUB}/hub`)
   })
 })

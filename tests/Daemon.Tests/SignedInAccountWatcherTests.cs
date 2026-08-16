@@ -30,6 +30,70 @@ public sealed class SignedInAccountWatcherTests : IDisposable
     }
 
     /// <summary>
+    /// The tray redraws on this event, and a tray icon is decoration. If it throwing
+    /// could swallow the disconnect, a cosmetic failure would leave the agent relaying
+    /// for somebody who signed out — which is the security-relevant half.
+    /// </summary>
+    [Fact]
+    public async Task StillDisconnectsWhenAnObserverThrows()
+    {
+        using SignedInAccountWatcher watcher = Watch();
+        watcher.Changed += () => throw new InvalidOperationException("the tray fell over");
+
+        await watcher.StartAsync();
+
+        _account = null;
+        await watcher.CheckAsync();
+
+        Assert.Equal(1, _reported);
+        Assert.Null(_lastReported);
+    }
+
+    /// <summary>
+    /// The end-to-end one: a real file, deleted by somebody else, with nobody poking
+    /// the watcher.
+    /// <para>
+    /// Every other test here calls <see cref="SignedInAccountWatcher.CheckAsync"/> by
+    /// hand, which is the right way to test the decision but leaves the thing that
+    /// actually triggers it — file event, settle timer, callback — completely
+    /// unexercised. That gap shipped: the whole suite passed while a sign-out on the
+    /// real machine changed nothing at all.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task NoticesTheCacheFileGoingAwayWithoutBeingAsked()
+    {
+        Directory.CreateDirectory(_directory);
+        string path = Path.Combine(_directory, "msal.cache");
+        await File.WriteAllTextAsync(path, "a cache");
+
+        var reported = new TaskCompletionSource<SignedInAccount?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var watcher = new SignedInAccountWatcher(
+            path,
+            _ => Task.FromResult(File.Exists(path) ? _account : null),
+            account =>
+            {
+                reported.TrySetResult(account);
+                return Task.CompletedTask;
+            });
+
+        await watcher.StartAsync();
+
+        File.Delete(path);
+
+        Task first = await Task.WhenAny(reported.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+
+        Assert.True(
+            ReferenceEquals(first, reported.Task),
+            "The cache file was deleted and the watcher never noticed.");
+
+        Assert.Null(await reported.Task);
+        Assert.Null(watcher.Account);
+    }
+
+    /// <summary>
     /// The one that matters. MSAL rewrites the cache every time it renews an access
     /// token — roughly hourly, forever — and treating that as a credential change
     /// would drop and rebuild the hub connection every hour, interrupting whoever was

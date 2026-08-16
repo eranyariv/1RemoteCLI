@@ -104,7 +104,13 @@ export default function App() {
 
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-xl flex-col">
-      <header className="sticky top-0 z-10 flex items-center gap-1 border-b border-slate-800 bg-slate-950/80 px-4 py-3 backdrop-blur">
+      {/*
+        Padding rather than a spacer above: the header is sticky with a blurred
+        background, so the bar itself should extend under the status bar and only the
+        text be pushed clear. A spacer would leave a transparent strip for content to
+        scroll through.
+      */}
+      <header className="sticky top-0 z-10 flex items-center gap-1 border-b border-slate-800 bg-slate-950/80 pb-3 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur">
         <div className="min-w-0 flex-1">
           <h1 className="text-[15px] font-semibold text-slate-100">Machines</h1>
           <StatusPill status={relay.status} />

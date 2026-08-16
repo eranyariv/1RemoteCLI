@@ -172,6 +172,52 @@ public class EncryptedTokenCacheTests : IDisposable
         Assert.Equal("second@example.com", now.Username);
     }
 
+    /// <summary>
+    /// The whole chain, wired the way the agent wires it: a real MSAL client over a
+    /// real encrypted cache, a real <see cref="SignedInAccountWatcher"/> over the real
+    /// file, and a sign-out performed by a process this client knows nothing about.
+    /// <para>
+    /// Every other test in this area proves one link. Both links passed while the
+    /// feature did nothing at all on the actual machine, so the chain needs its own
+    /// test — the point of it is that nobody calls <c>CheckAsync</c> here.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task ReachesTheRunningAgentWhenAnotherProcessSignsOut()
+    {
+        var cache = new EncryptedTokenCache(CachePath);
+        cache.Write(Encoding.UTF8.GetBytes(CacheHolding("someone@example.com", "uid")));
+
+        IPublicClientApplication client = NewClient();
+        var broker = new TokenBroker(cache, client);
+
+        var reported = new TaskCompletionSource<SignedInAccount?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var watcher = new SignedInAccountWatcher(
+            broker.CachePath,
+            _ => broker.GetAccountAsync(),
+            account =>
+            {
+                reported.TrySetResult(account);
+                return Task.CompletedTask;
+            });
+
+        await watcher.StartAsync();
+        Assert.Equal("someone@example.com", watcher.Account?.Username);
+
+        // What `1remote logout` does.
+        new EncryptedTokenCache(CachePath).Clear();
+
+        Task first = await Task.WhenAny(reported.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+
+        Assert.True(
+            ReferenceEquals(first, reported.Task),
+            "Somebody signed out and the running agent was never told.");
+
+        Assert.Null(await reported.Task);
+    }
+
     private static IPublicClientApplication NewClient() => PublicClientApplicationBuilder
         .Create(AuthConfig.ClientId)
         .WithAuthority(AuthConfig.Authority)

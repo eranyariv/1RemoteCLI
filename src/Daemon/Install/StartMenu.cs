@@ -72,7 +72,7 @@ public static class StartMenu
                 return StepResult.Success("No Start Menu entries were present.");
             }
 
-            Directory.Delete(folder, recursive: true);
+            DeleteWithRetry(folder);
 
             return StepResult.Success("Removed Start Menu entries.");
         }
@@ -82,16 +82,67 @@ public static class StartMenu
         }
     }
 
+    /// <summary>
+    /// Deletes the folder, giving the shell a moment to let go first.
+    /// <para>
+    /// A newly written <c>.lnk</c> is opened by the Start Menu indexer within
+    /// milliseconds, and while it is being read the file cannot be deleted. Uninstalling
+    /// shortly after installing therefore fails through no fault of the user's. The
+    /// holder is outside this process — releasing our own COM objects first is not
+    /// enough, which was checked rather than assumed — so waiting the window out is the
+    /// only fix available. Bounded, because a genuine permission problem must still
+    /// surface rather than hang.
+    /// </para>
+    /// </summary>
+    private static void DeleteWithRetry(string folder)
+    {
+        const int attempts = 10;
+
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                Directory.Delete(folder, recursive: true);
+
+                return;
+            }
+            catch (IOException) when (attempt < attempts)
+            {
+                Thread.Sleep(50);
+            }
+            catch (UnauthorizedAccessException) when (attempt < attempts)
+            {
+                Thread.Sleep(50);
+            }
+        }
+    }
+
     private static void CreateShortcut(string linkPath, string target, string arguments, string description)
     {
         var link = (IShellLinkW)new ShellLink();
 
-        link.SetPath(target);
-        link.SetArguments(arguments);
-        link.SetDescription(description);
-        link.SetWorkingDirectory(Path.GetDirectoryName(target) ?? string.Empty);
+        try
+        {
+            link.SetPath(target);
+            link.SetArguments(arguments);
+            link.SetDescription(description);
+            link.SetWorkingDirectory(Path.GetDirectoryName(target) ?? string.Empty);
 
-        ((IPersistFile)link).Save(linkPath, fRemember: true);
+            // fRemember: false writes a copy and leaves the object's own notion of "my
+            // file" unset. Passing true makes the shell link adopt the path it just
+            // wrote, so the file stays associated with a live COM object and cannot be
+            // deleted until that object goes away.
+            ((IPersistFile)link).Save(linkPath, fRemember: false);
+        }
+        finally
+        {
+            // Released here rather than left to the finaliser. This is hygiene, not the
+            // cure for the delete race - the shell holds the file from outside this
+            // process, and removing this line alone does not reintroduce the failure.
+            // It is still worth doing: a COM object whose lifetime is decided by the GC
+            // is a latent version of exactly that bug.
+            _ = Marshal.FinalReleaseComObject(link);
+        }
     }
 
     /// <summary>

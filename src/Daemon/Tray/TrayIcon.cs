@@ -1,6 +1,4 @@
 using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Windows.Forms;
 
@@ -186,12 +184,11 @@ public sealed class TrayIcon : IDisposable
     }
 
     /// <summary>
-    /// The three icons, drawn rather than shipped.
+    /// The icon for a state, built once and kept.
     /// <para>
-    /// Distinguishable by shape as well as colour: a filled dot, a hollow ring and a
-    /// hollow ring with a slash. Colour alone fails for the roughly one in twelve men
-    /// who cannot separate the red from the green, and fails for everyone at 16 pixels
-    /// against a dark taskbar.
+    /// Sized from the shell rather than hardcoded to 16: on a 125% or 150% display
+    /// Windows asks for 20 or 24 pixels, and answering with a stretched 16 is why a
+    /// tray icon looks soft next to its neighbours.
     /// </para>
     /// </summary>
     private Icon IconFor(AgentState state)
@@ -201,58 +198,9 @@ public sealed class TrayIcon : IDisposable
             return cached;
         }
 
-        using var bitmap = new Bitmap(16, 16);
-        using (Graphics graphics = Graphics.FromImage(bitmap))
-        {
-            graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            graphics.Clear(Color.Transparent);
+        Icon icon = TrayArtwork.Create(state, SystemInformation.SmallIconSize.Width);
+        _icons[state] = icon;
 
-            Color colour = state switch
-            {
-                AgentState.Connected => Color.FromArgb(0x3F, 0xB9, 0x50),
-                AgentState.Reconnecting => Color.FromArgb(0xE3, 0xB3, 0x41),
-                _ => Color.FromArgb(0x9A, 0xA0, 0xA6),
-            };
-
-            var bounds = new Rectangle(2, 2, 11, 11);
-
-            if (state == AgentState.Connected)
-            {
-                using var fill = new SolidBrush(colour);
-                graphics.FillEllipse(fill, bounds);
-            }
-            else
-            {
-                using var pen = new Pen(colour, 2f);
-                graphics.DrawEllipse(pen, bounds);
-
-                if (state == AgentState.SignedOut)
-                {
-                    graphics.DrawLine(pen, 4, 12, 12, 4);
-                }
-            }
-        }
-
-        IntPtr handle = bitmap.GetHicon();
-
-        try
-        {
-            // Cloned, because Icon.FromHandle does not own the handle and the icon
-            // would become garbage the moment DestroyIcon runs.
-            using var borrowed = Icon.FromHandle(handle);
-            Icon owned = (Icon)borrowed.Clone();
-
-            _icons[state] = owned;
-
-            return owned;
-        }
-        finally
-        {
-            DestroyIcon(handle);
-        }
+        return icon;
     }
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool DestroyIcon(IntPtr handle);
 }

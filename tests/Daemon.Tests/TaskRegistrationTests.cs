@@ -147,6 +147,26 @@ public sealed class StartMenuTests : IDisposable
             $"The folder outlived its removal: {Describe(_folder)}");
     }
 
+    [Fact]
+    public void SurvivesInstallingAndUninstallingBackToBack()
+    {
+        // Removing immediately after installing is the case that fails: the Start Menu
+        // indexer opens a new .lnk within milliseconds and the delete is refused while
+        // it does. Once through would pass on lucky timing, so this runs the cycle
+        // enough times that the race cannot hide - which is how it surfaced in the first
+        // place, as a test that only failed in a full suite run.
+        for (int cycle = 1; cycle <= 10; cycle++)
+        {
+            StepResult installed = StartMenu.Install(Environment.ProcessPath!, _folder);
+
+            Assert.True(installed.Ok, $"Cycle {cycle}: {installed.Message}");
+
+            StepResult removed = StartMenu.Remove(_folder);
+
+            Assert.True(removed.Ok, $"Cycle {cycle}: {removed.Message}");
+        }
+    }
+
     private static bool WaitUntil(Func<bool> condition)
     {
         DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);

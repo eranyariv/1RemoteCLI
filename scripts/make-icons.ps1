@@ -128,8 +128,15 @@ function New-Icon {
     param(
         [int]$Size,
         [double]$Margin,
-        [switch]$MarkOnly
+        [switch]$MarkOnly,
+        # Leaves the background clear instead of painting it black. The app tile wants
+        # its black backdrop -- the artwork is a terminal, and a floating glyph would
+        # not read as one. A tray icon must not have it: the shell composites it onto
+        # whatever colour the taskbar is, and an opaque tile there is a black box.
+        [switch]$Transparent
     )
+
+    $background = if ($Transparent) { [System.Drawing.Color]::Transparent } else { $paper }
 
     $left = if ($MarkOnly) { $markMinX } else { $minX }
     $right = if ($MarkOnly) { $markMaxX } else { $maxX }
@@ -145,7 +152,7 @@ function New-Icon {
 
     $stage = New-Object System.Drawing.Bitmap ($srcW * $scale), ($srcH * $scale)
     $g = [System.Drawing.Graphics]::FromImage($stage)
-    $g.Clear($paper)
+    $g.Clear($background)
     $brush = New-Object System.Drawing.SolidBrush $ink
 
     for ($y = $minY; $y -le $bottom; $y++) {
@@ -174,7 +181,7 @@ function New-Icon {
 
     $canvas = New-Object System.Drawing.Bitmap $Size, $Size
     $cg = [System.Drawing.Graphics]::FromImage($canvas)
-    $cg.Clear($paper)
+    $cg.Clear($background)
     $cg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
     $cg.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
 
@@ -242,50 +249,83 @@ $icoFrames = @(
     @{ Size = 256; Margin = 0.06; MarkOnly = $false }
 )
 
-$frames = @()
-foreach ($frame in $icoFrames) {
-    $bitmap = New-Icon -Size $frame.Size -Margin $frame.Margin -MarkOnly:$frame.MarkOnly
+function Save-Ico {
+    <#
+        Writes a multi-frame .ico. Every frame is stored as PNG, which .ico has allowed
+        since Vista and which keeps a 256px frame to a few KB instead of 256.
+    #>
+    param([object[]]$Frames, [string]$Path)
 
-    $stream = New-Object System.IO.MemoryStream
-    $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
-    $frames += , @{ Size = $frame.Size; Bytes = $stream.ToArray() }
+    $out = [System.IO.File]::Create($Path)
+    $writer = New-Object System.IO.BinaryWriter $out
 
-    $stream.Dispose()
-    $bitmap.Dispose()
-}
-
-$icoPath = Join-Path $assets "1remote.ico"
-$out = [System.IO.File]::Create($icoPath)
-$writer = New-Object System.IO.BinaryWriter $out
-
-# ICONDIR. Every frame is stored as PNG, which .ico has allowed since Vista and which
-# keeps a 256px frame to a few KB instead of 256.
-$writer.Write([UInt16]0)
-$writer.Write([UInt16]1)
-$writer.Write([UInt16]$frames.Count)
-
-$offset = 6 + (16 * $frames.Count)
-foreach ($frame in $frames) {
-    $writer.Write([byte]($(if ($frame.Size -ge 256) { 0 } else { $frame.Size })))
-    $writer.Write([byte]($(if ($frame.Size -ge 256) { 0 } else { $frame.Size })))
-    $writer.Write([byte]0)
-    $writer.Write([byte]0)
+    # ICONDIR.
+    $writer.Write([UInt16]0)
     $writer.Write([UInt16]1)
-    $writer.Write([UInt16]32)
-    $writer.Write([UInt32]$frame.Bytes.Length)
-    $writer.Write([UInt32]$offset)
+    $writer.Write([UInt16]$Frames.Count)
 
-    $offset += $frame.Bytes.Length
+    $offset = 6 + (16 * $Frames.Count)
+    foreach ($frame in $Frames) {
+        $writer.Write([byte]($(if ($frame.Size -ge 256) { 0 } else { $frame.Size })))
+        $writer.Write([byte]($(if ($frame.Size -ge 256) { 0 } else { $frame.Size })))
+        $writer.Write([byte]0)
+        $writer.Write([byte]0)
+        $writer.Write([UInt16]1)
+        $writer.Write([UInt16]32)
+        $writer.Write([UInt32]$frame.Bytes.Length)
+        $writer.Write([UInt32]$offset)
+
+        $offset += $frame.Bytes.Length
+    }
+
+    foreach ($frame in $Frames) {
+        $writer.Write($frame.Bytes)
+    }
+
+    $writer.Dispose()
+    $out.Dispose()
+
+    Write-Host ("    {0,-28} {1} frames, {2:N1} KB" -f [IO.Path]::GetFileName($Path), $Frames.Count, ((Get-Item $Path).Length / 1KB))
 }
 
-foreach ($frame in $frames) {
-    $writer.Write($frame.Bytes)
+function New-Frames {
+    param([object[]]$Spec, [switch]$Transparent)
+
+    $frames = @()
+
+    foreach ($frame in $Spec) {
+        $bitmap = New-Icon -Size $frame.Size -Margin $frame.Margin -MarkOnly:$frame.MarkOnly -Transparent:$Transparent
+
+        $stream = New-Object System.IO.MemoryStream
+        $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+        $frames += , @{ Size = $frame.Size; Bytes = $stream.ToArray() }
+
+        $stream.Dispose()
+        $bitmap.Dispose()
+    }
+
+    return $frames
 }
 
-$writer.Dispose()
-$out.Dispose()
+Save-Ico -Frames (New-Frames -Spec $icoFrames) -Path (Join-Path $assets "1remote.ico")
 
-Write-Host ("    {0,-28} {1} frames, {2:N1} KB" -f "1remote.ico", $frames.Count, ((Get-Item $icoPath).Length / 1KB))
+Write-Host "==> Tray icon"
+
+# Separate from the application icon, and transparent, because the shell composites a
+# tray icon straight onto the taskbar. The black tile that makes the app icon read as
+# a terminal would be a black box here. Only the sizes the shell asks for across
+# display scalings, and mark-only at every one of them -- the prompt line is mush
+# below 48 and the tray never goes above it.
+$trayFrames = @(
+    @{ Size = 16; Margin = 0.02; MarkOnly = $true }
+    @{ Size = 20; Margin = 0.02; MarkOnly = $true }
+    @{ Size = 24; Margin = 0.02; MarkOnly = $true }
+    @{ Size = 32; Margin = 0.02; MarkOnly = $true }
+    @{ Size = 40; Margin = 0.02; MarkOnly = $true }
+    @{ Size = 48; Margin = 0.02; MarkOnly = $true }
+)
+
+Save-Ico -Frames (New-Frames -Spec $trayFrames -Transparent) -Path (Join-Path $assets "1remote-tray.ico")
 
 Write-Host ""
 Write-Host "Done. Rebuild the agent and re-run scripts/publish-hub.ps1 to ship these."

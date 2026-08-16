@@ -12,6 +12,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- A separate container from the exe icon, and a transparent one. It carries
+         mark-only frames at 16, 20, 24, 32, 40 and 48, so the tray can ask for
+         whatever size the shell wants and get a real frame rather than a stretched
+         one. The exe icon keeps its black tile, which is what makes the artwork read
+         as a terminal, but the shell composites a tray icon straight onto the
+         taskbar, where an opaque tile would be a black box. -->
+    <EmbeddedResource Include="..\..\assets\1remote-tray.ico" LogicalName="1RemoteCLI.Tray.Logo.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.28" />
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="8.0.28" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
@@ -25,8 +35,8 @@
     <AssemblyName>1remote</AssemblyName>
     <!-- Drives the taskbar, Alt-Tab, Explorer and the Start-menu shortcut, all
          from the exe itself, so the shortcut needs no explicit icon location.
-         The tray icon is deliberately not this: it encodes connection status by
-         shape as well as colour, which a logo cannot do at 16px. -->
+         The tray uses the same artwork, with a status badge composited on top -
+         see TrayArtwork. -->
     <ApplicationIcon>..\..\assets\1remote.ico</ApplicationIcon>
     <RootNamespace>OneRemoteCli.Daemon</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>

@@ -111,7 +111,13 @@ Add it with `Entra__Allowlist__<n>` in the App Service configuration. Note this 
 
 **`AADSTS90204: A transient error has occurred`.** Usually is what it says — retry before doing anything else. It is worth one look at the app registration only if it repeats: the same code is also what Entra returns for a malformed authorize request, most often a duplicated scope. `1remote` requests exactly one scope and MSAL adds `openid`/`profile`/`offline_access` itself, so a genuine duplicate would have to come from a change to `AuthConfig.Scopes`.
 
-**The phone says the redirect URI does not match.** The PWA signs in against whatever origin it was served from, so the deployed hub's origin has to be registered as an **SPA** redirect — `https://1remotecli-hub.azurewebsites.net/`, trailing slash included. A localhost-only registration works perfectly during development and fails the first time a real phone opens the app. See the table in [Azure setup](azure-setup.md).
+**The phone says the redirect URI does not match**, or Entra answers `invalid_request: The provided value for the input parameter 'redirect_uri' is not valid`. The PWA signs in against whatever origin it was served from, so **every origin needs its own SPA redirect entry** — `https://1remotecli.yariv.org/` and `https://1remotecli-hub.azurewebsites.net/` are two origins, not one, and a trailing slash is part of the match. This is the failure mode of putting a custom domain in front of the hub and stopping there: the domain serves the app perfectly and only sign-in is broken. Check what is registered:
+
+```powershell
+(az ad app list --display-name "1RemoteCLI" -o json | ConvertFrom-Json).spa.redirectUris
+```
+
+See [Adding a custom domain later](azure-setup.md#adding-a-custom-domain-later).
 
 **It worked yesterday and now it does not.** Tokens refresh silently, including mid-connection, so this usually means the cache is unreadable rather than expired. It is DPAPI-encrypted for your Windows user on this machine — restoring a profile, copying it to another PC, or a password reset that invalidates DPAPI will all break it. `1remote logout` then `1remote login`.
 

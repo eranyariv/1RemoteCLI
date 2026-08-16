@@ -94,15 +94,41 @@ az ad sp create --id $appId
 
 `requestedAccessTokenVersion = 2` is load-bearing. A v1 token carries a different issuer and claim shape, and the hub validates the issuer dynamically against the token's own `tid`.
 
-Add the production SPA redirect once the hub host is final:
+Add the SPA redirects once the hub's hosts are final. **Every origin the app is served from needs its own entry**, including a custom domain in front of the App Service:
 
 ```powershell
+$body = @{ spa = @{ redirectUris = @(
+  "https://1remotecli.yariv.org/",              # custom domain, the front door
+  "https://1remotecli-hub.azurewebsites.net/",  # the App Service's own host
+  "http://localhost:5173/",                     # dev server
+  "http://localhost:4173/"                      # preview server
+) } } | ConvertTo-Json -Depth 10 -Compress
+
+Set-Content "$env:TEMP\appreg-spa.json" $body -Encoding ascii
 az rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$appObjId" `
-  --headers "Content-Type=application/json" `
-  --body '{"spa":{"redirectUris":["https://1remotecli-hub.azurewebsites.net/","http://localhost:5173/","http://localhost:4173/"]}}'
+  --headers "Content-Type=application/json" --body "@$env:TEMP\appreg-spa.json"
 ```
 
-Registering the production origin is not optional and is easy to forget, because nothing fails until somebody tries to sign in: `/health`, the manifest and every asset are served happily to an app nobody can log in to. The PWA derives its redirect from `window.location.origin`, so each origin it is served from needs an entry here.
+Through a file rather than an inline `--body`: PowerShell mangles the quoting of a JSON literal on the command line, and Graph rejects it with `Unable to read JSON request payload` — which reads like a Graph problem and is not one.
+
+The trailing slash matters. Entra matches SPA redirects exactly, and the PWA asks for `${window.location.origin}/`.
+
+Registering an origin is not optional and is easy to forget, because **nothing fails until somebody tries to sign in**: `/health`, the manifest, the service worker and every asset are served happily from an origin nobody can log in to, so a new domain looks completely working right up to the moment it is used for the one thing it exists for. Adding a domain and registering it are two actions in two different systems with no link between them — [#52](https://github.com/eranyariv/1RemoteCLI/issues/52) and [#62](https://github.com/eranyariv/1RemoteCLI/issues/62) are the same bug, twice.
+
+### Adding a custom domain later
+
+Binding a domain to the App Service is only half of it. In full:
+
+1. CNAME the domain at the App Service host (Cloudflare or otherwise) and bind it: `az webapp config hostname add`.
+2. **Add `https://<domain>/` to `spa.redirectUris` above.** This is the step that gets missed.
+3. Tell anyone who installed the PWA from the old origin to reinstall from the new one. Web push subscriptions are scoped to the origin by the browser, so they do not carry over — the app appears installed and simply never notifies.
+
+Confirm both halves:
+
+```powershell
+(Invoke-WebRequest 'https://<domain>/health').Content
+(az ad app list --display-name "1RemoteCLI" -o json | ConvertFrom-Json).spa.redirectUris
+```
 
 ### One registration, two platforms
 

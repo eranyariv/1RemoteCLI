@@ -105,7 +105,11 @@ if ($SkipDeploy) {
 
 Step "Deploying to $WebApp"
 
-az webapp deploy --resource-group $ResourceGroup --name $WebApp --src-path $zip --type zip --only-show-errors
+# --clean mirrors the package rather than merging into whatever is already there.
+# Without it the deploy only ever adds and overwrites, so a renamed or deleted asset
+# is served forever -- and the symptom, a phone still showing the old file, looks
+# like device caching and gets misdiagnosed as one.
+az webapp deploy --resource-group $ResourceGroup --name $WebApp --src-path $zip --type zip --clean true --only-show-errors
 if ($LASTEXITCODE -ne 0) { throw 'The deployment failed.' }
 
 Step 'Verifying'

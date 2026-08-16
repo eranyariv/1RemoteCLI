@@ -23,6 +23,11 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <AssemblyName>1remote</AssemblyName>
+    <!-- Drives the taskbar, Alt-Tab, Explorer and the Start-menu shortcut, all
+         from the exe itself, so the shortcut needs no explicit icon location.
+         The tray icon is deliberately not this: it encodes connection status by
+         shape as well as colour, which a logo cannot do at 16px. -->
+    <ApplicationIcon>..\..\assets\1remote.ico</ApplicationIcon>
     <RootNamespace>OneRemoteCli.Daemon</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>

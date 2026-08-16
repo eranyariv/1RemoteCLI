@@ -156,6 +156,18 @@ That is all. There is no per-version state: same path, so the scheduled task sti
 
 Only re-run `1remote install` if you moved the executable.
 
+## Icons
+
+Every icon — six PNGs for the phone app and browser, and the `.ico` compiled into the executable — is generated from one tracked source, `assets/logo.png`:
+
+```powershell
+.\scripts\make-icons.ps1
+```
+
+Then rebuild the agent and redeploy the hub to ship them. Change the artwork and re-run the script; do not hand-edit the outputs, because there are eight of them and the usual failure is that four get updated and the rest quietly stay a year behind.
+
+The tray icon is deliberately not generated from the logo. It is a status indicator, not a brand mark: it shows connected, connecting and disconnected as distinct *shapes* so it stays readable at 16px and without relying on colour. See `src/Daemon/Tray/TrayIcon.cs`.
+
 ## Rolling back
 
 The deployment is a zip push, so the fastest rollback is to redeploy from a known-good commit:

@@ -2,7 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!--
+      Two sizes rather than one: browsers pick the nearest, and the 32px tab
+      favicon and the 48px one Windows uses for a pinned-site shortcut are
+      rendered separately from the artwork so neither is a blurry downscale of
+      the other. Both drop the "C:\1_" prompt line, which turns to mush below
+      about 48px, and show the numeral alone.
+    -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png" />
     <!--
       iOS ignores the web app manifest's icons entirely and uses this instead,
       which is why a PNG has to exist even though everything else is vector.

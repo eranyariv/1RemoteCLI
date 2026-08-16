@@ -40,6 +40,14 @@ public static class EntraAuthenticationExtensions
                 options.Authority = CommonAuthority;
                 options.TokenValidationParameters = EntraTokenValidation.CreateParameters(entra);
 
+                // Keep the claim names the token actually uses. Left on, the handler
+                // rewrites tid, oid and scp into SOAP-era URIs, and every lookup by
+                // short name silently returns nothing -- which reads as "this token
+                // has no tid or oid" and refuses everyone, including the accounts on
+                // the allowlist. Tests never saw it because they build principals
+                // directly, where no mapping happens.
+                options.MapInboundClaims = false;
+
                 options.Events = new JwtBearerEvents
                 {
                     OnMessageReceived = context =>

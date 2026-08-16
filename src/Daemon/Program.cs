@@ -1,5 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Net;
+using System.Net.Http.Headers;
 using System.Reflection;
 using System.Runtime.Versioning;
 using Microsoft.Identity.Client;
@@ -99,12 +101,68 @@ public static class Program
 
             Console.WriteLine($"Signed in as {result.Account.Username}.");
             Console.WriteLine($"Token valid until {result.ExpiresOn.ToLocalTime():yyyy-MM-dd HH:mm}.");
-            return 0;
+
+            return await ReportHubAdmissionAsync(result.AccessToken).ConfigureAwait(false);
         }
         catch (MsalException ex)
         {
             Console.Error.WriteLine($"1remote: sign-in failed ({ex.ErrorCode}): {ex.Message}");
             return ExitAuthFailed;
+        }
+    }
+
+    /// <summary>
+    /// Asks the hub whether it will actually accept this account, because signing in
+    /// and being allowed in are two different things.
+    /// <para>
+    /// Entra will happily issue a valid token to any account the user picks — including
+    /// the work account their browser was already signed in to, which on a managed
+    /// machine is the likeliest one. That token is genuine and useless: the hub's
+    /// allowlist refuses it. Without this check the only symptom is the agent reporting
+    /// that the machine is unreachable, minutes later and somewhere else entirely.
+    /// </para>
+    /// <para>
+    /// A hub that cannot be reached is not a sign-in failure, so that case says so and
+    /// still exits 0 — someone signing in on a train has done nothing wrong.
+    /// </para>
+    /// </summary>
+    private static async Task<int> ReportHubAdmissionAsync(string accessToken)
+    {
+        var whoami = new Uri(HubEndpoint.AppUri(), "whoami");
+
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await http.GetAsync(whoami).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            Console.WriteLine($"Could not reach {whoami.Host} to confirm access ({ex.Message.TrimEnd('.')}).");
+            return 0;
+        }
+
+        using (response)
+        {
+            if (response.IsSuccessStatusCode)
+            {
+                Console.WriteLine($"{whoami.Host} accepts this account.");
+                return 0;
+            }
+
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            {
+                Console.Error.WriteLine();
+                Console.Error.WriteLine($"1remote! {whoami.Host} refused this account, so this machine will not be reachable.");
+                Console.Error.WriteLine("1remote! Either sign in as an account on the hub's allowlist, or add this one to it.");
+                Console.Error.WriteLine("1remote! Run '1remote logout' then '1remote login' to choose a different account.");
+                return ExitAuthFailed;
+            }
+
+            Console.WriteLine($"Could not confirm access with {whoami.Host} (HTTP {(int)response.StatusCode}).");
+            return 0;
         }
     }
 

@@ -173,18 +173,47 @@ public class UserKeyTests
         Assert.Null(UserKey.From(principal));
     }
 
-    /// <summary>ASP.NET sometimes maps these claims to their long URI forms.</summary>
+    /// <summary>
+    /// ASP.NET renames these claims when inbound mapping is on.
+    /// <para>
+    /// The names are the real ones, spelled out. An earlier version of this test made
+    /// them up by appending the short name to the schema URI — the same mistake the
+    /// code under test was making — so it agreed with the bug instead of catching it,
+    /// and the hub refused every account while this passed.
+    /// </para>
+    /// </summary>
     [Fact]
     public void ReadsTheLongClaimUris()
     {
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
             [
-                new Claim("http://schemas.microsoft.com/identity/claims/tid", "t"),
-                new Claim("http://schemas.microsoft.com/identity/claims/oid", "o"),
+                new Claim("http://schemas.microsoft.com/identity/claims/tenantid", "t"),
+                new Claim("http://schemas.microsoft.com/identity/claims/objectidentifier", "o"),
+                new Claim("http://schemas.microsoft.com/identity/claims/scope", "Session.Access"),
             ],
             "Test"));
 
         Assert.Equal("t:o", UserKey.From(principal));
+        Assert.True(UserKey.HasScope(principal, "Session.Access"));
+    }
+
+    /// <summary>
+    /// The names above are not guesses either: they come from the mapping table the
+    /// JWT handler ships. If a framework upgrade changes one, this fails here rather
+    /// than as an outage nobody can account for.
+    /// </summary>
+    [Theory]
+    [InlineData("tid", "http://schemas.microsoft.com/identity/claims/tenantid")]
+    [InlineData("oid", "http://schemas.microsoft.com/identity/claims/objectidentifier")]
+    [InlineData("scp", "http://schemas.microsoft.com/identity/claims/scope")]
+    public void UsesTheMappingTheJwtHandlerActuallyApplies(string shortName, string expected)
+    {
+        Assert.True(
+            System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler.DefaultInboundClaimTypeMap
+                .TryGetValue(shortName, out string? mapped),
+            $"The JWT handler no longer maps '{shortName}' at all.");
+
+        Assert.Equal(expected, mapped);
     }
 
     /// <summary>

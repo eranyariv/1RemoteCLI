@@ -61,9 +61,32 @@ public static class UserKey
         Find(principal, PreferredUsernameClaim);
 
     /// <summary>
-    /// Reads a claim by its short name or by the SOAP-era URI ASP.NET may map it to.
+    /// Reads a claim by the name the token uses, falling back to the SOAP-era URI
+    /// ASP.NET maps it to.
+    /// <para>
+    /// The fallback names are spelled out rather than derived, because the mapping is
+    /// not a pattern: <c>tid</c> becomes <c>tenantid</c> and <c>oid</c> becomes
+    /// <c>objectidentifier</c>. Composing the URI from the short name produces
+    /// plausible-looking types that match nothing, which is how a hub that refused
+    /// every account could still look correct.
+    /// </para>
+    /// <para>
+    /// Authentication sets <c>MapInboundClaims = false</c>, so this fallback should
+    /// never fire in the hub. It stays for principals built by anything that does map,
+    /// and because the cost of being wrong here is "nobody can sign in".
+    /// </para>
     /// </summary>
     private static string? Find(ClaimsPrincipal principal, string type) =>
         principal.FindFirst(type)?.Value
-        ?? principal.FindFirst($"http://schemas.microsoft.com/identity/claims/{type}")?.Value;
+        ?? (MappedClaimTypes.TryGetValue(type, out string? mapped)
+            ? principal.FindFirst(mapped)?.Value
+            : null);
+
+    /// <summary>How <c>JwtSecurityTokenHandler</c> renames the claims we read.</summary>
+    private static readonly Dictionary<string, string> MappedClaimTypes = new(StringComparer.Ordinal)
+    {
+        [TenantIdClaim] = "http://schemas.microsoft.com/identity/claims/tenantid",
+        [ObjectIdClaim] = "http://schemas.microsoft.com/identity/claims/objectidentifier",
+        [ScopeClaim] = "http://schemas.microsoft.com/identity/claims/scope",
+    };
 }

@@ -237,6 +237,75 @@ public class TokenValidationTests
             new AccountAllowlist([$"{Tenant}:{ObjectId}"]).Check(principal, Scope).Decision);
     }
 
+    /// <summary>
+    /// The bug this test exists for: the hub refused every account for weeks while the
+    /// whole suite stayed green.
+    /// <para>
+    /// Every other test here validates with <see cref="JsonWebTokenHandler"/>, which
+    /// leaves claim names alone. The JWT bearer middleware, unless told otherwise,
+    /// rewrites <c>tid</c>, <c>oid</c> and <c>scp</c> into SOAP-era URIs first — so the
+    /// principal production actually saw was not the one any test built, and lookups by
+    /// short name silently found nothing. That reads as "this token has no tid or oid",
+    /// which the hub reports as a refusal, for everyone, including allowlisted accounts.
+    /// </para>
+    /// <para>
+    /// So this validates through the mapping deliberately. Admission must survive it,
+    /// whether or not someone later removes <c>MapInboundClaims = false</c>.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void AdmitsATokenWhoseClaimsWereRenamedByTheMapping()
+    {
+        ClaimsPrincipal principal = ValidateWithClaimMapping(Token());
+
+        // Guard the premise: if this stops renaming anything, the test below is
+        // passing for the wrong reason and no longer covers what it claims to.
+        Assert.Null(principal.FindFirst("oid"));
+
+        Assert.Equal($"{Tenant}:{ObjectId}", UserKey.From(principal));
+        Assert.True(UserKey.HasScope(principal, Scope));
+        Assert.Equal("someone@example.com", UserKey.PreferredUsername(principal));
+
+        Assert.True(new AccountAllowlist([$"{Tenant}:{ObjectId}"]).Check(principal, Scope).IsAllowed);
+    }
+
+    /// <summary>
+    /// The refusal has to name the right cause. Reporting a mapped-away key as
+    /// "not allowlisted" would send someone off editing a list that was already
+    /// correct — which is exactly the detour the real outage caused.
+    /// </summary>
+    [Fact]
+    public void DoesNotMistakeAMappedTokenForAnUnlistedOne()
+    {
+        AccessResult result = new AccountAllowlist(["someone@example.com"])
+            .Check(ValidateWithClaimMapping(Token()), Scope);
+
+        Assert.Equal(AccessDecision.Allowed, result.Decision);
+    }
+
+    /// <summary>
+    /// Reads a token the way the JWT bearer middleware does with claim mapping left on,
+    /// producing a principal whose claims carry the legacy URI names.
+    /// </summary>
+    private static ClaimsPrincipal ValidateWithClaimMapping(string token)
+    {
+        TokenValidationParameters parameters = EntraTokenValidation.CreateParameters(new EntraOptions
+        {
+            ClientId = ClientId,
+            RequiredScope = Scope,
+        });
+
+        parameters.IssuerSigningKey = SigningKey;
+        parameters.IssuerSigningKeys = [SigningKey];
+        parameters.ConfigurationManager = null;
+
+        // JwtSecurityTokenHandler applies InboundClaimTypeMap; JsonWebTokenHandler does
+        // not. That difference is the entire bug, so the mapping handler is the point.
+        var handler = new JwtSecurityTokenHandler();
+
+        return handler.ValidateToken(token, parameters, out _);
+    }
+
     private static async Task<TokenValidationResult> ValidateAsync(string token)
     {
         TokenValidationParameters parameters = EntraTokenValidation.CreateParameters(new EntraOptions

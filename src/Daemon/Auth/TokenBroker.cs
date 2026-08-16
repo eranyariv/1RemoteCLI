@@ -64,6 +64,18 @@ public sealed class TokenBroker
 
         return await _client
             .AcquireTokenInteractive(AuthConfig.Scopes)
+            // Always ask which account, never let the browser decide. On a machine
+            // whose browser is already signed in to a work account -- which is most
+            // work machines -- Entra otherwise picks that one and returns a token
+            // without showing a single prompt. The sign-in *succeeds*, so nothing
+            // looks wrong until the hub rejects the account minutes later, and the
+            // only way to correct it is to clear cookies for login.microsoftonline.com,
+            // which nobody guesses.
+            //
+            // This costs one click for someone with a single account. That is the
+            // right trade for a command whose entire purpose is to establish who you
+            // are: the silent path above already covers "I am already signed in".
+            .WithPrompt(Prompt.SelectAccount)
             .WithSystemWebViewOptions(new SystemWebViewOptions
             {
                 HtmlMessageSuccess = SuccessPage,

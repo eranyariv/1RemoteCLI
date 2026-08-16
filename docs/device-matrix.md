@@ -89,7 +89,22 @@ Notes:
 
 ### Runs
 
-_None recorded yet. This needs real hardware — see [#38](https://github.com/eranyariv/1RemoteCLI/issues/38)._
+```
+Build:      1remote 1.0.0.0 / hub 1.0.0.0
+Date:       2026-08-16
+Device:     Phone, browser, signed in as the allowlisted account
+Result:     pass
+Notes:      First end-to-end run on real hardware. The machine appeared in the
+            list, attaching to a running `1remote pwsh` session showed the live
+            screen, typed commands ran and their output came back, and the walkthrough
+            checks passed.
+
+            Three sign-in bugs were found and fixed on the way to this run, none of
+            which any automated test could have caught: the hub had been refusing
+            every token since it was first deployed (#53), the agent silently reused
+            the wrong signed-in account, and Entra classified the agent's loopback
+            redirect as single-page because it collided with the app's (#54).
+```
 
 ## Known device quirks
 

@@ -51,6 +51,19 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
 
     private volatile bool _signedOut;
 
+    /// <summary>
+    /// Set the instant shutdown begins, so a notification that arrives while the
+    /// connection is being torn down is not reported as a failure.
+    /// <para>
+    /// Sessions and the relay stop at the same moment, and the last thing a session
+    /// does is say goodbye. Losing that goodbye costs nothing — the agent
+    /// disconnecting drops the machine and every session with it — but reporting it
+    /// means a clean exit ends in an error line, which teaches everyone to skim past
+    /// the one channel that is supposed to mean something is wrong.
+    /// </para>
+    /// </summary>
+    private volatile bool _stopping;
+
     private volatile TaskCompletionSource _closed =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -150,6 +163,11 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
         TimeSpan retry = MinimumRetry;
+
+        // Registered rather than set after the loop: the sessions drain in parallel
+        // with this loop, so the flag has to be true before the first goodbye is
+        // attempted, not after the connection has already been stopped.
+        using CancellationTokenRegistration _ = cancellationToken.Register(() => _stopping = true);
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -597,6 +615,18 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
             CancellationToken.None).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Sends one notification, and never lets its failure reach the caller.
+    /// <para>
+    /// Best-effort by contract: a session must not fail at the desk because the relay
+    /// is unreachable. Only cancellation the <em>caller</em> asked for is allowed out.
+    /// A connection torn down mid-invoke also raises
+    /// <see cref="OperationCanceledException"/>, and callers like
+    /// <see cref="OnClosedAsync"/> deliberately pass <see cref="CancellationToken.None"/>
+    /// — so treating every cancellation as the caller's would throw the connection's
+    /// own death into a code path with nothing to catch it.
+    /// </para>
+    /// </summary>
     private async Task TryInvokeAsync<T>(string method, T argument, CancellationToken cancellationToken)
     {
         if (!IsConnected)
@@ -615,8 +645,19 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
                 Once(1901, () => _logger.Refused(method, error.Code, error.Message));
             }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            if (_stopping)
+            {
+                // Shutting down. The hub loses the machine the moment we disconnect,
+                // so a notification that did not make it out changes nothing.
+                return;
+            }
+
             Once(1900, () => _logger.Failed(ex, method));
         }
     }
@@ -686,6 +727,8 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
 
     private async Task StopQuietlyAsync()
     {
+        _stopping = true;
+
         try
         {
             await _connection.StopAsync(CancellationToken.None).ConfigureAwait(false);

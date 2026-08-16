@@ -349,6 +349,74 @@ public sealed class AgentHubClientTests : IAsyncLifetime
         await WaitUntil(() => logs.All().Contains(ErrorCodes.AccountNotAllowed, StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task ReportsANotificationTheHubCouldNotTake()
+    {
+        // The counterpart to the test below: a notification that fails while the agent
+        // is running is a real problem and must still be reported, or suppressing the
+        // shutdown case would have quietly suppressed everything.
+        var sessions = new SessionRegistry();
+        var logs = new RecordingLogger();
+
+        AgentHubClient client = await StartAsync(sessions, logs);
+        await Next<RegisterMachineRequest>();
+
+        _recorder.SessionClosedGate = new TaskCompletionSource<ErrorNotification?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        TerminalSession session = sessions.Add("pwsh", [], @"C:\Work", 100, 40, null, new FakeChannel());
+        Task goodbye = client.OnClosedAsync(session, 0).AsTask();
+
+        await _recorder.SessionClosedEntered.Task.WaitAsync(Patience);
+        _recorder.SessionClosedGate.TrySetException(new InvalidOperationException("the hub fell over"));
+
+        await goodbye.WaitAsync(Patience);
+
+        Assert.Contains("[1900]", logs.All(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DoesNotReportTheGoodbyeItCouldNotDeliverWhenQuitting()
+    {
+        // Sessions and the relay are cancelled together, so the last SessionClosed can
+        // land while the connection is being torn down. Reporting that would end every
+        // clean exit with an error line, and a channel that cries wolf on every
+        // shutdown is one nobody reads on the day it means something.
+        var sessions = new SessionRegistry();
+        var logs = new RecordingLogger();
+
+        await using var client = new AgentHubClient(
+            _hubUri,
+            Identity(),
+            sessions,
+            _ => Task.FromResult<string?>("token"),
+            logs.CreateLogger("agent"));
+
+        using var stopping = new CancellationTokenSource();
+        Task run = client.RunAsync(stopping.Token);
+
+        await WaitUntil(() => client.IsConnected);
+        await Next<RegisterMachineRequest>();
+
+        _recorder.SessionClosedGate = new TaskCompletionSource<ErrorNotification?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        TerminalSession session = sessions.Add("pwsh", [], @"C:\Work", 100, 40, null, new FakeChannel());
+        Task goodbye = client.OnClosedAsync(session, 0).AsTask();
+
+        // Held open at the hub, so the goodbye is genuinely in flight when the quit
+        // arrives — which is the race the agent hits for real.
+        await _recorder.SessionClosedEntered.Task.WaitAsync(Patience);
+
+        await stopping.CancelAsync();
+        _recorder.SessionClosedGate.TrySetException(new InvalidOperationException("shutting down"));
+
+        await goodbye.WaitAsync(Patience);
+        await run.WaitAsync(Patience);
+
+        Assert.DoesNotContain("[1900]", logs.All(), StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(null, "https://1remotecli-hub.azurewebsites.net/hub")]
     [InlineData("", "https://1remotecli-hub.azurewebsites.net/hub")]
@@ -444,6 +512,23 @@ public sealed class AgentHubClientTests : IAsyncLifetime
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public ErrorNotification? RefuseRegistration { get; set; }
+
+        /// <summary>
+        /// Holds the hub's <c>SessionClosed</c> open so a test can decide when — and
+        /// how — it finishes. Left null, the method answers immediately as usual.
+        /// </summary>
+        public TaskCompletionSource<ErrorNotification?>? SessionClosedGate { get; set; }
+
+        /// <summary>Completes as soon as the agent's goodbye reaches the hub.</summary>
+        public TaskCompletionSource SessionClosedEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<ErrorNotification?> OnSessionClosed()
+        {
+            SessionClosedEntered.TrySetResult();
+
+            return SessionClosedGate?.Task ?? Task.FromResult<ErrorNotification?>(null);
+        }
     }
 
     private sealed class RecordingHub(Recorder recorder) : Microsoft.AspNetCore.SignalR.Hub
@@ -466,10 +551,10 @@ public sealed class AgentHubClientTests : IAsyncLifetime
             return null;
         }
 
-        public ErrorNotification? SessionClosed(AgentSessionClosedNotification notification)
+        public Task<ErrorNotification?> SessionClosed(AgentSessionClosedNotification notification)
         {
             recorder.Calls.Writer.TryWrite(notification);
-            return null;
+            return recorder.OnSessionClosed();
         }
 
         public void TerminalOutput(TerminalOutputNotification notification) =>

@@ -4,6 +4,7 @@ import type { RelayClient } from '../relay/client'
 import { ErrorCodes } from '../protocol/errors'
 import type { HubError, TerminalOutputKind } from '../protocol/wire'
 import { EMPTY_STATS, Sampler, type LatencyStats } from './latency'
+import { receive, startOfStream, type StreamPosition } from './stream'
 import { TraceRecorder } from './trace'
 
 export type AttachState = 'attaching' | 'attached' | 'reconnecting' | 'closed' | 'failed'
@@ -86,7 +87,7 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
   recorderRef.current ??= new TraceRecorder()
   const recorder = recorderRef.current
 
-  const lastSeq = useRef<number | null>(null)
+  const position = useRef<StreamPosition>(startOfStream)
 
   // Set once the session is known to be over. Read by the attach effect, which
   // must not go looking for a session it watched exit — the hub would answer
@@ -132,13 +133,16 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
       client.on('terminalOutput', (output) => {
         if (output.sessionId !== sessionId) return
 
-        // A gap means output was produced that we will never see. Say so rather
-        // than rendering the remainder as though it were continuous — a terminal
-        // silently missing a chunk is worse than one that admits it, because the
-        // user acts on what is on the screen.
-        const previous = lastSeq.current
-        if (previous !== null && output.seq > previous + 1) setMissedOutput(true)
-        lastSeq.current = output.seq
+        // Delivery is at-least-once, so a frame can arrive twice; drawing it twice
+        // would duplicate a chunk of the terminal. A gap is the opposite problem:
+        // output was produced that we will never see, and saying so is better than
+        // rendering the remainder as though it were continuous, because the user acts
+        // on what is on the screen.
+        const step = receive(position.current, output)
+        position.current = step.position
+
+        if (step.missed) setMissedOutput(true)
+        if (!step.apply) return
 
         sampler.output()
         recorder.frame(output.seq, output.kind, output.data)
@@ -192,7 +196,7 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
 
     void (async () => {
       const { cols, rows } = geometry.current
-      const problem = await client.attach(machineId, sessionId, cols, rows, lastSeq.current)
+      const problem = await client.attach(machineId, sessionId, cols, rows, position.current.applied)
       if (cancelled) return
 
       if (problem) {
@@ -274,7 +278,7 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
     error,
     exitCode,
     endedWhileAway,
-    lastSeq: lastSeq.current,
+    lastSeq: position.current.applied,
     missedOutput,
     latency,
     recorder,

@@ -483,6 +483,14 @@ public sealed class EndToEndTests : IAsyncLifetime
     /// after resuming, no snapshot arrived and the sequence numbers run unbroken, which
     /// is what the client uses to decide whether it missed anything.
     /// </para>
+    /// <para>
+    /// Unbroken means no gap. It does not mean no repeat: delivery is at-least-once,
+    /// because reattaching registers the phone for live output at the hub before the
+    /// agent works out what it missed, so a frame flushed inside that window is
+    /// broadcast and then replayed (issue #57). The client is idempotent about that —
+    /// see <c>stream.ts</c> — and a gap is the failure that actually costs the user
+    /// output, so a gap is what this asserts.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task AShortDropIsResumedFromTheTailWithoutARepaint()
@@ -496,8 +504,7 @@ public sealed class EndToEndTests : IAsyncLifetime
         Assert.Null(await phone.TypeAsync(shell.SessionId, $"echo {before}\r"));
         await phone.WaitForScreenAsync(before);
 
-        long resumeFrom = phone.LastSeq!.Value;
-        int seen = phone.Frames.Count;
+        (int seen, long resumeFrom) = await phone.ResumePointAsync();
 
         Assert.Null(await phone.DetachAsync(shell.SessionId));
 
@@ -508,6 +515,16 @@ public sealed class EndToEndTests : IAsyncLifetime
         await EndToEndHarness.WaitUntilAsync(
             () => shell.Desk.Screen.Contains(during, StringComparison.Ordinal),
             "the command to run while the phone was away");
+
+        // Re-read immediately before resuming rather than reusing the position from
+        // before the detach. A detach is not instantaneous — it travels phone, hub,
+        // agent — and output already on its way is still delivered, so a phone can
+        // legitimately receive a frame or two after asking to leave. A real client
+        // resumes from the last frame it actually received, which is what this models.
+        // Resuming from the earlier position instead would ask the agent to replay a
+        // frame the phone already had, and the duplicate would look like a fault in the
+        // stream rather than the test misreporting where it had got to.
+        (seen, resumeFrom) = await phone.ResumePointAsync();
 
         Assert.Null(await phone.AttachAsync(
             shell.MachineIdHint,
@@ -529,7 +546,14 @@ public sealed class EndToEndTests : IAsyncLifetime
 
         for (int i = 1; i < resumed.Count; i++)
         {
-            Assert.Equal(resumed[i - 1].Seq + 1, resumed[i].Seq);
+            long previous = resumed[i - 1].Seq;
+            long current = resumed[i].Seq;
+
+            Assert.True(
+                current == previous || current == previous + 1,
+                $"Sequence jumped from {previous} to {current}, so the phone would report "
+                    + "output it never received. A repeat is tolerated here and discarded by "
+                    + "the client; a gap is lost output.");
         }
     }
 
@@ -554,8 +578,7 @@ public sealed class EndToEndTests : IAsyncLifetime
         Assert.Null(await phone.TypeAsync(shell.SessionId, $"echo {before}\r"));
         await phone.WaitForScreenAsync(before);
 
-        long resumeFrom = phone.LastSeq!.Value;
-        int seen = phone.Frames.Count;
+        (int seen, long resumeFrom) = await phone.ResumePointAsync();
 
         Assert.Null(await phone.DetachAsync(shell.SessionId));
 
@@ -623,8 +646,7 @@ public sealed class EndToEndTests : IAsyncLifetime
         Assert.Null(await phone.TypeAsync(shell.SessionId, $"echo {token}\r"));
         await phone.WaitForScreenAsync(token);
 
-        long resumeFrom = phone.LastSeq!.Value;
-        int seen = phone.Frames.Count;
+        (int seen, long resumeFrom) = await phone.ResumePointAsync();
 
         Assert.Null(await phone.AttachAsync(
             shell.MachineIdHint,
@@ -664,18 +686,18 @@ public sealed class EndToEndTests : IAsyncLifetime
         await watcher.WaitForScreenAsync(before);
         await rejoiner.WaitForScreenAsync(before);
 
-        long resumeFrom = rejoiner.LastSeq!.Value;
-
         Assert.Null(await rejoiner.DetachAsync(shell.SessionId));
 
         string during = $"during-{Guid.NewGuid():n}";
         Assert.Null(await watcher.TypeAsync(shell.SessionId, $"echo {during}\r"));
         await watcher.WaitForScreenAsync(during);
 
-        int watcherAfterOutput = watcher.Frames.Count;
-        long watcherHighest = watcher.LastSeq!.Value;
-
-        int rejoinerSaw = rejoiner.Frames.Count;
+        // Captured after the detach and once each stream is quiet, so both positions are
+        // the ones the phones really left off at. Anything either of them receives from
+        // here on is a consequence of the rejoiner attaching, which is the whole subject
+        // of this test.
+        (int watcherAfterOutput, long watcherHighest) = await watcher.ResumePointAsync();
+        (int rejoinerSaw, long resumeFrom) = await rejoiner.ResumePointAsync();
 
         Assert.Null(await rejoiner.AttachAsync(
             shell.MachineIdHint,
@@ -698,8 +720,8 @@ public sealed class EndToEndTests : IAsyncLifetime
         // rather than a race the wrong way round.
         await Task.Delay(500);
 
-        // The watcher may legitimately still be receiving output — a prompt redraw, say
-        // — so its frame count is not the thing to pin. What must never appear is the
+        // The watcher's frame count is pinned at a quiet moment above, so anything after
+        // it arrived because the other phone attached. What must never appear is the
         // signature of somebody else's attach being answered on this connection: a
         // sequence number it has already seen, which is a replayed frame, or a snapshot,
         // which is a repaint it never asked for.

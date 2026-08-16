@@ -771,6 +771,59 @@ internal sealed class PhoneClient : IAsyncDisposable
                 LastSeq = lastSeq,
             });
 
+    /// <summary>
+    /// A consistent point to resume from: how many frames have arrived and the highest
+    /// sequence among them, captured together once output has stopped arriving.
+    /// <para>
+    /// Both halves have to come from the same instant, and that instant has to be after
+    /// the stream goes quiet. Waiting for text to appear on screen only proves the frame
+    /// carrying that text arrived — a shell usually emits a little more just behind it,
+    /// redrawing its prompt. Read the sequence, let one of those land, then read the
+    /// count, and the test is holding a position it has already gone past. It resumes
+    /// from there, the agent correctly replays the frame it was asked for, and the
+    /// assertion sees the same sequence number twice.
+    /// </para>
+    /// <para>
+    /// That is the test mis-reporting its own position, not the stream repeating itself,
+    /// so it is fixed here rather than tolerated by loosening the assertion. The real
+    /// client cannot hit it: it advances its own cursor as each frame arrives, so what it
+    /// resumes from is always what it actually has.
+    /// </para>
+    /// </summary>
+    public async Task<(int Frames, long LastSeq)> ResumePointAsync()
+    {
+        // Quiet for one poll proves very little at 25ms intervals; a prompt redraw
+        // arriving 30ms behind its command would still slip through. Eight consecutive
+        // unchanged reads is ~200ms of silence, which is long next to the coalescer's
+        // window and still short next to the harness's patience.
+        const int settledPolls = 8;
+
+        int previous = -1;
+        int stable = 0;
+
+        await EndToEndHarness.WaitUntilAsync(
+            () =>
+            {
+                lock (_gate)
+                {
+                    if (_frames.Count == previous && _sequences.Count > 0)
+                    {
+                        return ++stable >= settledPolls;
+                    }
+
+                    previous = _frames.Count;
+                    stable = 0;
+                    return false;
+                }
+            },
+            "the output stream to go quiet before resuming");
+
+        lock (_gate)
+        {
+            return (_frames.Count, _sequences[^1]);
+        }
+    }
+
     /// <summary>The highest sequence this client has seen, which is what it resumes from.</summary>
     public long? LastSeq
     {

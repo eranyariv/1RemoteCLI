@@ -92,6 +92,10 @@ On a managed machine, policy sometimes refuses task registration outright. `1rem
 
 **`sign-in failed (...)`.** The code and message come straight from Entra. `AADSTS50020` generally means the account cannot use this application; `AADSTS65001` means consent was never granted. Both are [Azure setup](azure-setup.md) problems, not client ones.
 
+**`AADSTS90204: A transient error has occurred`.** Usually is what it says — retry before doing anything else. It is worth one look at the app registration only if it repeats: the same code is also what Entra returns for a malformed authorize request, most often a duplicated scope. `1remote` requests exactly one scope and MSAL adds `openid`/`profile`/`offline_access` itself, so a genuine duplicate would have to come from a change to `AuthConfig.Scopes`.
+
+**The phone says the redirect URI does not match.** The PWA signs in against whatever origin it was served from, so the deployed hub's origin has to be registered as an **SPA** redirect — `https://1remotecli-hub.azurewebsites.net/`, trailing slash included. A localhost-only registration works perfectly during development and fails the first time a real phone opens the app. See the table in [Azure setup](azure-setup.md).
+
 **It worked yesterday and now it does not.** Tokens refresh silently, including mid-connection, so this usually means the cache is unreadable rather than expired. It is DPAPI-encrypted for your Windows user on this machine — restoring a profile, copying it to another PC, or a password reset that invalidates DPAPI will all break it. `1remote logout` then `1remote login`.
 
 ## Notifications never arrive

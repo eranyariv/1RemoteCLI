@@ -33,7 +33,7 @@ One registration serves both the agent and the PWA. That is deliberate: because 
 | Exposed scope | `Session.Access` (`90af9976-aefb-4d54-b293-bfc8c0cbe3a2`) |
 | Access token version | 2 |
 | Public client (agent) redirect | `http://localhost` |
-| SPA (PWA) redirect | `http://localhost:5173/`, `http://localhost:4173/` |
+| SPA (PWA) redirect | `https://1remotecli-hub.azurewebsites.net/`, `http://localhost:5173/`, `http://localhost:4173/` |
 
 The client ID, tenant, and scope name are **configuration, not secrets** — they ship in the PWA bundle and in agent config. There is no client secret at all: the agent is a public client using the loopback redirect with PKCE, and the PWA is an SPA using auth code + PKCE. Nothing in this project should ever need a credential that must be kept out of git.
 

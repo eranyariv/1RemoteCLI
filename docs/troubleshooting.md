@@ -88,7 +88,20 @@ On a managed machine, policy sometimes refuses task registration outright. `1rem
 
 ## Sign-in problems
 
-**The browser opened and nothing happened.** The sign-in completes on `http://localhost`, so a browser that opened on a different profile — or a redirect blocked by an extension — leaves the CLI waiting. Close it, run `1remote login` again, and complete it in the window that opens.
+**The browser opened and nothing happened.** The sign-in completes on `http://127.0.0.1`, so a browser that opened on a different profile — or a redirect blocked by an extension — leaves the CLI waiting. Close it, run `1remote login` again, and complete it in the window that opens.
+
+**It signed in as the wrong account, without asking.** Fixed, but worth recognising in older builds. Sign-in used to let the browser choose, so on a machine already signed in to a work account Entra returned a token for that account with no prompt at all — a sign-in that *succeeds*, prints an unexpected address, and only fails later when the hub refuses it. `1remote login` now asks which account every time. If a build still does this, clearing cookies for `login.microsoftonline.com` is the only other way out.
+
+**`login` says the hub refused this account.** The token is genuine; the hub's allowlist does not contain it. Either sign in as a listed account, or add this one — the hub logs the exact key to add each time it turns somebody away:
+
+```
+Refused someone@example.com (<tid>:<oid>): '<tid>:<oid>' is not on this hub's allowlist.
+Add "<tid>:<oid>" to Entra:Allowlist to admit them.
+```
+
+Add it with `Entra__Allowlist__<n>` in the App Service configuration. Note this is a *refusal*, not a failure to authenticate; a hub the CLI simply could not reach says so instead, and does not treat it as a sign-in problem.
+
+**`AADSTS90023: Tokens issued for the 'Single-Page Application' client-type...`.** A redirect URI platform collision, not an account problem. The agent and the PWA share one registration, and Entra ignores the port when matching loopback redirects — so a `localhost` redirect on the public client also matches the PWA's `localhost` SPA entries, and the code comes back typed as single-page. The agent therefore signs in against `127.0.0.1` and the SPA keeps `localhost`. If this returns, something added a `localhost` URI to the public client platform, or a `127.0.0.1` one to the SPA platform. See [One registration, two platforms](azure-setup.md#one-registration-two-platforms).
 
 **`sign-in failed (...)`.** The code and message come straight from Entra. `AADSTS50020` generally means the account cannot use this application; `AADSTS65001` means consent was never granted. Both are [Azure setup](azure-setup.md) problems, not client ones.
 

@@ -156,10 +156,19 @@ public class AuthConfigTests
     /// <summary>
     /// Loopback, not device code: the user is at the machine, and device code flow is
     /// blocked by Conditional Access in many tenants.
+    /// <para>
+    /// The host has to be <c>127.0.0.1</c> rather than <c>localhost</c>. This
+    /// registration is shared with the PWA, whose dev servers are registered as SPA
+    /// redirects on <c>localhost</c>; Entra matches loopback redirects without regard
+    /// to port, so a <c>localhost</c> redirect here would also match those and get the
+    /// authorization code typed as single-page, failing every sign-in with
+    /// <c>AADSTS90023</c>. Asserted because the two spellings look interchangeable and
+    /// are not.
+    /// </para>
     /// </summary>
     [Fact]
     public void UsesTheLoopbackRedirect()
     {
-        Assert.Equal("http://localhost", AuthConfig.RedirectUri);
+        Assert.Equal("http://127.0.0.1", AuthConfig.RedirectUri);
     }
 }

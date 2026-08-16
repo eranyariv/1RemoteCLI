@@ -32,8 +32,10 @@ One registration serves both the agent and the PWA. That is deliberate: because 
 | Application ID URI | `api://3db435ae-5e69-483c-a044-d6e8b6262fc6` |
 | Exposed scope | `Session.Access` (`90af9976-aefb-4d54-b293-bfc8c0cbe3a2`) |
 | Access token version | 2 |
-| Public client (agent) redirect | `http://localhost` |
+| Public client (agent) redirect | `http://127.0.0.1` |
 | SPA (PWA) redirect | `https://1remotecli-hub.azurewebsites.net/`, `http://localhost:5173/`, `http://localhost:4173/` |
+
+The agent's redirect uses **`127.0.0.1`, not `localhost`**, and that is load-bearing. See [One registration, two platforms](#one-registration-two-platforms) below before changing either row.
 
 The client ID, tenant, and scope name are **configuration, not secrets** — they ship in the PWA bundle and in agent config. There is no client secret at all: the agent is a public client using the loopback redirect with PKCE, and the PWA is an SPA using auth code + PKCE. Nothing in this project should ever need a credential that must be kept out of git.
 
@@ -45,7 +47,7 @@ The client ID, tenant, and scope name are **configuration, not secrets** — the
 az ad app create `
   --display-name "1RemoteCLI" `
   --sign-in-audience AzureADandPersonalMicrosoftAccount `
-  --public-client-redirect-uris "http://localhost"
+  --public-client-redirect-uris "http://127.0.0.1"
 ```
 
 Take the `appId` and `id` from the output, then patch the rest through Graph (the CLI has no first-class flags for exposed scopes):
@@ -99,6 +101,26 @@ az rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$app
   --headers "Content-Type=application/json" `
   --body '{"spa":{"redirectUris":["https://1remotecli-hub.azurewebsites.net/","http://localhost:5173/","http://localhost:4173/"]}}'
 ```
+
+Registering the production origin is not optional and is easy to forget, because nothing fails until somebody tries to sign in: `/health`, the manifest and every asset are served happily to an app nobody can log in to. The PWA derives its redirect from `window.location.origin`, so each origin it is served from needs an entry here.
+
+### One registration, two platforms
+
+The agent and the PWA share this registration, which means one app carries both a **public client** redirect and **SPA** redirects. Entra matches loopback redirect URIs *without regard to port*, and where a request could match either platform, SPA classification wins.
+
+So a desktop redirect of `http://localhost:{ephemeral}` also matches an SPA entry like `http://localhost:5173/`. The authorization code comes back marked single-page, redeemable only with an `Origin` header that a desktop client never sends, and sign-in dies at redemption:
+
+```
+AADSTS90023: Tokens issued for the 'Single-Page Application' client-type should only
+be redeemed via cross-origin requests.
+```
+
+The two host spellings are compared as strings, so keeping the agent on `127.0.0.1` and the PWA's dev servers on `localhost` removes the ambiguity and lets both live on one registration. The rules that follow from that:
+
+- **Never add a `localhost` URI to the public client platform**, and never add a `127.0.0.1` URI to the SPA platform. Either one re-creates the collision.
+- If you ever need a second loopback host for the SPA, split the agent into its own native registration instead.
+
+`AuthConfig.RedirectUri` in the agent must match the public client entry exactly.
 
 ## Hub
 

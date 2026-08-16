@@ -67,6 +67,24 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     private volatile TaskCompletionSource _closed =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    /// <summary>
+    /// Completed when somebody signs in or out, so the connect loop stops waiting and
+    /// looks at the token again.
+    /// <para>
+    /// Without it a sign-out is cosmetic. The token is read once per connection
+    /// attempt, so an agent that is already connected keeps relaying on a token nobody
+    /// wants it to have until the socket happens to drop — which, on a healthy network,
+    /// is never. A sign-out that leaves the machine reachable from the phone is worse
+    /// than no sign-out at all, because it looks like one.
+    /// </para>
+    /// <para>
+    /// Replaced at the top of each attempt rather than reset, so a signal raised while
+    /// the loop is mid-flight is still waiting for it when it settles down.
+    /// </para>
+    /// </summary>
+    private volatile TaskCompletionSource _credentialsChanged =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     public AgentHubClient(
         Uri hubUri,
         MachineIdentity identity,
@@ -153,6 +171,37 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     }
 
     /// <summary>
+    /// Tells the agent that the signed-in account may have changed: drops any live
+    /// connection and re-reads the token immediately.
+    /// <para>
+    /// Called after a sign-out, a sign-in, or a switch to a different account, from
+    /// whichever process performed it. Dropping the connection is the point — it is
+    /// what makes a sign-out actually reach the hub, which stops listing the machine
+    /// the moment the socket goes.
+    /// </para>
+    /// </summary>
+    public async Task CredentialsChangedAsync()
+    {
+        _credentialsChanged.TrySetResult();
+
+        if (_connection.State == HubConnectionState.Disconnected)
+        {
+            return;
+        }
+
+        try
+        {
+            await _connection.StopAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // The connection is going away regardless; the loop will notice and rebuild
+            // it. Failing here would leave the caller thinking the sign-out failed.
+            _logger.Failed(ex, "Dropping the hub connection after a credential change");
+        }
+    }
+
+    /// <summary>
     /// Connects and stays connected until cancelled.
     /// <para>
     /// A hub that cannot be reached is never fatal. Local sessions keep working at the
@@ -171,6 +220,11 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
 
         while (!cancellationToken.IsCancellationRequested)
         {
+            // Armed before the token is read, so a sign-in racing this attempt is
+            // caught by the wait below rather than slept through.
+            _credentialsChanged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Task changed = _credentialsChanged.Task;
+
             TimeSpan wait = retry;
 
             try
@@ -198,10 +252,13 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
                     retry = MinimumRetry;
                     RaiseStateChanged();
 
-                    // Returns when automatic reconnect has given up entirely.
-                    await _closed.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    // Returns when automatic reconnect has given up entirely, or when
+                    // the account changed underneath us.
+                    await Task.WhenAny(_closed.Task, changed).WaitAsync(cancellationToken).ConfigureAwait(false);
 
-                    _logger.HubDisconnected("the connection closed");
+                    _logger.HubDisconnected(
+                        changed.IsCompleted ? "the signed-in account changed" : "the connection closed");
+
                     wait = MinimumRetry;
                 }
             }
@@ -215,11 +272,19 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
                 retry = Backoff(retry);
             }
 
+            // A credential change makes the wait pointless: the answer it is waiting
+            // for has already arrived.
+            if (changed.IsCompleted)
+            {
+                continue;
+            }
+
             try
             {
                 _logger.HubReconnecting(wait.TotalSeconds);
 
-                await Task.Delay(wait, cancellationToken).ConfigureAwait(false);
+                await Task.WhenAny(Task.Delay(wait, cancellationToken), changed).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
             }
             catch (OperationCanceledException)
             {

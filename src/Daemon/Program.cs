@@ -73,6 +73,9 @@ public static class Program
             case CommandKind.Login:
                 return await RunLoginAsync().ConfigureAwait(false);
 
+            case CommandKind.SwitchAccount:
+                return await RunSwitchAccountAsync().ConfigureAwait(false);
+
             case CommandKind.Logout:
                 return await RunLogoutAsync().ConfigureAwait(false);
 
@@ -90,14 +93,24 @@ public static class Program
         }
     }
 
-    private static async Task<int> RunLoginAsync()
+    private static Task<int> RunLoginAsync() =>
+        SignInAsync(broker => broker.SignInAsync(), "opening your browser to sign in...");
+
+    private static Task<int> RunSwitchAccountAsync() =>
+        SignInAsync(
+            broker => broker.SwitchAccountAsync(),
+            "signing out, then opening your browser to sign in as somebody else...");
+
+    private static async Task<int> SignInAsync(
+        Func<TokenBroker, Task<AuthenticationResult>> signIn,
+        string announcement)
     {
         var broker = new TokenBroker();
 
         try
         {
-            Console.WriteLine("1remote: opening your browser to sign in...");
-            AuthenticationResult result = await broker.SignInAsync().ConfigureAwait(false);
+            Console.WriteLine($"1remote: {announcement}");
+            AuthenticationResult result = await signIn(broker).ConfigureAwait(false);
 
             Console.WriteLine($"Signed in as {result.Account.Username}.");
             Console.WriteLine($"Token valid until {result.ExpiresOn.ToLocalTime():yyyy-MM-dd HH:mm}.");
@@ -269,6 +282,17 @@ public static class Program
             log: Console.Error.WriteLine,
             awaitingInput: AwaitingInputOptions.Load(log: Console.Error.WriteLine));
 
+        // Signing in and out happen in other processes, so the only way the agent finds
+        // out is by watching the file they share. Without this a sign-out is cosmetic:
+        // the agent keeps relaying, and the phone keeps listing the machine.
+        using var accounts = new SignedInAccountWatcher(
+            broker.CachePath,
+            _ => broker.GetAccountAsync(),
+            async _ => await hub.CredentialsChangedAsync().ConfigureAwait(false),
+            loggers.CreateLogger("Auth"));
+
+        await accounts.StartAsync().ConfigureAwait(false);
+
         using var stopping = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) =>
         {
@@ -287,7 +311,7 @@ public static class Program
         host.Sessions.Changed += () =>
             Console.WriteLine($"1remote agent: {host.Sessions.Count} session(s) attached.");
 
-        using TrayIcon? tray = StartTray(identity, hub, host, stopping);
+        using TrayIcon? tray = StartTray(identity, hub, host, accounts, stopping);
 
         // The hub loop runs alongside the pipe server rather than gating it: a machine
         // with no internet must still be able to run local sessions.
@@ -319,6 +343,7 @@ public static class Program
         MachineIdentity identity,
         AgentHubClient hub,
         AgentHost host,
+        SignedInAccountWatcher accounts,
         CancellationTokenSource stopping)
     {
         if (!Environment.UserInteractive)
@@ -333,6 +358,12 @@ public static class Program
             tray = new TrayIcon(
                 identity.DisplayName,
                 onSignIn: () => Launch(Installer.ExecutablePath, "login"),
+
+                // Through the CLI rather than in-process, like every other credential
+                // action here: the child prints why the hub refused an account, which
+                // is the failure people actually hit and one a tray icon cannot explain.
+                onSwitchAccount: () => Launch(Installer.ExecutablePath, "switch-account"),
+                onSignOut: () => Launch(Installer.ExecutablePath, "logout"),
                 onShowSessions: () => Launch(HubEndpoint.AppUri().ToString()),
                 onOpenLogs: () => Launch(FileLogger.DefaultDirectory),
                 onQuit: stopping.Cancel);
@@ -349,10 +380,12 @@ public static class Program
             hub.IsConnected ? AgentState.Connected
                 : hub.IsSignedOut ? AgentState.SignedOut
                 : AgentState.Reconnecting,
-            host.Sessions.Count);
+            host.Sessions.Count,
+            accounts.Account?.Username);
 
         hub.StateChanged += Refresh;
         host.Sessions.Changed += Refresh;
+        accounts.Changed += Refresh;
 
         Refresh();
 

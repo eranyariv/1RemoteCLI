@@ -124,6 +124,100 @@ public class EncryptedTokenCacheTests : IDisposable
         Assert.Empty(await client.GetAccountsAsync());
     }
 
+    /// <summary>
+    /// The agent runs for weeks; `1remote login` and `1remote logout` are separate
+    /// short-lived processes writing the same file. So a client that has already read
+    /// an account has to notice when the file it came from is deleted — otherwise
+    /// signing out leaves the agent connected and the machine still visible from the
+    /// phone, which is the whole of issue #60.
+    /// </summary>
+    [Fact]
+    public async Task ForgetsAnAccountWhenAnotherProcessSignsOut()
+    {
+        var cache = new EncryptedTokenCache(CachePath);
+        cache.Write(Encoding.UTF8.GetBytes(CacheHolding("someone@example.com", "uid")));
+
+        IPublicClientApplication client = NewClient();
+        cache.Bind(client.UserTokenCache);
+
+        IAccount account = Assert.Single(await client.GetAccountsAsync());
+        Assert.Equal("someone@example.com", account.Username);
+
+        // What `1remote logout` does, from a process this client knows nothing about.
+        new EncryptedTokenCache(CachePath).Clear();
+
+        Assert.Empty(await client.GetAccountsAsync());
+    }
+
+    /// <summary>
+    /// Signing in as somebody else must replace the account, not add a second one.
+    /// A merged cache leaves <c>GetAccountsAsync().FirstOrDefault()</c> choosing
+    /// between two identities by whatever order MSAL happens to return, so the agent
+    /// can carry on as the old account after a successful sign-in as the new one.
+    /// </summary>
+    [Fact]
+    public async Task ReplacesTheAccountWhenAnotherProcessSignsInAsSomebodyElse()
+    {
+        var cache = new EncryptedTokenCache(CachePath);
+        cache.Write(Encoding.UTF8.GetBytes(CacheHolding("first@example.com", "uidone")));
+
+        IPublicClientApplication client = NewClient();
+        cache.Bind(client.UserTokenCache);
+
+        Assert.Equal("first@example.com", Assert.Single(await client.GetAccountsAsync()).Username);
+
+        new EncryptedTokenCache(CachePath).Write(Encoding.UTF8.GetBytes(CacheHolding("second@example.com", "uidtwo")));
+
+        IAccount now = Assert.Single(await client.GetAccountsAsync());
+        Assert.Equal("second@example.com", now.Username);
+    }
+
+    private static IPublicClientApplication NewClient() => PublicClientApplicationBuilder
+        .Create(AuthConfig.ClientId)
+        .WithAuthority(AuthConfig.Authority)
+        .WithRedirectUri(AuthConfig.RedirectUri)
+        .Build();
+
+    /// <summary>
+    /// A serialised MSAL v3 cache holding one account and nothing else. Hand-built
+    /// rather than captured from a real sign-in, because a real one carries a live
+    /// refresh token that would have to be redacted anyway.
+    /// <para>
+    /// The refresh-token entry is not optional padding. MSAL derives accounts from the
+    /// refresh tokens it holds and joins them to the account records, so an account on
+    /// its own is invisible to <c>GetAccountsAsync</c>.
+    /// </para>
+    /// <para>
+    /// <paramref name="id"/> has to differ between two people. Two blobs sharing a
+    /// home account id overwrite each other even when the cache is merged rather than
+    /// replaced, which makes a switch-account test pass against code that cannot
+    /// actually switch accounts.
+    /// </para>
+    /// </summary>
+    private static string CacheHolding(string username, string id) => $$"""
+        {
+          "Account": {
+            "{{id}}.utid-login.windows.net-utid": {
+              "home_account_id": "{{id}}.utid",
+              "environment": "login.windows.net",
+              "realm": "utid",
+              "local_account_id": "{{id}}",
+              "username": "{{username}}",
+              "authority_type": "MSSTS"
+            }
+          },
+          "RefreshToken": {
+            "{{id}}.utid-login.windows.net-refreshtoken-{{AuthConfig.ClientId}}--": {
+              "home_account_id": "{{id}}.utid",
+              "environment": "login.windows.net",
+              "client_id": "{{AuthConfig.ClientId}}",
+              "credential_type": "RefreshToken",
+              "secret": "not-a-real-token"
+            }
+          }
+        }
+        """;
+
     public void Dispose()
     {
         GC.SuppressFinalize(this);

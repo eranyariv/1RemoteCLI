@@ -63,6 +63,7 @@ public class CommandLineTests
     [Theory]
     [InlineData("agent", CommandKind.Agent)]
     [InlineData("login", CommandKind.Login)]
+    [InlineData("switch-account", CommandKind.SwitchAccount)]
     [InlineData("logout", CommandKind.Logout)]
     [InlineData("status", CommandKind.Status)]
     [InlineData("install", CommandKind.Install)]

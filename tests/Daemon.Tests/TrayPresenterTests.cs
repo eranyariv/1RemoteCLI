@@ -64,11 +64,45 @@ public sealed class TrayPresenterTests
     }
 
     [Fact]
-    public void SigningInAgainWhileConnectedIsOffered_As_Nothing()
+    public void SigningInAgainWhileAlreadySignedInIsOffered_As_Nothing()
     {
         // Signing in when already signed in does nothing but open a browser, so the
-        // menu item is disabled rather than quietly useless.
-        Assert.False(TrayPresenter.Present(AgentState.Connected, 0, Machine).SignInEnabled);
+        // menu item is disabled rather than quietly useless. Keyed off the account and
+        // not the connection: a machine on a train is reconnecting, not signed out, and
+        // sending that user to a browser would not reconnect anything.
+        TrayPresentation view = TrayPresenter.Present(AgentState.Reconnecting, 0, Machine, "someone@example.com");
+
+        Assert.False(view.SignInEnabled);
+    }
+
+    [Fact]
+    public void SaysWhichAccountIsSignedIn()
+    {
+        // The question the icon cannot answer, and the one people get wrong: a browser
+        // already signed in to a work account will have supplied that one.
+        TrayPresentation view = TrayPresenter.Present(AgentState.Connected, 1, Machine, "someone@example.com");
+
+        Assert.Contains("someone@example.com", view.Account, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OffersToSignOutOrSwitchOnlyWhenThereIsAnAccountToLeave()
+    {
+        Assert.True(TrayPresenter.Present(AgentState.Connected, 1, Machine, "someone@example.com").SignOutEnabled);
+        Assert.False(TrayPresenter.Present(AgentState.SignedOut, 0, Machine).SignOutEnabled);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void SaysSoPlainlyWhenNobodyIsSignedIn(string? account)
+    {
+        TrayPresentation view = TrayPresenter.Present(AgentState.SignedOut, 0, Machine, account);
+
+        Assert.Equal("Not signed in", view.Account);
+        Assert.True(view.SignInEnabled);
+        Assert.False(view.SignOutEnabled);
     }
 
     [Theory]

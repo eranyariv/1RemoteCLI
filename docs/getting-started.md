@@ -108,6 +108,7 @@ Now go and [add it to your home screen and turn on notifications](phone-setup.md
 | `1remote <program> [args...]` | Run a program in a shareable session |
 | `1remote agent` | Start the per-machine agent in the foreground |
 | `1remote login` | Sign in |
+| `1remote switch-account` | Forget the current account and sign in as a different one |
 | `1remote logout` | Forget the cached sign-in |
 | `1remote status` | Show who is signed in |
 | `1remote install` | Start the agent at every logon |

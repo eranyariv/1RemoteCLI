@@ -12,6 +12,9 @@ public enum CommandKind
     /// <summary>Sign in and cache a token.</summary>
     Login,
 
+    /// <summary>Forget the current account and sign in as a different one.</summary>
+    SwitchAccount,
+
     /// <summary>Forget the cached token.</summary>
     Logout,
 
@@ -82,6 +85,7 @@ public static class CommandLine
     {
         ["agent"] = CommandKind.Agent,
         ["login"] = CommandKind.Login,
+        ["switch-account"] = CommandKind.SwitchAccount,
         ["logout"] = CommandKind.Logout,
         ["status"] = CommandKind.Status,
         ["install"] = CommandKind.Install,
@@ -247,6 +251,7 @@ public static class CommandLine
           1remote [options] <program> [args...]   Run a program in a shareable session
           1remote agent                           Start the per-machine agent
           1remote login                           Sign in
+          1remote switch-account                  Sign in as a different account
           1remote logout                          Forget the cached sign-in
           1remote status                          Show who is signed in
           1remote install                         Start the agent at every logon

@@ -51,7 +51,7 @@ This is inherent — a tool for answering prompts from your phone is a tool for 
 
 1. Revoke sessions on the Microsoft account and reset the password.
 2. Remove the account from the hub allowlist — `Entra__Allowlist__*`. This ends access; it is checked on connect and on every token refresh, so existing connections do not survive it indefinitely.
-3. On each paired machine: `1remote logout`, and kill any wrapper processes to end live sessions.
+3. On each paired machine: `1remote logout`, and kill any wrapper processes to end live sessions. The running agent notices within a second and drops its hub connection, which takes the machine off every phone; it does not need restarting.
 4. Assume anything visible in an attached session was read, and rotate accordingly.
 
 ## Reporting a vulnerability

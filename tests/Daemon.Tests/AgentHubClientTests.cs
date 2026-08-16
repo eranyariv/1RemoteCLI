@@ -430,6 +430,51 @@ public sealed class AgentHubClientTests : IAsyncLifetime
 
     // Helpers.
 
+    /// <summary>
+    /// Signing out has to reach the hub, not just the local cache.
+    /// <para>
+    /// The token is read once per connection attempt, so an agent that is already
+    /// connected would otherwise keep relaying on the old account's token until the
+    /// socket happened to drop. The hub lists a machine for exactly as long as its
+    /// agent holds a connection, so the only way a sign-out takes the machine off the
+    /// phone is if the connection goes with it.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task StopsRelayingWhenTheAccountSignsOutWhileConnected()
+    {
+        string? token = "token";
+
+        AgentHubClient client = Start(() => token);
+        await WaitUntil(() => client.IsConnected);
+
+        token = null;
+        await client.CredentialsChangedAsync();
+
+        await WaitUntil(() => !client.IsConnected);
+        await WaitUntil(() => client.IsSignedOut);
+    }
+
+    /// <summary>
+    /// And signing back in has to take effect while the user is still looking at the
+    /// tray, rather than whenever the signed-out retry next comes round.
+    /// </summary>
+    [Fact]
+    public async Task ConnectsAsSoonAsSomebodySignsBackIn()
+    {
+        string? token = null;
+
+        AgentHubClient client = Start(() => token);
+        await WaitUntil(() => client.IsSignedOut);
+
+        token = "token";
+        await client.CredentialsChangedAsync();
+
+        // Patience is well under the signed-out retry, so arriving at all proves the
+        // wait was cut short rather than slept through.
+        await WaitUntil(() => client.IsConnected);
+    }
+
     private async Task<AgentHubClient> StartAsync(SessionRegistry sessions, RecordingLogger? logs = null)
     {
         var client = new AgentHubClient(
@@ -447,6 +492,29 @@ public sealed class AgentHubClientTests : IAsyncLifetime
         _ = client.RunAsync(stopping.Token);
 
         await WaitUntil(() => client.IsConnected);
+
+        return client;
+    }
+
+    /// <summary>
+    /// Starts a client whose token the test can change, so it can play the part of
+    /// somebody signing in or out in another process.
+    /// </summary>
+    private AgentHubClient Start(Func<string?> token)
+    {
+        var client = new AgentHubClient(
+            _hubUri,
+            Identity(),
+            new SessionRegistry(),
+            _ => Task.FromResult(token()),
+            NullLogger.Instance);
+
+        _clients.Add(client);
+
+        var stopping = new CancellationTokenSource();
+        _running.Add(stopping);
+
+        _ = client.RunAsync(stopping.Token);
 
         return client;
     }

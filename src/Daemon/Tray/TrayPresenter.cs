@@ -25,8 +25,20 @@ public enum AgentState
 /// <summary>How the tray should look and what its menu should offer.</summary>
 /// <param name="Tooltip">The hover text. First line is the state, second the detail.</param>
 /// <param name="Badge">The icon's state, which the renderer maps to a colour.</param>
+/// <param name="Account">
+/// The menu's first line: who is signed in. Shown even though the icon already
+/// implies it, because "which account is this?" is a question the icon cannot answer
+/// and the answer is not always the one the user expected — a browser already signed
+/// in to a work account will happily have supplied it.
+/// </param>
 /// <param name="SignInEnabled">Whether <em>Sign in</em> does anything useful right now.</param>
-public readonly record struct TrayPresentation(string Tooltip, AgentState Badge, bool SignInEnabled);
+/// <param name="SignOutEnabled">Whether there is an account to sign out of, or switch away from.</param>
+public readonly record struct TrayPresentation(
+    string Tooltip,
+    AgentState Badge,
+    string Account,
+    bool SignInEnabled,
+    bool SignOutEnabled);
 
 /// <summary>
 /// Turning agent state into what the tray shows.
@@ -44,7 +56,11 @@ public static class TrayPresenter
     /// </summary>
     public const int TooltipLimit = 127;
 
-    public static TrayPresentation Present(AgentState state, int sessionCount, string machineName)
+    public static TrayPresentation Present(
+        AgentState state,
+        int sessionCount,
+        string machineName,
+        string? account = null)
     {
         string headline = state switch
         {
@@ -69,10 +85,17 @@ public static class TrayPresenter
 
         string name = string.IsNullOrWhiteSpace(machineName) ? string.Empty : $" ({machineName})";
 
+        bool signedIn = !string.IsNullOrWhiteSpace(account);
+
         return new TrayPresentation(
             Truncate($"{headline}{name}\n{detail}"),
             state,
-            SignInEnabled: state != AgentState.Connected);
+            // Keyed off the account rather than the connection: a machine on a train is
+            // reconnecting, not signed out, and offering to sign in an account that is
+            // already signed in would send the user round a loop that changes nothing.
+            Account: signedIn ? $"Signed in as {account}" : "Not signed in",
+            SignInEnabled: !signedIn,
+            SignOutEnabled: signedIn);
     }
 
     /// <summary>

@@ -13,6 +13,16 @@ public sealed record AuthStatus(string? Account, DateTimeOffset? TokenValidUntil
 }
 
 /// <summary>
+/// Who is signed in.
+/// </summary>
+/// <param name="Id">
+/// Stable identity, used to tell one account from another. Distinct from the
+/// username because that is a display detail the directory is free to change.
+/// </param>
+/// <param name="Username">What to show the user.</param>
+public sealed record SignedInAccount(string Id, string Username);
+
+/// <summary>
 /// The one place the agent gets a token.
 /// <para>
 /// Sign-in uses the loopback redirect rather than device code, deliberately: the
@@ -44,6 +54,36 @@ public sealed class TokenBroker
     public string CachePath => _cache.Path;
 
     /// <summary>
+    /// Who is signed in, or null. Reads through to the cache file, so it reflects a
+    /// sign-in or sign-out performed by another process.
+    /// </summary>
+    public async Task<SignedInAccount?> GetAccountAsync()
+    {
+        IAccount? account = (await _client.GetAccountsAsync().ConfigureAwait(false)).FirstOrDefault();
+
+        return account is null
+            ? null
+            : new SignedInAccount(account.HomeAccountId?.Identifier ?? account.Username, account.Username);
+    }
+
+    /// <summary>
+    /// Signs in as somebody else.
+    /// <para>
+    /// Separate from <see cref="SignInAsync"/> because that one tries silently first,
+    /// which is right for "make sure I am signed in" and useless for "let me be
+    /// somebody else" — it would hand back the very account the user is trying to
+    /// leave, without ever opening a browser. Forgetting the old account first is what
+    /// makes the interactive call the only path left.
+    /// </para>
+    /// </summary>
+    public async Task<AuthenticationResult> SwitchAccountAsync(CancellationToken cancellationToken = default)
+    {
+        await SignOutAsync().ConfigureAwait(false);
+
+        return await AcquireInteractiveAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Signs in interactively through the system browser.
     /// <para>
     /// The system browser, not an embedded webview: it already holds the user's
@@ -62,7 +102,11 @@ public sealed class TokenBroker
             return silent;
         }
 
-        return await _client
+        return await AcquireInteractiveAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private Task<AuthenticationResult> AcquireInteractiveAsync(CancellationToken cancellationToken) =>
+        _client
             .AcquireTokenInteractive(AuthConfig.Scopes)
             // Always ask which account, never let the browser decide. On a machine
             // whose browser is already signed in to a work account -- which is most
@@ -81,9 +125,7 @@ public sealed class TokenBroker
                 HtmlMessageSuccess = SuccessPage,
                 HtmlMessageError = ErrorPage,
             })
-            .ExecuteAsync(cancellationToken)
-            .ConfigureAwait(false);
-    }
+            .ExecuteAsync(cancellationToken);
 
     /// <summary>
     /// Gets a token without any UI. This is what the agent uses; it must never

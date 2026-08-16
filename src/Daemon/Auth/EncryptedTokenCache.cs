@@ -62,22 +62,52 @@ public sealed class EncryptedTokenCache
         }
     }
 
+    /// <summary>
+    /// Loads the file into MSAL's in-memory cache before every access.
+    /// <para>
+    /// The file replaces what is in memory rather than merging into it, and an absent
+    /// file empties it. That makes the file the single source of truth, which is what
+    /// lets one process notice what another did: the agent runs for weeks, while
+    /// <c>1remote login</c> and <c>1remote logout</c> are separate short-lived
+    /// processes writing the same file. Merging instead would mean a sign-out never
+    /// reaches the running agent, and signing in as a second account would leave both
+    /// in the agent's cache with nothing to say which one is current.
+    /// </para>
+    /// </summary>
     private void OnBeforeAccess(TokenCacheNotificationArgs args)
     {
-        if (Read() is byte[] plaintext)
+        byte[]? plaintext = Read();
+
+        if (plaintext is null)
         {
-            try
-            {
-                args.TokenCache.DeserializeMsalV3(plaintext);
-            }
-            catch (MsalClientException)
-            {
-                // A cache from an older MSAL format. Not recoverable, not worth
-                // failing over: the cost is one interactive sign-in.
-                Clear();
-            }
+            // Deserialising empty state is how MSAL is told to forget: there is no
+            // public "clear" on ITokenCache, and leaving it alone would keep an account
+            // that has just been signed out somewhere else.
+            args.TokenCache.DeserializeMsalV3(EmptyCache, shouldClearExistingCache: true);
+
+            return;
+        }
+
+        try
+        {
+            args.TokenCache.DeserializeMsalV3(plaintext, shouldClearExistingCache: true);
+        }
+        catch (MsalClientException)
+        {
+            // A cache from an older MSAL format. Not recoverable, not worth
+            // failing over: the cost is one interactive sign-in.
+            Clear();
         }
     }
+
+    /// <summary>
+    /// A serialised cache with every collection present and empty. Spelled out in full
+    /// rather than as <c>{}</c>: MSAL treats a payload it finds nothing in as nothing
+    /// to do, so the terse version leaves the previous accounts in memory and a
+    /// sign-out never lands.
+    /// </summary>
+    private static readonly byte[] EmptyCache =
+        """{"AccessToken":{},"RefreshToken":{},"IdToken":{},"Account":{},"AppMetadata":{}}"""u8.ToArray();
 
     /// <summary>
     /// Decrypts the cache file, or returns null when there is nothing usable.

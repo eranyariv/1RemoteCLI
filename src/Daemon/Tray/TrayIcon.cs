@@ -25,6 +25,8 @@ public sealed class TrayIcon : IDisposable
 {
     private readonly string _machineName;
     private readonly Action _onSignIn;
+    private readonly Action _onSwitchAccount;
+    private readonly Action _onSignOut;
     private readonly Action _onShowSessions;
     private readonly Action _onOpenLogs;
     private readonly Action _onQuit;
@@ -33,22 +35,30 @@ public sealed class TrayIcon : IDisposable
     private readonly ManualResetEventSlim _ready = new(false);
 
     private NotifyIcon? _icon;
+    private ToolStripMenuItem? _account;
     private ToolStripMenuItem? _signIn;
+    private ToolStripMenuItem? _switchAccount;
+    private ToolStripMenuItem? _signOut;
     private ApplicationContext? _context;
     private readonly Dictionary<AgentState, Icon> _icons = [];
 
     private AgentState _state = AgentState.Reconnecting;
     private int _sessions;
+    private string? _username;
 
     public TrayIcon(
         string machineName,
         Action onSignIn,
+        Action onSwitchAccount,
+        Action onSignOut,
         Action onShowSessions,
         Action onOpenLogs,
         Action onQuit)
     {
         _machineName = machineName ?? string.Empty;
         _onSignIn = onSignIn ?? throw new ArgumentNullException(nameof(onSignIn));
+        _onSwitchAccount = onSwitchAccount ?? throw new ArgumentNullException(nameof(onSwitchAccount));
+        _onSignOut = onSignOut ?? throw new ArgumentNullException(nameof(onSignOut));
         _onShowSessions = onShowSessions ?? throw new ArgumentNullException(nameof(onShowSessions));
         _onOpenLogs = onOpenLogs ?? throw new ArgumentNullException(nameof(onOpenLogs));
         _onQuit = onQuit ?? throw new ArgumentNullException(nameof(onQuit));
@@ -78,10 +88,11 @@ public sealed class TrayIcon : IDisposable
     /// the session registry's change event, neither of which knows this exists.
     /// </para>
     /// </summary>
-    public void Update(AgentState state, int sessions)
+    public void Update(AgentState state, int sessions, string? account = null)
     {
         _state = state;
         _sessions = sessions;
+        _username = account;
 
         Post(Render);
     }
@@ -115,8 +126,19 @@ public sealed class TrayIcon : IDisposable
     {
         var menu = new ContextMenuStrip();
 
+        // Who, before what. The account is the first thing on the menu because it is
+        // the one fact the icon cannot show and the one people get wrong.
+        _account = new ToolStripMenuItem("Not signed in") { Enabled = false };
         _signIn = new ToolStripMenuItem("Sign in", null, (_, _) => _onSignIn());
+        _switchAccount = new ToolStripMenuItem("Sign in as a different account\u2026", null, (_, _) => _onSwitchAccount());
+        _signOut = new ToolStripMenuItem("Sign out", null, (_, _) => _onSignOut());
+
+        menu.Items.Add(_account);
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_signIn);
+        menu.Items.Add(_switchAccount);
+        menu.Items.Add(_signOut);
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Show sessions", null, (_, _) => _onShowSessions()));
         menu.Items.Add(new ToolStripMenuItem("Open logs", null, (_, _) => _onOpenLogs()));
         menu.Items.Add(new ToolStripSeparator());
@@ -147,14 +169,29 @@ public sealed class TrayIcon : IDisposable
             return;
         }
 
-        TrayPresentation view = TrayPresenter.Present(_state, _sessions, _machineName);
+        TrayPresentation view = TrayPresenter.Present(_state, _sessions, _machineName, _username);
 
         _icon.Icon = IconFor(view.Badge);
         _icon.Text = view.Tooltip;
 
+        if (_account is not null)
+        {
+            _account.Text = view.Account;
+        }
+
         if (_signIn is not null)
         {
             _signIn.Enabled = view.SignInEnabled;
+        }
+
+        if (_switchAccount is not null)
+        {
+            _switchAccount.Enabled = view.SignOutEnabled;
+        }
+
+        if (_signOut is not null)
+        {
+            _signOut.Enabled = view.SignOutEnabled;
         }
     }
 

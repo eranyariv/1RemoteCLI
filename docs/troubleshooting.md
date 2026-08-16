@@ -92,6 +92,10 @@ On a managed machine, policy sometimes refuses task registration outright. `1rem
 
 **It signed in as the wrong account, without asking.** Fixed, but worth recognising in older builds. Sign-in used to let the browser choose, so on a machine already signed in to a work account Entra returned a token for that account with no prompt at all — a sign-in that *succeeds*, prints an unexpected address, and only fails later when the hub refuses it. `1remote login` now asks which account every time. If a build still does this, clearing cookies for `login.microsoftonline.com` is the only other way out.
 
+**I want to use a different account.** Right-click the tray icon → **Sign in as a different account…**, or `1remote switch-account`. Plain `1remote login` will not do it: it succeeds silently on the account you already have, because its first move is to try the cached one. Switching signs the old account out first, so the browser has to ask.
+
+The tray menu's first line always says which account is signed in. If it is not the one you expected, that is the answer to most of the questions on this page.
+
 **`login` says the hub refused this account.** The token is genuine; the hub's allowlist does not contain it. Either sign in as a listed account, or add this one — the hub logs the exact key to add each time it turns somebody away:
 
 ```

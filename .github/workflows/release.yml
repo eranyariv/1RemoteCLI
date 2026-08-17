@@ -93,11 +93,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
-
+      # Deliberately no checkout. The release notes are written here rather than read
+      # from the repository, and a working tree only creates directories for the
+      # asset glob to collide with -- which it did: 'assets' is also a tracked folder
+      # of icons, and the first release shipped all of them.
       - uses: actions/download-artifact@v4
         with:
-          path: assets
+          path: dist
           pattern: agent-*
           merge-multiple: true
 
@@ -105,7 +107,7 @@ jobs:
       # guessing at asset names.
       - name: Gather the hashes
         run: |
-          cd assets
+          cd dist
           cat *.sha256 > SHA256SUMS.txt
           rm -f *.sha256
           cat SHA256SUMS.txt
@@ -121,6 +123,13 @@ jobs:
           set -euo pipefail
 
           tag='${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', github.event.inputs.version) }}'
+
+          # Exactly the three files, named, rather than a glob: a release is public and
+          # permanent, and shipping something nobody meant to is not recoverable by
+          # editing it afterwards.
+          for file in 1remote-win-x64.exe 1remote-win-arm64.exe SHA256SUMS.txt; do
+            test -f "dist/$file" || { echo "dist/$file is missing."; exit 1; }
+          done
 
           {
             echo '## Install'
@@ -151,10 +160,13 @@ jobs:
             echo '| --- | --- |'
             while read -r hash name; do
               printf '| `%s` | `%s` |\n' "$name" "$hash"
-            done < assets/SHA256SUMS.txt
+            done < dist/SHA256SUMS.txt
           } > notes.md
 
-          gh release create "$tag" assets/* \
+          gh release create "$tag" \
+            dist/1remote-win-x64.exe \
+            dist/1remote-win-arm64.exe \
+            dist/SHA256SUMS.txt \
             --repo '${{ github.repository }}' \
             --title "$tag" \
             --notes-file notes.md

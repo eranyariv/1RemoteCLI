@@ -104,51 +104,57 @@ jobs:
       # One file the install script can fetch to learn both hashes, rather than
       # guessing at asset names.
       - name: Gather the hashes
-        id: hashes
         run: |
           cd assets
           cat *.sha256 > SHA256SUMS.txt
           rm -f *.sha256
-          echo 'table<<EOF' >> "$GITHUB_OUTPUT"
-          while read -r hash name; do
-            printf '| `%s` | `%s` |\n' "$name" "$hash" >> "$GITHUB_OUTPUT"
-          done < SHA256SUMS.txt
-          echo 'EOF' >> "$GITHUB_OUTPUT"
           cat SHA256SUMS.txt
 
+      # gh rather than a third-party release action: it is already on the runner, it
+      # uses the token this workflow was granted rather than one handed to somebody
+      # else's code, and publishing a release is the one step here that is hard to
+      # take back.
       - name: Publish the release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', github.event.inputs.version) }}
-          name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', github.event.inputs.version) }}
-          files: assets/*
-          fail_on_unmatched_files: true
-          body: |
-            ## Install
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
 
-            In PowerShell:
+          tag='${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', github.event.inputs.version) }}'
 
-            ```powershell
-            irm https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.ps1 | iex
-            ```
+          {
+            echo '## Install'
+            echo
+            echo 'In PowerShell:'
+            echo
+            echo '```powershell'
+            echo 'irm https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.ps1 | iex'
+            echo '```'
+            echo
+            echo "That downloads the build for this machine's architecture, checks it against the"
+            echo 'hash below, puts it in `%LOCALAPPDATA%\Programs\1RemoteCLI`, registers the logon'
+            echo 'task and adds it to your `PATH`. Then open a new terminal and run `1remote login`.'
+            echo
+            echo 'To install by hand instead, download the executable for your architecture and run'
+            echo '`1remote install` from wherever you put it.'
+            echo
+            echo '## Checksums'
+            echo
+            echo 'These builds are unsigned, so Windows will warn the first time one runs. Check'
+            echo 'what you downloaded against the hash for it:'
+            echo
+            echo '```powershell'
+            echo 'Get-FileHash .\1remote-win-x64.exe -Algorithm SHA256'
+            echo '```'
+            echo
+            echo '| File | SHA-256 |'
+            echo '| --- | --- |'
+            while read -r hash name; do
+              printf '| `%s` | `%s` |\n' "$name" "$hash"
+            done < assets/SHA256SUMS.txt
+          } > notes.md
 
-            That downloads the build for this machine's architecture, checks it
-            against the hash below, puts it in `%LOCALAPPDATA%\Programs\1RemoteCLI`,
-            registers the logon task and adds it to your `PATH`. Then open a new
-            terminal and run `1remote login`.
-
-            To install by hand instead, download the executable for your
-            architecture, and run `1remote install` from wherever you put it.
-
-            ## Checksums
-
-            These builds are unsigned, so Windows will warn the first time one runs.
-            Check what you downloaded against the hash for it:
-
-            ```powershell
-            Get-FileHash .\1remote-win-x64.exe -Algorithm SHA256
-            ```
-
-            | File | SHA-256 |
-            | --- | --- |
-            ${{ steps.hashes.outputs.table }}
+          gh release create "$tag" assets/* \
+            --repo '${{ github.repository }}' \
+            --title "$tag" \
+            --notes-file notes.md

@@ -68,3 +68,19 @@ export function Empty({ title, children }: { title: string; children?: React.Rea
     </div>
   )
 }
+
+/**
+ * The version, on every screen the user can reach without connecting to anything.
+ *
+ * Deliberately not hidden behind an "about" tap: the phone is where problems are
+ * noticed, and the number that identifies the build should already be on screen when
+ * someone decides to report one. It is the whole product's version — the same string
+ * the agent's tray menu shows — not the app's alone.
+ */
+export function VersionLine({ className = '' }: { className?: string }) {
+  return (
+    <p className={`text-center text-xs text-slate-600 ${className}`}>
+      1RemoteCLI {__APP_VERSION__}
+    </p>
+  )
+}

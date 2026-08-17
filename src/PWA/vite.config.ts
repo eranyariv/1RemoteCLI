@@ -3,8 +3,20 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 import { fileURLToPath } from 'node:url'
+import { readFileSync } from 'node:fs'
 
-import pkg from './package.json' with { type: 'json' }
+/**
+ * The product version, read from the repository's VERSION file — the same file the
+ * .NET build stamps the agent and the hub from. The PWA deliberately has no version
+ * of its own: agent, hub and app ship together, and three numbers that can disagree
+ * would only ever disagree at the moment somebody is trying to report a problem.
+ *
+ * package.json stays at 0.0.0. It is npm's number, not the product's.
+ */
+const productVersion = readFileSync(
+  fileURLToPath(new URL('../../VERSION', import.meta.url)),
+  'utf8',
+).trim()
 
 /**
  * Builds the app against a stand-in identity provider instead of Entra.
@@ -84,7 +96,7 @@ export default defineConfig({
   ],
 
   define: {
-    __APP_VERSION__: JSON.stringify(pkg.version),
+    __APP_VERSION__: JSON.stringify(productVersion),
   },
 
   server: {

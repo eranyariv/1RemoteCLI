@@ -123,6 +123,25 @@ WebSockets must be enabled and Always On must be on. Both are already set; the d
 az webapp config set -g 1remotecli-rg -n 1remotecli-hub --web-sockets-enabled true --always-on true --only-show-errors -o none
 ```
 
+## Versioning
+
+One number for the whole product, written `x.yy`, starting at `0.01` and going up by `0.01` every release. `0.99` is followed by `1.00` — the two digits are a counter, not a fraction, so there is no `0.100`.
+
+It lives in one file, `VERSION`, at the root of the repository. `Directory.Build.props` reads it and stamps every .NET assembly; `vite.config.ts` reads the same file and injects it into the PWA. Nothing else carries a version of its own, so the agent, the hub and the app cannot disagree about which build somebody is running — which is the entire point, because the first question any bug report needs answered is "which version?" and the person answering it is looking at a phone.
+
+The user sees it in two places: the tray menu's **Version** line, and the footer of the PWA. `1remote --version` prints it, the hub returns it from `/health`, and the agent reports it to the hub on every connect.
+
+`x.yy` is not a version the tooling accepts — NuGet and the assembly metadata want three numeric parts, and `0.01` is not one — so the numeric form is derived: `0.01` is assembly version `0.1.0`, `0.10` is `0.10.0`. The mapping loses nothing because `yy` is always two digits, and a test asserts the two stay in step.
+
+To move it on:
+
+```powershell
+.\scripts\bump-version.ps1          # 0.01 -> 0.02
+.\scripts\bump-version.ps1 -To 1.00 # or set it outright
+```
+
+That edits `VERSION` and nothing else. Committing and tagging are left to you, because pushing the tag is the irreversible half.
+
 ## Release the agent
 
 Users install with a one-liner that downloads from a GitHub Release and checks the hash:
@@ -131,18 +150,21 @@ Users install with a one-liner that downloads from a GitHub Release and checks t
 irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.ps1 | iex
 ```
 
-Cutting a release is a tag:
+Cutting a release is a bump and a tag:
 
 ```powershell
-git tag v0.2.0
-git push origin v0.2.0
+.\scripts\bump-version.ps1
+git commit -am 'Release 0.02'
+git push
+git tag v0.02
+git push origin v0.02
 ```
 
-`.github/workflows/release.yml` then builds `win-x64` and `win-arm64`, stamps the tag into both binaries, and publishes a release carrying `1remote-win-x64.exe`, `1remote-win-arm64.exe` and `SHA256SUMS.txt`. It can also be run from the Actions tab with a version typed in, for a release that is not coming from a tag.
+`.github/workflows/release.yml` then builds `win-x64` and `win-arm64` and publishes a release carrying `1remote-win-x64.exe`, `1remote-win-arm64.exe` and `SHA256SUMS.txt`.
+
+The tag does not decide the version — `VERSION` does. The workflow refuses to run if the tag disagrees with the file, rather than producing a release called one thing containing binaries that call themselves another, and it checks the published binary actually prints the version it claims. It can also be run from the Actions tab, which releases whatever `VERSION` says on `main`.
 
 Both architectures are cross-published from the same x64 runner. There is no hosted arm64 runner, and the release does not need one — nothing about the publish is architecture-specific, and the tests that would exercise the code already run in CI.
-
-The version matters beyond the download page: `1remote --version` reads it and the agent reports it to the hub on every connect, so an unstamped build in the wild is one nobody can identify from a bug report. That is the only thing `-Version` on the publish script is for.
 
 **While the repository is private**, the one-liner needs a token that can read releases:
 
@@ -158,7 +180,7 @@ Making the repository public would remove that step; nothing else about the flow
 .\scripts\publish-agent.ps1
 ```
 
-Produces one self-contained `1remote.exe` in `artifacts/win-x64/` — no .NET install needed on the target machine, nothing to unpack — and prints its SHA-256. `-Runtime win-arm64` for a Snapdragon machine. This is the same script the release workflow runs, so a release is never built by a path nobody has run locally.
+Produces one self-contained `1remote.exe` in `artifacts/win-x64/` — no .NET install needed on the target machine, nothing to unpack — and prints its SHA-256. `-Runtime win-arm64` for a Snapdragon machine. This is the same script the release workflow runs, so a release is never built by a path nobody has run locally, and it takes no version argument because the build reads `VERSION`.
 
 It is roughly 70 MB. That is Windows Forms, dragged in for a single tray icon; [#46](https://github.com/eranyariv/1RemoteCLI/issues/46) is about removing it.
 

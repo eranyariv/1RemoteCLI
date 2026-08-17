@@ -34,6 +34,8 @@ Open a new terminal — the `PATH` change only reaches terminals opened after it
 1remote --version
 ```
 
+It prints the product version — `0.01` — which is the same number the tray menu shows and the same one the phone app shows in its footer. There is only ever one.
+
 Windows may still stop you the first time; see [SmartScreen](#windows-blocked-the-download) below.
 
 ### By hand instead

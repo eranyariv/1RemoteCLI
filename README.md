@@ -67,7 +67,7 @@ Packaging and deployment:
 .\scripts\publish-hub.ps1           # build the app into the hub and deploy it
 ```
 
-Releasing the agent is a tag — `git push origin v0.2.0` builds both architectures and publishes them with their hashes. See [Deployment](docs/deployment.md#release-the-agent).
+Releasing the agent is a version bump and a tag — `.\scripts\bump-version.ps1` then `git push origin v0.02` builds both architectures and publishes them with their hashes. One `x.yy` number covers the agent, the hub and the app; see [Deployment](docs/deployment.md#versioning).
 
 ## Status
 

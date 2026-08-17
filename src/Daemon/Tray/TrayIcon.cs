@@ -1,6 +1,7 @@
 using System.Drawing;
 using System.Runtime.Versioning;
 using System.Windows.Forms;
+using OneRemoteCli.Protocol;
 
 namespace OneRemoteCli.Daemon.Tray;
 
@@ -141,6 +142,11 @@ public sealed class TrayIcon : IDisposable
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Show sessions", null, (_, _) => _onShowSessions()));
         menu.Items.Add(new ToolStripMenuItem("Open logs", null, (_, _) => _onOpenLogs()));
+        menu.Items.Add(new ToolStripSeparator());
+        // Disabled, because it is a label rather than a command. It is here because
+        // the tray is the only part of the agent a user ever looks at, and "which
+        // version are you running" is the first question any report needs answered.
+        menu.Items.Add(new ToolStripMenuItem($"Version {ProductVersion.Current}") { Enabled = false });
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Quit", null, (_, _) => _onQuit()));
 

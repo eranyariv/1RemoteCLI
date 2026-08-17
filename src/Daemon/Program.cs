@@ -2,7 +2,6 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
-using System.Reflection;
 using System.Runtime.Versioning;
 using Microsoft.Identity.Client;
 using OneRemoteCli.Daemon.Agent;
@@ -15,6 +14,7 @@ using OneRemoteCli.Daemon.Install;
 using OneRemoteCli.Daemon.Pty;
 using OneRemoteCli.Daemon.Tray;
 using OneRemoteCli.Daemon.Wrapper;
+using OneRemoteCli.Protocol;
 using OneRemoteCli.Protocol.Diagnostics;
 
 namespace OneRemoteCli.Daemon;
@@ -64,7 +64,7 @@ public static class Program
                 return 0;
 
             case CommandKind.Version:
-                Console.WriteLine(Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.0.0");
+                Console.WriteLine(ProductVersion.Current);
                 return 0;
 
             case CommandKind.Agent:

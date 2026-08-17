@@ -6,7 +6,7 @@ import type { MachineInfo, SessionInfo } from './protocol/wire'
 import { readDeepLink, withoutDeepLink, type DeepLink } from './push/subscription'
 import { usePushRegistration } from './push/usePush'
 import { useRelay } from './relay/useRelay'
-import { Banner, StatusPill } from './ui/Chrome'
+import { Banner, StatusPill, VersionLine } from './ui/Chrome'
 import { MachineList } from './ui/MachineList'
 import { NotificationsCard } from './ui/NotificationsCard'
 import { SignInScreen } from './ui/SignInScreen'
@@ -204,6 +204,8 @@ export default function App() {
             It ended, or its machine went offline.
           </Banner>
         ) : null}
+
+        <VersionLine className="mt-auto pt-2" />
       </main>
 
       {showing ? (

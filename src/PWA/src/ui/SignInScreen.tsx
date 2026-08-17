@@ -1,4 +1,5 @@
 import { auth } from '../auth/impl'
+import { VersionLine } from './Chrome'
 
 /**
  * The signed-out screen.
@@ -30,6 +31,8 @@ export function SignInScreen({ busy }: { busy: boolean }) {
         Use the same Microsoft account you signed in with on the machine. Your sessions are only
         ever visible to that account.
       </p>
+
+      <VersionLine />
     </div>
   )
 }

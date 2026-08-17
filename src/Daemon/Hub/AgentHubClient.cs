@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Runtime.InteropServices;
 using Microsoft.AspNetCore.Http.Connections.Client;
 using Microsoft.AspNetCore.SignalR.Client;
@@ -763,8 +762,7 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
         DisplayName = session.DisplayName,
     };
 
-    private static string AgentVersion =>
-        Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.0.0";
+    private static string AgentVersion => ProductVersion.Current;
 
     private static TimeSpan Backoff(TimeSpan current) =>
         TimeSpan.FromTicks(Math.Min(current.Ticks * 2, MaximumRetry.Ticks));

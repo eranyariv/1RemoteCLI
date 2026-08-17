@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Security.Claims;
 using Lib.Net.Http.WebPush;
 using Microsoft.AspNetCore.Authorization;
@@ -7,6 +6,7 @@ using Microsoft.Extensions.Options;
 using OneRemoteCli.Hub.Auth;
 using OneRemoteCli.Hub.Push;
 using OneRemoteCli.Hub.Relay;
+using OneRemoteCli.Protocol;
 
 // Generating the VAPID keypair is a one-off setup chore, but it lives here rather
 // than in a script because getting the encoding wrong — padded base64, or a
@@ -95,7 +95,7 @@ app.UseAuthorization();
 // so the app itself does no HTTPS redirection.
 app.MapGet("/health", () => Results.Ok(new HealthResponse(
     Status: "ok",
-    Version: Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown",
+    Version: ProductVersion.Current,
     UtcNow: DateTimeOffset.UtcNow)));
 
 // The VAPID public key, which the browser needs before it can subscribe.

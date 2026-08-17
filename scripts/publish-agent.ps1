@@ -32,15 +32,6 @@
 .PARAMETER Runtime
     Defaults to win-x64. Use win-arm64 for a Snapdragon machine.
 
-.PARAMETER Version
-    Stamped into the executable. Left alone for a local build, where 1.0.0 is
-    honest; the release workflow passes the tag. It is not cosmetic: `1remote
-    --version` reads it, and the agent reports it to the hub on every connect, so
-    an unstamped build in the wild is one nobody can identify from a bug report.
-
-    Quote it. An unquoted `0.2.0` is a System.Version literal to PowerShell, which
-    arrives here as the string "0.2.0.0" -- harmless, but not what was typed.
-
 .EXAMPLE
     .\scripts\publish-agent.ps1
 #>
@@ -48,9 +39,7 @@
 param(
     [string] $Output,
     [ValidateSet('win-x64', 'win-arm64')]
-    [string] $Runtime = 'win-x64',
-    [ValidatePattern('^\d+\.\d+\.\d+(\.\d+)?$')]
-    [string] $Version
+    [string] $Runtime = 'win-x64'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -68,15 +57,9 @@ if (Test-Path $Output) {
 
 Write-Host "==> Publishing 1remote.exe for $Runtime" -ForegroundColor Cyan
 
-# Typed, and not a bare `if` result: PowerShell unwraps a one-element array on
-# assignment, and splatting a *string* splats its characters -- which reaches MSBuild
-# as twenty separate arguments and fails with a message about none of them.
-[string[]] $stamp = @()
-
-if ($Version) {
-    $stamp = @("-p:Version=$Version")
-}
-
+# No version argument. The version comes from the repository's VERSION file, read by
+# Directory.Build.props, so a build published from here and one published by the
+# release workflow carry the same number without anybody remembering to pass it.
 dotnet publish $project `
     -c Release `
     -r $Runtime `
@@ -87,7 +70,6 @@ dotnet publish $project `
     -p:EnableCompressionInSingleFile=true `
     -p:PublishReadyToRun=false `
     -p:DebugType=none `
-    @stamp `
     --nologo
 
 if ($LASTEXITCODE -ne 0) {
@@ -112,7 +94,9 @@ if ($loose) {
 
 $item = Get-Item $exe
 $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
-$version = $item.VersionInfo.FileVersion
+# ProductVersion, not FileVersion: the first is the `x.yy` a user reads, the second
+# is the numeric form Windows insists on and nobody quotes in a bug report.
+$version = $item.VersionInfo.ProductVersion
 
 Write-Host ''
 Write-Host "  path     $exe" -ForegroundColor Green

@@ -14,16 +14,46 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version to build, without the leading v (e.g. 0.2.0)'
-        required: true
 
 permissions:
   contents: write
 
 jobs:
+  # Read once, checked once, used by both jobs. The version is not an input: it is
+  # whatever VERSION says, because that is the number the binaries will be stamped
+  # with regardless of what a tag or a form field claims.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      tag: v${{ steps.read.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read VERSION
+        id: read
+        run: |
+          set -euo pipefail
+
+          version=$(tr -d '[:space:]' < VERSION)
+
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]{2}$ ]]; then
+            echo "VERSION holds '$version', which is not x.yy."
+            exit 1
+          fi
+
+          # A tag that disagrees with the file would produce a release called one
+          # thing containing binaries that call themselves another.
+          if [ '${{ github.ref_type }}' = 'tag' ] && [ "${{ github.ref_name }}" != "v$version" ]; then
+            echo "Tagged ${{ github.ref_name }} but VERSION says $version. Bump VERSION first."
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: version
     # Both runtimes are cross-published from the same x64 runner. win-arm64 has no
     # hosted runner, and does not need one: the publish is a cross-compile and the
     # tests that would actually exercise the architecture already run in CI.
@@ -41,32 +71,35 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Work out the version
-        id: version
-        shell: pwsh
-        run: |
-          $version = if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
-            '${{ github.event.inputs.version }}'
-          }
-          else {
-            '${{ github.ref_name }}'.TrimStart('v')
-          }
-
-          if ($version -notmatch '^\d+\.\d+\.\d+$') {
-            throw "Expected a version like 1.2.3, got '$version'."
-          }
-
-          "version=$version" >> $env:GITHUB_OUTPUT
-
       # The same script used to publish by hand, so a release is never built by a
-      # path nobody has run locally.
+      # path nobody has run locally. It takes no version: the build reads VERSION.
       - name: Publish
         shell: pwsh
         run: |
           ./scripts/publish-agent.ps1 `
             -Runtime ${{ matrix.runtime }} `
-            -Version '${{ steps.version.outputs.version }}' `
             -Output ${{ github.workspace }}/release/${{ matrix.runtime }}
+
+      # Cheap, and it catches the failure mode that matters: a build whose stamped
+      # version does not match the release it is about to be published under.
+      - name: Check the stamp
+        shell: pwsh
+        run: |
+          $exe = '${{ github.workspace }}/release/${{ matrix.runtime }}/1remote.exe'
+          $expected = '${{ needs.version.outputs.version }}'
+
+          if ('${{ matrix.runtime }}' -ne 'win-x64') {
+            Write-Host "Skipping: cannot run a $('${{ matrix.runtime }}') build here."
+            exit 0
+          }
+
+          $actual = (& $exe --version).Trim()
+
+          if ($actual -ne $expected) {
+            throw "The build says $actual, VERSION says $expected."
+          }
+
+          Write-Host "Stamped $actual."
 
       # Named by architecture, because both end up in one release and '1remote.exe'
       # twice would be indistinguishable in the assets list -- and downloading the
@@ -89,7 +122,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: build
+    needs: [version, build]
     runs-on: ubuntu-latest
 
     steps:
@@ -122,7 +155,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          tag='${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', github.event.inputs.version) }}'
+          tag='${{ needs.version.outputs.tag }}'
 
           # Exactly the three files, named, rather than a glob: a release is public and
           # permanent, and shipping something nobody meant to is not recoverable by

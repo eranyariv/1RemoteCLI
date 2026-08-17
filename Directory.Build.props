@@ -10,4 +10,34 @@
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
+  <!--
+    The product version, read from the one file that states it.
+
+    Everything the user can see - the tray menu, the version `1remote` prints, the
+    hub's health endpoint, the PWA's footer - has to agree, and the only way to be
+    sure of that is for none of them to carry a number of their own. The PWA reads
+    the same file from vite.config.ts.
+
+    It is written for people, as `x.yy`, which is not a version any of the tooling
+    accepts: NuGet and the assembly metadata want three numeric parts, and `0.01`
+    is not one. So the display form is kept verbatim in InformationalVersion, and
+    the numeric form is derived from it. The mapping loses nothing because `yy` is
+    always two digits: 0.01 -> 0.1.0, 0.10 -> 0.10.0.
+  -->
+  <PropertyGroup>
+    <ProductVersionFile>$(MSBuildThisFileDirectory)VERSION</ProductVersionFile>
+    <ProductVersionRaw>$([System.IO.File]::ReadAllText('$(ProductVersionFile)'))</ProductVersionRaw>
+    <ProductVersion>$(ProductVersionRaw.Trim())</ProductVersion>
+    <ProductVersionMajor>$(ProductVersion.Split('.')[0])</ProductVersionMajor>
+    <ProductVersionMinor>$([System.Int32]::Parse($(ProductVersion.Split('.')[1])))</ProductVersionMinor>
+
+    <Version>$(ProductVersionMajor).$(ProductVersionMinor).0</Version>
+    <InformationalVersion>$(ProductVersion)</InformationalVersion>
+    <!--
+      Off, or the SDK appends `+<commit sha>` to the informational version and the
+      string the user reads stops being the version.
+    -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
 </Project>

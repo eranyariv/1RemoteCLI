@@ -226,7 +226,7 @@ Verify by hand:
 
 ```powershell
 Invoke-WebRequest https://1remotecli-hub.azurewebsites.net/health -UseBasicParsing | Select-Object -Expand Content
-# {"status":"ok","version":"1.0.0.0","utcNow":"..."}
+# {"status":"ok","version":"0.01","utcNow":"..."}
 ```
 
 ## Notifications (VAPID)

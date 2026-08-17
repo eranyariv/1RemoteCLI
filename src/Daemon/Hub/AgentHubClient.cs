@@ -113,7 +113,7 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
             // MessagePack because terminal output is binary; JSON would base64 every
             // frame on the one path that is hot.
             .AddMessagePackProtocol()
-            .WithAutomaticReconnect()
+            .WithAutomaticReconnect(new PromptReconnectPolicy())
             .Build();
 
         // The hub's registry is per connection and in memory, so a new connection id

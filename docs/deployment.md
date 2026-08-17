@@ -123,37 +123,72 @@ WebSockets must be enabled and Always On must be on. Both are already set; the d
 az webapp config set -g 1remotecli-rg -n 1remotecli-hub --web-sockets-enabled true --always-on true --only-show-errors -o none
 ```
 
-## Package the agent
+## Release the agent
+
+Users install with a one-liner that downloads from a GitHub Release and checks the hash:
+
+```powershell
+irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.ps1 | iex
+```
+
+Cutting a release is a tag:
+
+```powershell
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+`.github/workflows/release.yml` then builds `win-x64` and `win-arm64`, stamps the tag into both binaries, and publishes a release carrying `1remote-win-x64.exe`, `1remote-win-arm64.exe` and `SHA256SUMS.txt`. It can also be run from the Actions tab with a version typed in, for a release that is not coming from a tag.
+
+Both architectures are cross-published from the same x64 runner. There is no hosted arm64 runner, and the release does not need one — nothing about the publish is architecture-specific, and the tests that would exercise the code already run in CI.
+
+The version matters beyond the download page: `1remote --version` reads it and the agent reports it to the hub on every connect, so an unstamped build in the wild is one nobody can identify from a bug report. That is the only thing `-Version` on the publish script is for.
+
+**While the repository is private**, the one-liner needs a token that can read releases:
+
+```powershell
+$env:GITHUB_TOKEN = gh auth token
+```
+
+Making the repository public would remove that step; nothing else about the flow depends on it.
+
+## Package the agent by hand
 
 ```powershell
 .\scripts\publish-agent.ps1
 ```
 
-Produces one self-contained `1remote.exe` in `artifacts/win-x64/` — no .NET install needed on the target machine, nothing to unpack — and prints its SHA-256. `-Runtime win-arm64` for a Snapdragon machine.
+Produces one self-contained `1remote.exe` in `artifacts/win-x64/` — no .NET install needed on the target machine, nothing to unpack — and prints its SHA-256. `-Runtime win-arm64` for a Snapdragon machine. This is the same script the release workflow runs, so a release is never built by a path nobody has run locally.
 
 It is roughly 70 MB. That is Windows Forms, dragged in for a single tray icon; [#46](https://github.com/eranyariv/1RemoteCLI/issues/46) is about removing it.
 
 ### It is not signed
 
-There is no code-signing certificate for this project, so SmartScreen warns on first run on every machine. Publish the SHA-256 next to the download and tell people to check it:
+There is no code-signing certificate for this project, so SmartScreen warns on first run on every machine. The SHA-256 published beside each download is what stands in for a signature:
 
 ```powershell
-Get-FileHash .\1remote.exe -Algorithm SHA256
+Get-FileHash .\1remote-win-x64.exe -Algorithm SHA256
 ```
 
-That is a genuinely weaker guarantee than a signature — it only proves the file matches the one you published, not who published it. If this ever leaves a small trusted group, buy a certificate.
+`install.ps1` checks it automatically and refuses to install on a mismatch, with no switch to skip it — a check everyone is told to click through protects nobody.
+
+That is still a genuinely weaker guarantee than a signature: it only proves the file matches the one the workflow built, not who built it. If this ever leaves a small trusted group, buy a certificate.
 
 ### Install path and upgrades
 
-The install location is the user's choice, but it has to be **stable**. `1remote install` registers a scheduled task pointing at wherever the executable is at that moment; move it afterwards and the agent stops starting at logon with no error. The convention is `%LOCALAPPDATA%\Programs\1RemoteCLI\1remote.exe`.
+`install.ps1` puts the executable at `%LOCALAPPDATA%\Programs\1RemoteCLI\1remote.exe` and runs `1remote install`, which registers the logon task, the Start menu entries and the `PATH` entry.
 
-To upgrade:
+If you install by hand, the location is your choice but it has to be **stable**. `1remote install` registers a scheduled task pointing at wherever the executable is at that moment; move it afterwards and the agent stops starting at logon with no error.
 
-1. Quit the agent from the tray icon, or `Get-Process 1remote | Stop-Process`. The file is locked while it runs.
+To upgrade, re-run the one-liner: it stops the running agent — the file is locked while it runs — overwrites in place, and re-registers.
+
+By hand:
+
+1. Quit the agent from the tray icon, or `Get-Process 1remote | Stop-Process`.
 2. Overwrite `1remote.exe` **in place**.
 3. Start it again — `1remote agent`, or log out and back in.
 
-That is all. There is no per-version state: same path, so the scheduled task still points at it; the token cache and its format are unchanged; running sessions belong to the wrapper processes and die with the shells they wrap, which they would have anyway.
+There is no per-version state: same path, so the scheduled task still points at it; the token cache and its format are unchanged; running sessions belong to the wrapper processes and die with the shells they wrap, which they would have anyway.
 
 Only re-run `1remote install` if you moved the executable.
 

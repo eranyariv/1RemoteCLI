@@ -13,8 +13,13 @@ You start `claude` on a long refactor, leave your desk, and twenty minutes later
 ## Try it
 
 ```powershell
+irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.ps1 | iex
+```
+
+Then, in a new terminal:
+
+```powershell
 1remote login           # sign in
-1remote install         # run the agent at every logon
 1remote claude          # share a session
 ```
 
@@ -61,6 +66,8 @@ Packaging and deployment:
 .\scripts\publish-agent.ps1         # -> artifacts\win-x64\1remote.exe
 .\scripts\publish-hub.ps1           # build the app into the hub and deploy it
 ```
+
+Releasing the agent is a tag — `git push origin v0.2.0` builds both architectures and publishes them with their hashes. See [Deployment](docs/deployment.md#release-the-agent).
 
 ## Status
 

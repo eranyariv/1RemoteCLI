@@ -18,7 +18,7 @@ The problem it solves: you start `claude` on a long refactor, leave your desk, a
 
 | | |
 | --- | --- |
-| **[Deployment](deployment.md)** | Deploy the hub, configure it, add someone to the allowlist, ship a new `1remote.exe`. |
+| **[Deployment](deployment.md)** | Deploy the hub, configure it, add someone to the allowlist, cut an agent release. |
 | **[Azure setup](azure-setup.md)** | The one-time app registration and resource provisioning, from zero. |
 | **[Logging](logging.md)** | Where the logs are and how to turn the volume up. |
 | **[Implementation plan](implementation-plan.md)** | The stages and tasks v1 was built from. |

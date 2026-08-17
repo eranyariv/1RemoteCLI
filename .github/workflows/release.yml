@@ -1,0 +1,154 @@
+# Builds the two Windows agents and publishes them as a GitHub Release.
+#
+# Tag-driven rather than push-driven: a release is a thing somebody decides to make,
+# and every main build producing one would leave users unable to tell which download
+# is the one anybody else is running.
+#
+# The binaries are NOT signed. There is no code-signing certificate for this project,
+# so SmartScreen warns on first run and the SHA-256 of each file is published beside
+# it -- that hash is the only way a user can check that what they downloaded is what
+# this workflow built. scripts/install.ps1 verifies it for them.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build, without the leading v (e.g. 0.2.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # Both runtimes are cross-published from the same x64 runner. win-arm64 has no
+    # hosted runner, and does not need one: the publish is a cross-compile and the
+    # tests that would actually exercise the architecture already run in CI.
+    runs-on: windows-latest
+    strategy:
+      # One architecture failing must not leave the other half-released.
+      fail-fast: true
+      matrix:
+        runtime: [win-x64, win-arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Work out the version
+        id: version
+        shell: pwsh
+        run: |
+          $version = if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            '${{ github.event.inputs.version }}'
+          }
+          else {
+            '${{ github.ref_name }}'.TrimStart('v')
+          }
+
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Expected a version like 1.2.3, got '$version'."
+          }
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      # The same script used to publish by hand, so a release is never built by a
+      # path nobody has run locally.
+      - name: Publish
+        shell: pwsh
+        run: |
+          ./scripts/publish-agent.ps1 `
+            -Runtime ${{ matrix.runtime }} `
+            -Version '${{ steps.version.outputs.version }}' `
+            -Output ${{ github.workspace }}/release/${{ matrix.runtime }}
+
+      # Named by architecture, because both end up in one release and '1remote.exe'
+      # twice would be indistinguishable in the assets list -- and downloading the
+      # wrong one fails at launch with an error that says nothing about architecture.
+      - name: Name it after its architecture
+        shell: pwsh
+        run: |
+          $dir = '${{ github.workspace }}/release/${{ matrix.runtime }}'
+          $named = "$dir/1remote-${{ matrix.runtime }}.exe"
+
+          Move-Item "$dir/1remote.exe" $named
+
+          $hash = (Get-FileHash $named -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  1remote-${{ matrix.runtime }}.exe" | Set-Content "$dir/1remote-${{ matrix.runtime }}.exe.sha256" -Encoding ascii
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-${{ matrix.runtime }}
+          path: ${{ github.workspace }}/release/${{ matrix.runtime }}/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          pattern: agent-*
+          merge-multiple: true
+
+      # One file the install script can fetch to learn both hashes, rather than
+      # guessing at asset names.
+      - name: Gather the hashes
+        id: hashes
+        run: |
+          cd assets
+          cat *.sha256 > SHA256SUMS.txt
+          rm -f *.sha256
+          echo 'table<<EOF' >> "$GITHUB_OUTPUT"
+          while read -r hash name; do
+            printf '| `%s` | `%s` |\n' "$name" "$hash" >> "$GITHUB_OUTPUT"
+          done < SHA256SUMS.txt
+          echo 'EOF' >> "$GITHUB_OUTPUT"
+          cat SHA256SUMS.txt
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', github.event.inputs.version) }}
+          name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', github.event.inputs.version) }}
+          files: assets/*
+          fail_on_unmatched_files: true
+          body: |
+            ## Install
+
+            In PowerShell:
+
+            ```powershell
+            irm https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.ps1 | iex
+            ```
+
+            That downloads the build for this machine's architecture, checks it
+            against the hash below, puts it in `%LOCALAPPDATA%\Programs\1RemoteCLI`,
+            registers the logon task and adds it to your `PATH`. Then open a new
+            terminal and run `1remote login`.
+
+            To install by hand instead, download the executable for your
+            architecture, and run `1remote install` from wherever you put it.
+
+            ## Checksums
+
+            These builds are unsigned, so Windows will warn the first time one runs.
+            Check what you downloaded against the hash for it:
+
+            ```powershell
+            Get-FileHash .\1remote-win-x64.exe -Algorithm SHA256
+            ```
+
+            | File | SHA-256 |
+            | --- | --- |
+            ${{ steps.hashes.outputs.table }}

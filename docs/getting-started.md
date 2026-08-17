@@ -11,35 +11,49 @@ Someone has to have deployed a hub and added your Microsoft account to its allow
 - the **hub address** — the default is compiled in, so usually you need nothing here
 - confirmation that **your account is on the allowlist**, because if it is not, sign-in will succeed and then the hub will refuse you, which is a confusing five minutes
 
-## 1. Put the executable somewhere permanent
+## 1. Install it
 
-Download `1remote.exe` from the release and put it where it is going to live. Not Downloads.
-
-```powershell
-$dir = "$env:LOCALAPPDATA\Programs\1RemoteCLI"
-New-Item -ItemType Directory -Force -Path $dir | Out-Null
-Move-Item .\1remote.exe $dir -Force
-```
-
-**This matters more than it looks.** `1remote install` registers a scheduled task pointing at wherever the executable is at that moment. Move the file afterwards and the agent silently stops starting at logon, with no error anywhere — you just find out days later that your phone shows no machines.
-
-Add it to your `PATH` so you can type `1remote` from anywhere:
+In PowerShell:
 
 ```powershell
-$dir  = "$env:LOCALAPPDATA\Programs\1RemoteCLI"
-$path = [Environment]::GetEnvironmentVariable('Path', 'User')
-if ($path -notlike "*$dir*") {
-    [Environment]::SetEnvironmentVariable('Path', "$path;$dir", 'User')
-}
+irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.ps1 | iex
 ```
 
-Open a new terminal for that to take effect, then check it:
+That picks the build for your architecture, **checks it against the SHA-256 published with the release**, puts it in `%LOCALAPPDATA%\Programs\1RemoteCLI`, registers the logon task and the Start menu entries, and adds it to your `PATH`.
+
+While the repository is private you need a token that can read it:
+
+```powershell
+$env:GITHUB_TOKEN = gh auth token
+irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.ps1 | iex
+```
+
+Open a new terminal — the `PATH` change only reaches terminals opened after it — and check:
 
 ```powershell
 1remote --version
 ```
 
-Windows will very likely stop you the first time — see [SmartScreen](#windows-blocked-the-download) below.
+Windows may still stop you the first time; see [SmartScreen](#windows-blocked-the-download) below.
+
+### By hand instead
+
+Download `1remote-win-x64.exe` (or `-win-arm64`) from the [latest release](https://github.com/eranyariv/1RemoteCLI/releases/latest) and check it against the hash in `SHA256SUMS.txt`:
+
+```powershell
+Get-FileHash .\1remote-win-x64.exe -Algorithm SHA256
+```
+
+Then put it where it is going to live — **not Downloads** — and install from there:
+
+```powershell
+$dir = "$env:LOCALAPPDATA\Programs\1RemoteCLI"
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+Move-Item .\1remote-win-x64.exe "$dir\1remote.exe" -Force
+& "$dir\1remote.exe" install
+```
+
+**Where you put it matters more than it looks.** `1remote install` registers a scheduled task pointing at wherever the executable is at that moment. Move the file afterwards and the agent silently stops starting at logon, with no error anywhere — you just find out days later that your phone shows no machines. Move it back, or run `1remote install` again from the new location.
 
 ## 2. Sign in
 
@@ -59,11 +73,7 @@ Confirm:
 
 ## 3. Start the agent
 
-```powershell
-1remote install
-```
-
-That registers the agent to start at every logon and adds a Start menu shortcut, then you are done with setup forever. Log out and back in, or just start it now:
+Installing registered it to start at every logon, so it will be there after the next one. To start it now without logging out:
 
 ```powershell
 1remote agent
@@ -111,8 +121,8 @@ Now go and [add it to your home screen and turn on notifications](phone-setup.md
 | `1remote switch-account` | Forget the current account and sign in as a different one |
 | `1remote logout` | Forget the cached sign-in |
 | `1remote status` | Show who is signed in |
-| `1remote install` | Start the agent at every logon |
-| `1remote uninstall` | Stop starting the agent at logon |
+| `1remote install` | Start the agent at every logon, and put `1remote` on your `PATH` |
+| `1remote uninstall` | Undo `install` |
 
 | Option | |
 | --- | --- |
@@ -143,7 +153,7 @@ If you would rather not trust a hash from the same place as the binary, build it
 ## Uninstalling
 
 ```powershell
-1remote uninstall     # stop starting at logon
+1remote uninstall     # stop starting at logon, and come off your PATH
 1remote logout        # forget the cached sign-in
 ```
 

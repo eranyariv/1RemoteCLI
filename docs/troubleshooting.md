@@ -73,6 +73,18 @@ Then follow [add someone to the allowlist](deployment.md#add-someone-to-the-allo
 
 **6. Is something eating the WebSocket?** Corporate proxies and some VPNs allow HTTPS but break WebSocket upgrades. The agent log shows the connection attempt and the failure. Test from the same network with a phone on cellular to tell the two sides apart.
 
+## `1remote` is not recognized
+
+The `PATH` entry only reaches terminals opened *after* it was added, so the terminal you installed from will never see it. Open a new one.
+
+If a new terminal still cannot find it, check the entry is there:
+
+```powershell
+[Environment]::GetEnvironmentVariable('Path', 'User') -split ';' | Select-String 1RemoteCLI
+```
+
+If it is missing, `1remote install` either was never run or could not write it — it reports that step like every other, so run it again from wherever the executable lives and read the output. Builds before the `PATH` step existed never added it at all; re-running a current build is the fix.
+
 ## The agent does not start at logon
 
 Almost always because **the executable moved after `1remote install` ran**. The scheduled task holds the absolute path from that moment. Put it back, or re-run `1remote install` from wherever it lives now.

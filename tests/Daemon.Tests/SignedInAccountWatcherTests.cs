@@ -5,11 +5,18 @@ namespace OneRemoteCli.Daemon.Tests;
 /// <summary>
 /// The agent noticing that somebody signed in or out in another process.
 /// <para>
-/// The tests drive <see cref="SignedInAccountWatcher.CheckAsync"/> directly rather
-/// than writing files and waiting for the shell. What matters here is the decision —
-/// which changes count as a change of account — and a real
-/// <see cref="FileSystemWatcher"/> would add seconds of waiting to assert nothing
-/// extra. That the watcher is pointed at the right file is one line of constructor.
+/// Most tests drive <see cref="SignedInAccountWatcher.CheckAsync"/> directly, because
+/// what they are about is the decision — which changes count as a change of account —
+/// and a real <see cref="FileSystemWatcher"/> would add seconds of waiting to assert
+/// nothing extra.
+/// </para>
+/// <para>
+/// This comment used to add "that the watcher is pointed at the right file is one line
+/// of constructor", and on that reasoning nothing exercised the trigger at all. Every
+/// decision passed while the feature did nothing on a real machine, and the gap was
+/// invisible from the test names. <see cref="NoticesTheCacheFileGoingAwayWithoutBeingAsked"/>
+/// closes it by touching a real file and waiting: a decision test needs a sibling that
+/// proves something calls it.
 /// </para>
 /// </summary>
 public sealed class SignedInAccountWatcherTests : IDisposable

@@ -94,14 +94,26 @@ catch {
 
 $tag = $release.tag_name
 
-function Find-Asset([string] $name) {
+<#
+    Downloads one asset of the release.
+
+    Through the API rather than `browser_download_url`: that URL is a github.com
+    page, and on a private repository it answers a token with an HTML "Page not
+    found" -- which lands on disk as a 200 and only shows up as a hash mismatch,
+    or worse, as a 60 KB "executable". The API asset URL with
+    `Accept: application/octet-stream` returns the bytes for anyone the token can
+    see the release as.
+#>
+function Save-Asset([string] $name, [string] $destination) {
     $found = $release.assets | Where-Object { $_.name -eq $name }
 
     if (-not $found) {
         throw "Release $tag has no asset called $name."
     }
 
-    return $found.browser_download_url
+    Invoke-WebRequest $found.url `
+        -Headers ($headers + @{ Accept = 'application/octet-stream' }) `
+        -OutFile $destination
 }
 
 $temp = Join-Path ([System.IO.Path]::GetTempPath()) ("1remotecli-" + [guid]::NewGuid().ToString('n'))
@@ -112,8 +124,8 @@ try {
 
     $downloaded = Join-Path $temp $asset
 
-    Invoke-WebRequest (Find-Asset $asset) -Headers $headers -OutFile $downloaded
-    Invoke-WebRequest (Find-Asset 'SHA256SUMS.txt') -Headers $headers -OutFile (Join-Path $temp 'SHA256SUMS.txt')
+    Save-Asset $asset $downloaded
+    Save-Asset 'SHA256SUMS.txt' (Join-Path $temp 'SHA256SUMS.txt')
 
     $expected = $null
 
@@ -171,8 +183,8 @@ try {
 
     Write-Host ''
     Write-Host 'Open a new terminal, then:' -ForegroundColor Green
-    Write-Host '  1remote login          sign in' -ForegroundColor Green
-    Write-Host '  1remote wrap claude    run something you want to reach from your phone' -ForegroundColor Green
+    Write-Host '  1remote login     sign in' -ForegroundColor Green
+    Write-Host '  1remote claude    run something you want to reach from your phone' -ForegroundColor Green
 }
 finally {
     Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue

@@ -1,4 +1,5 @@
 import type { RelayStatus } from '../relay/client'
+import { feedbackMailto } from '../feedback'
 
 const LABELS: Record<RelayStatus, string> = {
   'signed-out': 'Signed out',
@@ -70,17 +71,27 @@ export function Empty({ title, children }: { title: string; children?: React.Rea
 }
 
 /**
- * The version, on every screen the user can reach without connecting to anything.
+ * The version, on every screen the user can reach without connecting to anything,
+ * with the one link that turns a complaint into a message somebody can answer.
  *
  * Deliberately not hidden behind an "about" tap: the phone is where problems are
  * noticed, and the number that identifies the build should already be on screen when
- * someone decides to report one. It is the whole product's version — the same string
- * the agent's tray menu shows — not the app's alone.
+ * someone decides to report one — and it is, because the mail it opens carries the
+ * version in its subject whether or not the sender thought to mention it.
+ *
+ * It is the whole product's version — the same string the agent's tray menu shows —
+ * not the app's alone.
  */
 export function VersionLine({ className = '' }: { className?: string }) {
   return (
     <p className={`text-center text-xs text-slate-600 ${className}`}>
-      1RemoteCLI {__APP_VERSION__}
+      1RemoteCLI {__APP_VERSION__} ·{' '}
+      <a
+        href={feedbackMailto(__APP_VERSION__)}
+        className="underline decoration-slate-700 underline-offset-2"
+      >
+        Send feedback
+      </a>
     </p>
   )
 }

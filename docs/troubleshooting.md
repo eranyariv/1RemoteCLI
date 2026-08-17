@@ -170,7 +170,9 @@ If it never settles, check the agent log for the disconnect reason. A token that
 
 ## Nothing here matches
 
-Open an issue at https://github.com/eranyariv/1RemoteCLI/issues with:
+There is a **Send feedback** link in both clients — the tray menu, and the footer of the phone app. Both open your mail client addressed to `eran@yariv.org` with the version already in the subject, which is the fastest way to say something and the one that does not need a GitHub account.
+
+For anything that needs a back-and-forth, open an issue at https://github.com/eranyariv/1RemoteCLI/issues with:
 
 - what you ran and what happened
 - the tail of the agent log with `ONEREMOTE_LOG_LEVEL=debug`

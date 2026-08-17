@@ -30,6 +30,7 @@ public sealed class TrayIcon : IDisposable
     private readonly Action _onSignOut;
     private readonly Action _onShowSessions;
     private readonly Action _onOpenLogs;
+    private readonly Action _onSendFeedback;
     private readonly Action _onQuit;
 
     private readonly Thread _thread;
@@ -54,6 +55,7 @@ public sealed class TrayIcon : IDisposable
         Action onSignOut,
         Action onShowSessions,
         Action onOpenLogs,
+        Action onSendFeedback,
         Action onQuit)
     {
         _machineName = machineName ?? string.Empty;
@@ -62,6 +64,7 @@ public sealed class TrayIcon : IDisposable
         _onSignOut = onSignOut ?? throw new ArgumentNullException(nameof(onSignOut));
         _onShowSessions = onShowSessions ?? throw new ArgumentNullException(nameof(onShowSessions));
         _onOpenLogs = onOpenLogs ?? throw new ArgumentNullException(nameof(onOpenLogs));
+        _onSendFeedback = onSendFeedback ?? throw new ArgumentNullException(nameof(onSendFeedback));
         _onQuit = onQuit ?? throw new ArgumentNullException(nameof(onQuit));
 
         _thread = new Thread(Pump)
@@ -142,6 +145,7 @@ public sealed class TrayIcon : IDisposable
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Show sessions", null, (_, _) => _onShowSessions()));
         menu.Items.Add(new ToolStripMenuItem("Open logs", null, (_, _) => _onOpenLogs()));
+        menu.Items.Add(new ToolStripMenuItem("Send feedback\u2026", null, (_, _) => _onSendFeedback()));
         menu.Items.Add(new ToolStripSeparator());
         // Disabled, because it is a label rather than a command. It is here because
         // the tray is the only part of the agent a user ever looks at, and "which

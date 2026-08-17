@@ -366,6 +366,10 @@ public static class Program
                 onSignOut: () => Launch(Installer.ExecutablePath, "logout"),
                 onShowSessions: () => Launch(HubEndpoint.AppUri().ToString()),
                 onOpenLogs: () => Launch(FileLogger.DefaultDirectory),
+
+                // A mailto: goes to the shell exactly like a URL does, so the user's
+                // own mail client opens with the version already in the subject.
+                onSendFeedback: () => Launch(Feedback.MailTo),
                 onQuit: stopping.Cancel);
 
             tray.Start();

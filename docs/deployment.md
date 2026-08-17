@@ -12,7 +12,8 @@ The one-time work — creating the Entra app registration and provisioning the r
 | Resource group | `1remotecli-rg` |
 | App Service plan | `1remotecli-plan` — **B1, one instance**, Israel Central |
 | Web app | `1remotecli-hub` → https://1remotecli-hub.azurewebsites.net |
-| Entra app | `3db435ae-5e69-483c-a044-d6e8b6262fc6`, authority `.../common` |
+| Entra app (API + PWA) | `3db435ae-5e69-483c-a044-d6e8b6262fc6`, authority `.../common` |
+| Entra app (agent) | `6a4e3951-3b1f-46f9-b20c-17bd30bf16f5`, authority `.../common` |
 
 The hub serves the phone app from its own origin. There is no second site to deploy, no CDN, no CORS policy: the sign-in redirect, the WebSocket and the push deep link are all `https://1remotecli-hub.azurewebsites.net`.
 

@@ -19,9 +19,13 @@ Azure requires MFA for resource management. If a command fails with `RequestDisa
 az login --tenant "<tenant>" --scope "https://management.core.windows.net//.default" --claims-challenge "<claims>"
 ```
 
-## Entra app registration
+## Entra app registrations
 
-One registration serves both the agent and the PWA. That is deliberate: because both sides present a token from the same application, "the phone and the machine are the same identity" is something the hub can actually verify rather than infer.
+**Two** registrations, one API. The PWA signs in as the API app; the agent signs in as its own native app and asks for the API app's scope. Both tokens therefore carry the same audience, so "the phone and the machine are the same identity" stays something the hub can verify — it checks the user, not the client.
+
+They have to be separate. See [Why two registrations](#why-two-registrations) before merging them back.
+
+### `1RemoteCLI` — API and PWA
 
 | | |
 | --- | --- |
@@ -32,25 +36,42 @@ One registration serves both the agent and the PWA. That is deliberate: because 
 | Application ID URI | `api://3db435ae-5e69-483c-a044-d6e8b6262fc6` |
 | Exposed scope | `Session.Access` (`90af9976-aefb-4d54-b293-bfc8c0cbe3a2`) |
 | Access token version | 2 |
-| Public client (agent) redirect | `http://127.0.0.1` |
-| SPA (PWA) redirect | `https://1remotecli-hub.azurewebsites.net/`, `http://localhost:5173/`, `http://localhost:4173/` |
+| Pre-authorized clients | both app IDs below |
+| SPA (PWA) redirect | `https://1remotecli.yariv.org/`, `https://1remotecli-hub.azurewebsites.net/`, `http://localhost:5173/`, `http://localhost:4173/` |
+| Public client redirect | **none — must stay empty** |
 
-The agent's redirect uses **`127.0.0.1`, not `localhost`**, and that is load-bearing. See [One registration, two platforms](#one-registration-two-platforms) below before changing either row.
+### `1RemoteCLI Agent` — the Windows agent
 
-The client ID, tenant, and scope name are **configuration, not secrets** — they ship in the PWA bundle and in agent config. There is no client secret at all: the agent is a public client using the loopback redirect with PKCE, and the PWA is an SPA using auth code + PKCE. Nothing in this project should ever need a credential that must be kept out of git.
+| | |
+| --- | --- |
+| Display name | `1RemoteCLI Agent` |
+| Application (client) ID | `6a4e3951-3b1f-46f9-b20c-17bd30bf16f5` |
+| Object ID | `860380f2-b25f-4c41-8555-13ec9f5733b7` |
+| Supported account types | Any Entra tenant + personal Microsoft accounts |
+| Public client redirect | `http://localhost`, `http://127.0.0.1` |
+| SPA redirect | **none — must stay empty** |
+| API permission | `api://3db435ae-…/Session.Access` |
 
-### Recreating it from scratch
+Both client IDs, the tenant, and the scope name are **configuration, not secrets** — they ship in the PWA bundle and in agent config. There is no client secret at all: the agent is a public client using the loopback redirect with PKCE, and the PWA is an SPA using auth code + PKCE. Nothing in this project should ever need a credential that must be kept out of git.
+
+> `az ad app list --display-name "1RemoteCLI"` matches on **prefix**, so it returns both apps and silently merges their redirect lists in a `--query`. Always inspect a single app with `az ad app show --id <appId>`.
+
+### Recreating them from scratch
 
 ```powershell
 . .\scripts\az-env.ps1
 
 az ad app create `
   --display-name "1RemoteCLI" `
+  --sign-in-audience AzureADandPersonalMicrosoftAccount
+
+az ad app create `
+  --display-name "1RemoteCLI Agent" `
   --sign-in-audience AzureADandPersonalMicrosoftAccount `
-  --public-client-redirect-uris "http://127.0.0.1"
+  --public-client-redirect-uris "http://localhost" "http://127.0.0.1"
 ```
 
-Take the `appId` and `id` from the output, then patch the rest through Graph (the CLI has no first-class flags for exposed scopes):
+Take the API app's `appId` and `id` from the output, then patch the rest through Graph (the CLI has no first-class flags for exposed scopes):
 
 ```powershell
 $appObjId = "<object id>"
@@ -80,16 +101,28 @@ az rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$app
   --headers "Content-Type=application/json" --body "@$env:TEMP\appreg.json"
 ```
 
-Then pre-authorize the app for its own scope, so signing in does not prompt for consent on a permission the user is implicitly granting anyway, and create the service principal that lets the tenant issue tokens for it:
+Then pre-authorize **both** clients for the scope, so signing in does not prompt for consent on a permission the user is implicitly granting anyway, and create the service principals that let the tenant issue tokens for them:
 
 ```powershell
-$body = @{ api = @{ preAuthorizedApplications = @(@{ appId = $appId; delegatedPermissionIds = @($scopeId) }) } } |
-  ConvertTo-Json -Depth 10 -Compress
+$agentAppId = "<agent application id>"
+
+$body = @{ api = @{ preAuthorizedApplications = @(
+  @{ appId = $appId;      delegatedPermissionIds = @($scopeId) }
+  @{ appId = $agentAppId; delegatedPermissionIds = @($scopeId) }
+) } } | ConvertTo-Json -Depth 10 -Compress
 Set-Content "$env:TEMP\appreg-pre.json" $body -Encoding utf8
 az rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$appObjId" `
   --headers "Content-Type=application/json" --body "@$env:TEMP\appreg-pre.json"
 
 az ad sp create --id $appId
+az ad sp create --id $agentAppId
+```
+
+And give the agent app permission to ask for the scope:
+
+```powershell
+az ad app permission add --id $agentAppId `
+  --api $appId --api-permissions "$scopeId=Scope"
 ```
 
 `requestedAccessTokenVersion = 2` is load-bearing. A v1 token carries a different issuer and claim shape, and the hub validates the issuer dynamically against the token's own `tid`.
@@ -127,26 +160,29 @@ Confirm both halves:
 
 ```powershell
 (Invoke-WebRequest 'https://<domain>/health').Content
-(az ad app list --display-name "1RemoteCLI" -o json | ConvertFrom-Json).spa.redirectUris
+(az ad app show --id 3db435ae-5e69-483c-a044-d6e8b6262fc6 -o json | ConvertFrom-Json).spa.redirectUris
 ```
 
-### One registration, two platforms
+### Why two registrations
 
-The agent and the PWA share this registration, which means one app carries both a **public client** redirect and **SPA** redirects. Entra matches loopback redirect URIs *without regard to port*, and where a request could match either platform, SPA classification wins.
+One registration cannot carry both a loopback **public client** redirect and loopback **SPA** redirects. Entra matches loopback redirect URIs *without regard to port*, and where a request could match either platform, SPA classification wins.
 
-So a desktop redirect of `http://localhost:{ephemeral}` also matches an SPA entry like `http://localhost:5173/`. The authorization code comes back marked single-page, redeemable only with an `Origin` header that a desktop client never sends, and sign-in dies at redemption:
+The agent's redirect reaches Entra as `http://localhost:{ephemeral}` — MSAL rewrites loopback to `localhost` whatever `AuthConfig.RedirectUri` says — so it also matches an SPA entry like `http://localhost:5173/`. The authorization code then comes back marked single-page, redeemable only with an `Origin` header that a desktop client never sends, and sign-in dies at redemption:
 
 ```
 AADSTS90023: Tokens issued for the 'Single-Page Application' client-type should only
 be redeemed via cross-origin requests.
 ```
 
-The two host spellings are compared as strings, so keeping the agent on `127.0.0.1` and the PWA's dev servers on `localhost` removes the ambiguity and lets both live on one registration. The rules that follow from that:
+An earlier version of this doc claimed that spelling the agent's redirect `127.0.0.1` rather than `localhost` kept the two apart on one registration. It does not: MSAL never sends `127.0.0.1` on the wire, so the collision happened anyway. That mistake stayed hidden for weeks because **nothing renews interactively** — refresh tokens kept working, and only a fresh `1remote login` could expose it ([#67](https://github.com/eranyariv/1RemoteCLI/issues/67)).
 
-- **Never add a `localhost` URI to the public client platform**, and never add a `127.0.0.1` URI to the SPA platform. Either one re-creates the collision.
-- If you ever need a second loopback host for the SPA, split the agent into its own native registration instead.
+The rules that follow:
 
-`AuthConfig.RedirectUri` in the agent must match the public client entry exactly.
+- **The agent app's SPA platform must stay empty**, and **the API app's public client platform must stay empty**. Either one re-creates the collision.
+- Adding a client means pre-authorizing it on the API app (`api.preAuthorizedApplications`) and giving it `requiredResourceAccess` on `Session.Access`.
+- The hub needs no change for a new client. It validates audience, scope and user; nothing checks `appid`, and the allowlist keys on the user.
+
+`AuthConfig.ClientId` is the **agent** app; `AuthConfig.ApiClientId` and the PWA's `CLIENT_ID` are the **API** app. Collapsing those back into one constant looks like tidying up and re-introduces [#67](https://github.com/eranyariv/1RemoteCLI/issues/67); `SignsInAsItsOwnRegistrationRatherThanTheApiOne` guards it.
 
 ## Hub
 

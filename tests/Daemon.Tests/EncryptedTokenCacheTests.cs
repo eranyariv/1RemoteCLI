@@ -288,9 +288,23 @@ public class AuthConfigTests
     }
 
     [Fact]
-    public void AsksForOurOwnApiScope()
+    public void AsksForTheApiScopeRatherThanItsOwn()
     {
-        Assert.Equal($"api://{AuthConfig.ClientId}/Session.Access", Assert.Single(AuthConfig.Scopes));
+        // The scope belongs to the API registration, not to the agent's. Deriving it
+        // from the agent's own id would ask for a scope nobody exposes.
+        Assert.Equal($"api://{AuthConfig.ApiClientId}/Session.Access", Assert.Single(AuthConfig.Scopes));
+    }
+
+    /// <summary>
+    /// The agent and the API are separate registrations, and merging them looks like
+    /// tidying up. It is not: one registration cannot carry a loopback native client
+    /// and the PWA's loopback SPA dev origins without Entra classifying the agent's
+    /// sign-in as single-page and failing it with AADSTS90023.
+    /// </summary>
+    [Fact]
+    public void SignsInAsItsOwnRegistrationRatherThanTheApiOne()
+    {
+        Assert.NotEqual(AuthConfig.ApiClientId, AuthConfig.ClientId);
     }
 
     /// <summary>

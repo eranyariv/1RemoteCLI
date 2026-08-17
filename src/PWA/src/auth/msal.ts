@@ -6,10 +6,21 @@ import {
 } from '@azure/msal-browser'
 
 /**
- * The Entra application this app signs in as. Mirrors `src/Daemon/Auth/AuthConfig.cs`
- * because the agent and the PWA share one registration on purpose: both sides
- * present a token from the same application, which turns "the phone and the machine
- * belong to the same person" into something the hub can verify rather than infer.
+ * The Entra application this app signs in as, and the one that owns the API. Mirrors
+ * `ApiClientId` in `src/Daemon/Auth/AuthConfig.cs`.
+ *
+ * The agent signs in as a *different*, native registration and asks for this app's
+ * scope, so the token the hub sees has the same audience whichever device produced
+ * it — "the phone and the machine belong to the same person" stays something the hub
+ * verifies, because it checks the user rather than the client.
+ *
+ * The two registrations must stay separate. This one carries loopback SPA origins for
+ * the dev and preview servers, and the agent's sign-in reaches Entra as
+ * `http://localhost:{ephemeral}` (MSAL rewrites loopback to `localhost` whatever the
+ * agent configures). Loopback redirects match without regard to port and SPA
+ * classification wins, so put the agent back on this registration and `localhost:5173`
+ * captures its redirect: the code comes back marked single-page and sign-in fails with
+ * `AADSTS90023`.
  *
  * None of this is secret. There is no client secret anywhere in the project — the
  * agent is a public client on a loopback redirect and this is an SPA on auth code

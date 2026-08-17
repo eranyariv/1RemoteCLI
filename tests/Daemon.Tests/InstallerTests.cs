@@ -37,7 +37,8 @@ public sealed class InstallerTests
                 return StepResult.Success("run key removed");
             },
             addRunKey: Never(() => added = true),
-            installShortcuts: Ok());
+            installShortcuts: Ok(),
+            addToPath: Ok());
 
         Assert.True(removed);
         Assert.False(added);
@@ -59,7 +60,8 @@ public sealed class InstallerTests
                 added = true;
                 return StepResult.Success("run key added");
             },
-            installShortcuts: Ok());
+            installShortcuts: Ok(),
+            addToPath: Ok());
 
         Assert.True(added);
     }
@@ -79,10 +81,35 @@ public sealed class InstallerTests
             {
                 shortcuts = true;
                 return StepResult.Success("shortcuts");
-            });
+            },
+            addToPath: Ok());
 
         Assert.True(shortcuts);
-        Assert.Equal(3, steps.Count);
+        Assert.Equal(4, steps.Count);
+    }
+
+    /// <summary>
+    /// On a machine where policy refused every autostart, typing '1remote agent' by hand
+    /// is the only repair left — so the PATH entry that makes that possible cannot be
+    /// conditional on the autostart having worked.
+    /// </summary>
+    [Fact]
+    public void ThePathEntryIsAddedEvenWhenNothingWillStartTheAgentByItself()
+    {
+        bool onPath = false;
+
+        Installer.Install(
+            registerTask: Fails(),
+            removeRunKey: Ok(),
+            addRunKey: Fails(),
+            installShortcuts: Fails(),
+            addToPath: () =>
+            {
+                onPath = true;
+                return StepResult.Success("path");
+            });
+
+        Assert.True(onPath);
     }
 
     [Fact]
@@ -92,9 +119,10 @@ public sealed class InstallerTests
             registerTask: Ok("a"),
             removeRunKey: Ok("b"),
             addRunKey: Ok("unused"),
-            installShortcuts: Ok("c"));
+            installShortcuts: Ok("c"),
+            addToPath: Ok("d"));
 
-        Assert.Equal(["a", "b", "c"], steps.Select(step => step.Message));
+        Assert.Equal(["a", "b", "c", "d"], steps.Select(step => step.Message));
     }
 
     [Fact]

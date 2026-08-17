@@ -38,10 +38,11 @@ public static class Installer
             () => TaskRegistration.Register(exePath, userId),
             RunKey.Remove,
             () => RunKey.Register(exePath),
-            () => StartMenu.Install(exePath));
+            () => StartMenu.Install(exePath),
+            () => PathEntry.Register(exePath));
 
     /// <summary>
-    /// The install sequence, with the four things it does passed in.
+    /// The install sequence, with the things it does passed in.
     /// <para>
     /// Split out so the one rule that matters here can be tested without registering a
     /// real task on the machine running the tests.
@@ -51,7 +52,8 @@ public static class Installer
         Func<StepResult> registerTask,
         Func<StepResult> removeRunKey,
         Func<StepResult> addRunKey,
-        Func<StepResult> installShortcuts)
+        Func<StepResult> installShortcuts,
+        Func<StepResult> addToPath)
     {
         List<StepResult> steps = [];
 
@@ -73,6 +75,11 @@ public static class Installer
 
         steps.Add(installShortcuts());
 
+        // Last, and never conditional on the autostart: the agent starting by itself and
+        // the user being able to type '1remote' are independent, and on a machine where
+        // policy refused the task, running it by hand is the repair.
+        steps.Add(addToPath());
+
         return steps;
     }
 
@@ -81,6 +88,7 @@ public static class Installer
         TaskRegistration.Remove(),
         RunKey.Remove(),
         StartMenu.Remove(),
+        PathEntry.Remove(ExecutablePath),
     ];
 
     /// <summary>

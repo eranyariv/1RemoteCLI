@@ -210,6 +210,61 @@ if (Test-Path $managed) {
     }
 }
 
+# ------------------------------------------------------ cloud protection
+
+Write-Section 'Cloud protection'
+
+# This decides whether an attack surface reduction block is a delay or a wall. The
+# ransomware rule lets a file through once the cloud has found it unharmful -- but
+# that verdict can only exist if the machine is allowed to ask for it, and allowed
+# to send the file. Where sample submission is off, an unsigned build nobody has
+# seen before stays unknown forever, and "wait a minute and try again" is wrong
+# advice that never comes true.
+if ($preference) {
+    $maps = switch ($preference.MAPSReporting) {
+        0 { 'off' }
+        1 { 'basic' }
+        2 { 'advanced' }
+        default { "unknown ($($preference.MAPSReporting))" }
+    }
+
+    $consent = switch ($preference.SubmitSamplesConsent) {
+        0 { 'always prompt' }
+        1 { 'send safe samples' }
+        2 { 'never send' }
+        3 { 'send all samples' }
+        4 { 'never send' }
+        default { "unknown ($($preference.SubmitSamplesConsent))" }
+    }
+
+    $level = switch ($preference.CloudBlockLevel) {
+        0 { 'default' }
+        1 { 'moderate' }
+        2 { 'high' }
+        4 { 'high plus' }
+        6 { 'zero tolerance' }
+        default { "unknown ($($preference.CloudBlockLevel))" }
+    }
+
+    Write-Fact 'cloud lookup' $maps
+    Write-Fact 'sample sending' $consent
+    Write-Fact 'block level' $level
+
+    if ($preference.MAPSReporting -eq 0) {
+        Add-Finding 'blocking' 'Cloud-delivered protection is off, so this machine never asks Microsoft whether a file is safe. An unsigned build it has not seen before cannot become known-good here, which means the block will not lift on its own no matter how long you wait.'
+    }
+    elseif ($preference.SubmitSamplesConsent -in @(2, 4)) {
+        Add-Finding 'blocking' 'Sample submission is off, so this machine will not send the file for analysis. It can ask whether the file is already known, but it cannot make it known -- so unless somebody else submits this exact build, the block will not lift on its own.'
+    }
+
+    if ($preference.CloudBlockLevel -ge 4) {
+        Add-Finding 'suspect' "The cloud block level is set to '$level', which is well above default. At that setting Windows blocks anything it is not confident about, and an unsigned build with no reputation is exactly that."
+    }
+}
+else {
+    Write-Fact 'settings' 'could not read Get-MpPreference'
+}
+
 # ------------------------------------------------------ controlled folder access
 
 Write-Section 'Controlled folder access'

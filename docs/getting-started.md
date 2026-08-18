@@ -13,11 +13,19 @@ Someone has to have deployed a hub and added your Microsoft account to its allow
 
 ## 1. Install it
 
-In PowerShell:
+Run this **from inside Copilot CLI or Claude Code**, as a shell command — in Copilot CLI, prefix it with `!`:
 
 ```powershell
 irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.ps1 | iex
 ```
+
+Not from a plain PowerShell window, and the reason is worth thirty seconds of your time.
+
+These builds are unsigned, and Windows refuses to run an executable it has no reputation for. Measured on two managed machines: on one the refusal lifted after about twenty minutes, on the other it had not lifted after an hour and showed no sign of ever doing so. But Windows decides this per file, according to **which process wrote it** — and a file written by a process your organisation already trusts is runnable immediately, by anything. Your coding CLI is such a process, so installing from inside it sidesteps the block entirely.
+
+If you are on a personal machine with no such protections, a plain PowerShell window works fine. On anything managed by an employer, use the CLI.
+
+The same applies to upgrades: run those from the CLI too, or the new build arrives untrusted and you are back where you started.
 
 That picks the build for your architecture, **checks it against the SHA-256 published with the release**, puts it in `%LOCALAPPDATA%\Programs\1RemoteCLI`, registers the logon task and the Start menu entries, and adds it to your `PATH`.
 
@@ -214,17 +222,19 @@ with a Windows Security popup at the same moment. Nothing is wrong with the down
 
 On a machine managed by an organisation, the refusal usually comes from the attack surface reduction rule **"Use advanced protection against ransomware"**. Windows Security → **Protection history** names it, and confusingly blames `powershell.exe` rather than the executable it actually stopped.
 
-The verdict is not permanent, but it is slower to arrive than you would guess. The install script retries for a few seconds, which is occasionally enough. Measured on a managed machine here, it was **about twenty minutes** before the identical file was allowed to run — long enough that you would reasonably decide it was broken for good and stop.
+The verdict is not permanent everywhere, but it is much slower to arrive than you would guess, and on some machines it never arrives at all. Measured on two: one allowed the identical file after about twenty minutes, the other had refused it fourteen times in an hour and was still refusing.
 
-So expect to wait, and finish the install by hand afterwards:
+**The reliable fix is to install from inside Copilot CLI or Claude Code**, as described in [Install it](#1-install-it). Windows judges each file by the process that wrote it, so a build downloaded by a trusted process is runnable straight away — the machine that had refused for an hour accepted the very same bytes the moment they were written that way.
+
+If you would rather wait it out, the executable is already in place and this finishes the half-done install:
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\1RemoteCLI\1remote.exe" install
 ```
 
-That completes the half-done install; the executable is already in place. Give it half an hour of retrying before concluding it will never work. `scripts\diagnose-launch.ps1` in the repository will tell you which protection is refusing it, and whether that protection can lift at all on your machine.
+Give it half an hour before concluding it will never work. `scripts\diagnose-launch.ps1` in the repository will tell you which protection is refusing it, how long it has been refusing, and whether waiting has any prospect of helping.
 
-If it is still blocked after that, and Protection history names an attack surface reduction rule, the block is your organisation's policy and only an administrator can allow it.
+If it is still blocked after that, an administrator has to allow it — or the build has to be signed.
 
 Both this and the SmartScreen warning above have the same root cause: these builds are unsigned. See [deployment](deployment.md#it-is-not-signed).
 

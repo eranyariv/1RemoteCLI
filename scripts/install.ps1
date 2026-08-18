@@ -230,15 +230,16 @@ try {
 Windows would not let '$installed' start, after $attempts attempts: $($_.Exception.Message)
 
 The download is installed and its hash matched the release, so the file is fine. This
-is Windows refusing to run a build it has no reputation for yet -- these releases are
-unsigned. It usually clears on its own, but it is slow: twenty minutes is normal, so
-these few seconds of retrying were never going to be enough. Wait, then run
+is Windows refusing to run a build it has no reputation for -- these releases are
+unsigned.
 
-    $installed install
+The fix is to run this same install from inside Copilot CLI or Claude Code, as a shell
+command. Windows judges each file by the process that wrote it, and a build written by
+one of those is trusted immediately.
 
-to finish the job. If it is still refused after half an hour, look in Windows Security >
-Protection history: if it names an attack surface reduction rule, the block came from
-your organisation's policy and an administrator has to allow it.
+Waiting sometimes works too -- twenty minutes, not the few seconds tried here -- but on
+some machines it never does. Run scripts\diagnose-launch.ps1 from the repository to see
+which it is, or look in Windows Security > Protection history.
 "@
             }
 

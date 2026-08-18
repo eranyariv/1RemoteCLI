@@ -14,297 +14,7 @@
     <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 
-    <!--
-      Deliberately one file with no build step and no dependencies. This is the page
-      somebody is sent before they trust the project with a machine, so it should
-      render from a cold cache on a hotel wifi, and it should keep working whatever
-      happens to the app bundle next to it.
-    -->
-    <style>
-      :root {
-        /* Slate 950/900/800/400/200, matching the app, and the phosphor green the
-           logo is drawn in. */
-        --bg: #020617;
-        --panel: #0f172a;
-        --line: #1e293b;
-        --muted: #94a3b8;
-        --text: #e2e8f0;
-        --bright: #f8fafc;
-        --accent: #05fc04;
-      }
-
-      * {
-        box-sizing: border-box;
-      }
-
-      html {
-        color-scheme: dark;
-        background: var(--bg);
-        -webkit-text-size-adjust: 100%;
-      }
-
-      body {
-        margin: 0;
-        background: var(--bg);
-        color: var(--text);
-        font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-        font-size: 17px;
-        line-height: 1.65;
-        -webkit-font-smoothing: antialiased;
-      }
-
-      main {
-        max-width: 46rem;
-        margin: 0 auto;
-        padding: 3rem 1.25rem 5rem;
-      }
-
-      header {
-        display: flex;
-        align-items: center;
-        gap: 1rem;
-        margin-bottom: 2.5rem;
-      }
-
-      header img {
-        width: 64px;
-        height: 64px;
-        flex: none;
-        /*
-          The artwork is a green mark on an opaque black square and the page is not
-          black, so an ordinary image would show a darker tile. Screening resolves
-          every black pixel to the backdrop exactly, and leaves the green alone.
-        */
-        mix-blend-mode: screen;
-      }
-
-      h1 {
-        font-size: 1.9rem;
-        line-height: 1.15;
-        margin: 0;
-        color: var(--bright);
-        letter-spacing: -0.02em;
-      }
-
-      header p {
-        margin: 0.25rem 0 0;
-        color: var(--muted);
-        font-size: 1rem;
-      }
-
-      h2 {
-        font-size: 1.3rem;
-        color: var(--bright);
-        margin: 3rem 0 0.75rem;
-        padding-top: 1.75rem;
-        border-top: 1px solid var(--line);
-        letter-spacing: -0.01em;
-      }
-
-      h3 {
-        font-size: 1.02rem;
-        color: var(--bright);
-        margin: 2rem 0 0.5rem;
-      }
-
-      p,
-      ul,
-      ol {
-        margin: 0 0 1rem;
-      }
-
-      ul,
-      ol {
-        padding-left: 1.25rem;
-      }
-
-      li {
-        margin-bottom: 0.4rem;
-      }
-
-      a {
-        color: var(--accent);
-        text-decoration-color: rgba(5, 252, 4, 0.35);
-        text-underline-offset: 3px;
-      }
-
-      a:hover {
-        text-decoration-color: var(--accent);
-      }
-
-      strong {
-        color: var(--bright);
-        font-weight: 600;
-      }
-
-      code {
-        font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
-        font-size: 0.88em;
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 5px;
-        padding: 0.1em 0.4em;
-        color: var(--bright);
-      }
-
-      kbd {
-        font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
-        font-size: 0.82em;
-        background: #1e293b;
-        border: 1px solid #334155;
-        border-bottom-width: 2px;
-        border-radius: 5px;
-        padding: 0.05em 0.4em;
-        color: var(--bright);
-      }
-
-      /* A command block, with the copy button sitting inside it. */
-      .cmd {
-        position: relative;
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        margin: 0 0 1.25rem;
-      }
-
-      .cmd pre {
-        margin: 0;
-        padding: 1rem 4.5rem 1rem 1rem;
-        white-space: pre-wrap;
-        overflow-wrap: break-word;
-        font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
-        font-size: 0.85rem;
-        line-height: 1.7;
-        color: var(--bright);
-      }
-
-      .cmd pre code {
-        background: none;
-        border: 0;
-        border-radius: 0;
-        padding: 0;
-        font-size: inherit;
-        color: inherit;
-      }
-
-      .cmd button {
-        position: absolute;
-        top: 0.55rem;
-        right: 0.55rem;
-        background: #1e293b;
-        color: var(--text);
-        border: 1px solid #334155;
-        border-radius: 6px;
-        padding: 0.25rem 0.6rem;
-        font: inherit;
-        font-size: 0.72rem;
-        cursor: pointer;
-      }
-
-      .cmd button:hover {
-        border-color: var(--accent);
-        color: var(--bright);
-      }
-
-      .note {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-left: 3px solid var(--accent);
-        border-radius: 8px;
-        padding: 1rem 1.1rem;
-        margin: 0 0 1.25rem;
-      }
-
-      .note p:last-child {
-        margin-bottom: 0;
-      }
-
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        margin: 0 0 1.25rem;
-        font-size: 0.95rem;
-      }
-
-      th,
-      td {
-        text-align: left;
-        padding: 0.55rem 0.75rem;
-        border-bottom: 1px solid var(--line);
-        vertical-align: top;
-      }
-
-      th {
-        color: var(--bright);
-        font-weight: 600;
-        white-space: nowrap;
-      }
-
-      td code {
-        white-space: nowrap;
-      }
-
-      ol.steps {
-        counter-reset: step;
-        list-style: none;
-        padding-left: 0;
-      }
-
-      ol.steps > li {
-        counter-increment: step;
-        position: relative;
-        padding-left: 2.4rem;
-        margin-bottom: 1.75rem;
-      }
-
-      ol.steps > li::before {
-        content: counter(step);
-        position: absolute;
-        left: 0;
-        top: 0.05rem;
-        width: 1.65rem;
-        height: 1.65rem;
-        border-radius: 50%;
-        background: var(--panel);
-        border: 1px solid var(--line);
-        color: var(--accent);
-        font-size: 0.8rem;
-        font-weight: 600;
-        display: grid;
-        place-items: center;
-      }
-
-      footer {
-        margin-top: 3.5rem;
-        padding-top: 1.5rem;
-        border-top: 1px solid var(--line);
-        color: var(--muted);
-        font-size: 0.88rem;
-      }
-
-      footer a {
-        white-space: nowrap;
-      }
-
-      @media (max-width: 34rem) {
-        body {
-          font-size: 16px;
-        }
-
-        main {
-          padding: 2rem 1rem 3.5rem;
-        }
-
-        h1 {
-          font-size: 1.5rem;
-        }
-
-        header img {
-          width: 48px;
-          height: 48px;
-        }
-      }
-    </style>
+    <link rel="stylesheet" href="/doc.css" />
   </head>
 
   <body>
@@ -369,7 +79,7 @@
         <p>
           <strong>Before you point it at a machine that matters:</strong> anyone holding a
           signed-in device can type into your shared sessions. Read
-          <a href="https://github.com/eranyariv/1RemoteCLI/blob/main/docs/security.md">Security</a>
+          <a href="/security.html">Security</a>
           first.
         </p>
       </div>
@@ -582,7 +292,7 @@ Remove-Item -Recurse -Force "$env:LOCALAPPDATA\1RemoteCLI"</code></pre>
           <th>GitHub</th>
           <td>
             <a href="https://github.com/eranyariv/1RemoteCLI/issues/new">Open an issue</a>, best
-            for anything reproducible.
+            for anything reproducible, if you have access to the repository.
           </td>
         </tr>
       </table>
@@ -601,22 +311,24 @@ Remove-Item -Recurse -Force "$env:LOCALAPPDATA\1RemoteCLI"</code></pre>
       </ol>
 
       <p>
-        If something is not working at all, start with
+        If something is not working at all,
         <a href="https://github.com/eranyariv/1RemoteCLI/blob/main/docs/troubleshooting.md"
           >Troubleshooting</a
-        >.
+        >
+        is the place to start. Like the rest of the GitHub links here it needs read access to the
+        repository, which you already have if the installer above worked for you.
       </p>
 
       <footer>
         <p>
-          <span id="version">1RemoteCLI</span> ·
-          <a href="https://github.com/eranyariv/1RemoteCLI">Source</a> ·
+          <span id="version">1RemoteCLI</span> · <a href="/security.html">Security</a> ·
+          <a href="/">Open the app</a>
+        </p>
+        <p>
+          Needs repo access: <a href="https://github.com/eranyariv/1RemoteCLI">Source</a> ·
           <a href="https://github.com/eranyariv/1RemoteCLI/blob/main/docs/getting-started.md"
             >Full guide</a
           >
-          ·
-          <a href="https://github.com/eranyariv/1RemoteCLI/blob/main/docs/security.md">Security</a>
-          · <a href="/">Open the app</a>
         </p>
       </footer>
     </main>
@@ -652,3 +364,5 @@ Remove-Item -Recurse -Force "$env:LOCALAPPDATA\1RemoteCLI"</code></pre>
     </script>
   </body>
 </html>
+
+

@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#020617" />
+    <title>1RemoteCLI security: what you are agreeing to</title>
+    <meta
+      name="description"
+      content="What 1RemoteCLI protects, and the two risks it does not solve: the relay sees terminal output in plaintext, and whoever holds the account can type on every paired machine."
+    />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="stylesheet" href="/doc.css" />
+  </head>
+
+  <body>
+    <main>
+      <header>
+        <img src="/icon-192.png" alt="" />
+        <div>
+          <h1>Security</h1>
+          <p>What you are agreeing to.</p>
+        </div>
+      </header>
+
+      <p>
+        Read this before you point 1RemoteCLI at a machine that matters. It is short, and it is
+        deliberately blunt about the parts that are not solved.
+      </p>
+
+      <h2 id="what-it-gives-you">What it actually gives you</h2>
+
+      <p>
+        An attached device can type anything into that terminal session that a keyboard at your desk
+        could. That is the product. It is not a read-only viewer with a reply box.
+      </p>
+
+      <h2 id="protected">What is protected</h2>
+
+      <table>
+        <tr>
+          <th>Threat</th>
+          <th>How</th>
+        </tr>
+        <tr>
+          <td>Another user reaching your machines</td>
+          <td>
+            Sessions are partitioned by account key structurally, not filtered. There is no code
+            path that looks up another account’s machine.
+          </td>
+        </tr>
+        <tr>
+          <td>Someone unknown signing in</td>
+          <td>An explicit account allowlist. An empty allowlist admits nobody.</td>
+        </tr>
+        <tr>
+          <td>Stale credentials</td>
+          <td>
+            Tokens are validated on connect and re-validated on refresh mid-connection. A refresh
+            that changes the account aborts the connection.
+          </td>
+        </tr>
+        <tr>
+          <td>Another user on your PC</td>
+          <td>The named pipe between wrapper and agent is ACL’d to your SID.</td>
+        </tr>
+        <tr>
+          <td>Remote code execution</td>
+          <td>
+            The remote side can attach to sessions. It cannot start one. The capability does not
+            exist in the protocol.
+          </td>
+        </tr>
+        <tr>
+          <td>A machine pretending to be yours</td>
+          <td>Machine ids are agent-generated GUIDs, and lookups are scoped to your partition.</td>
+        </tr>
+        <tr>
+          <td>Interception in transit</td>
+          <td>
+            TLS on both hops. The agent dials out; nothing listens on your PC and no port is opened.
+          </td>
+        </tr>
+      </table>
+
+      <p>
+        Tokens on the PC are encrypted with DPAPI scoped to your Windows user: another account on
+        the same machine cannot read them, and the file cannot be copied to another machine and
+        reused.
+      </p>
+
+      <h2 id="risk-plaintext">Accepted risk 1: the relay sees your terminal in plaintext</h2>
+
+      <p>
+        Terminal output contains secrets. API keys echoed into a shell, the contents of a
+        <code>.env</code>, private source code, connection strings in a stack trace. TLS protects
+        all of that in transit, but <strong>the hub process itself sees it unencrypted.</strong>
+      </p>
+
+      <p>
+        For a self-hosted hub, run by the same small group that uses it, that is a reasonable trade
+        against the complexity of end-to-end encryption. It stops being reasonable the moment the
+        hub is run by someone you would not hand those secrets to directly.
+      </p>
+
+      <div class="note">
+        <p>
+          The test is simple: <em>would you paste this terminal’s contents into a message to
+          whoever operates the hub?</em> If not, do not attach that session.
+        </p>
+      </div>
+
+      <p>
+        The protocol keeps the terminal payload as an opaque byte field the hub never inspects, so
+        end-to-end encryption could be added later by encrypting that field between agent and
+        client without changing any message shapes. It is not implemented today.
+      </p>
+
+      <h2 id="risk-control">Accepted risk 2: full control is full control</h2>
+
+      <p>
+        <strong
+          >Whoever holds the Microsoft account holds every live session on every paired
+          machine.</strong
+        >
+        Not read access: the ability to type. <code>rm -rf</code>,
+        <code>git push --force</code>, exfiltrating anything the machine can reach.
+      </p>
+
+      <p>
+        This is inherent. A tool for answering prompts from somewhere else is a tool for typing on
+        your machine from somewhere else. What limits the blast radius:
+      </p>
+
+      <ul>
+        <li>
+          <strong>Require MFA on the account.</strong> This is the single control that matters.
+          Everything else assumes the account is not compromised.
+        </li>
+        <li>
+          <strong>Sessions only exist while you have one running.</strong> There is no persistent
+          back door: nothing is attachable unless you started it with <code>1remote</code> and it is
+          still alive.
+        </li>
+        <li>
+          <strong>Keep the allowlist to people you would give your unlocked laptop to</strong>,
+          because functionally that is what you are doing.
+        </li>
+        <li>
+          <strong>Treat the device you attach from as a credential.</strong> Screen lock,
+          biometrics, and remote wipe available.
+        </li>
+      </ul>
+
+      <h2 id="guidance">Practical guidance</h2>
+
+      <p>
+        <strong>Do</strong> use it for coding agents, builds, test runs, deployments you are
+        supervising: the long-running things that stop and ask.
+      </p>
+
+      <p>
+        <strong>Think twice</strong> about sessions holding production credentials, or on machines
+        with access to customer data. Not because it is broken, but because the two accepted risks
+        above are real and you would be accepting them on someone else’s behalf.
+      </p>
+
+      <p>
+        <strong>Do not</strong> run a hub for people outside your trust boundary. This design
+        assumes the operator and the users are the same small group.
+      </p>
+
+      <h2 id="compromised">If the account is compromised</h2>
+
+      <ol>
+        <li>Revoke sessions on the Microsoft account and reset the password.</li>
+        <li>
+          Remove the account from the hub allowlist, <code>Entra__Allowlist__*</code>. This ends
+          access; it is checked on connect and on every token refresh, so existing connections do
+          not survive it indefinitely.
+        </li>
+        <li>
+          On each paired machine: <code>1remote logout</code>, and kill any wrapper processes to end
+          live sessions. The running agent notices within a second and drops its hub connection,
+          which takes the machine off every client; it does not need restarting.
+        </li>
+        <li>Assume anything visible in an attached session was read, and rotate accordingly.</li>
+      </ol>
+
+      <h2 id="reporting">Reporting a vulnerability</h2>
+
+      <p>
+        Mail <a href="mailto:eran@yariv.org?subject=1RemoteCLI%20security">eran@yariv.org</a> rather
+        than opening a public issue. If you have access to the repository, a private security
+        advisory there is better still.
+      </p>
+
+      <footer>
+        <p>
+          <a href="/readme.html">Readme</a> · <a href="/">Open the app</a>
+        </p>
+      </footer>
+    </main>
+  </body>
+</html>

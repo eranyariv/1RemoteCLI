@@ -184,11 +184,13 @@ else {
     if ($blocked) {
         $ransomware = @($blocked | Where-Object { $_.Rule -eq 'C1DB55AB-C21A-4637-BB3F-A12568109D35' })
 
-        # The block only lifts if the machine asks Microsoft about the file, and not
-        # every machine does. One seen here paired every block with a cloud lookup and
-        # allowed the file twenty minutes later; another blocked eight times without a
-        # single lookup and never changed its mind. Same rule, same file, opposite
-        # advice -- so measure it rather than assuming the first machine's behaviour.
+        # Whether the block will ever lift is the only question worth answering here,
+        # and Defender does not report it. Cloud lookups looked like the signal -- one
+        # machine paired them with every block and allowed the file twenty minutes
+        # later -- but another asks occasionally and has still refused the same file
+        # for the best part of an hour. So use the thing actually being asked about:
+        # how long this machine has been saying no. Past the point where waiting works
+        # elsewhere, waiting has been tried here, and it has failed.
         $lookups = Get-Events 'Microsoft-Windows-Windows Defender/Operational' 2010 $since
         $asked = @($blocked | Where-Object {
                 $block = $_.When
@@ -197,14 +199,27 @@ else {
 
         Write-Fact 'asked cloud' "$($asked.Count) of $($blocked.Count) blocks"
 
+        $first = ($blocked | Sort-Object When | Select-Object -First 1).When
+        $spanMinutes = [int]((Get-Date) - $first).TotalMinutes
+        $span = "$spanMinutes minutes"
+
+        if ($spanMinutes -ge ($Minutes - 1)) {
+            $span = "at least $spanMinutes minutes, which is as far back as this report looks"
+        }
+
+        Write-Fact 'refusing for' $span
+
         if ($ransomware) {
             $rule = "An attack surface reduction rule blocked the launch: 'Use advanced protection against ransomware'. It refuses executables it has no reputation for, and every release is a new file with no reputation."
 
-            if ($asked.Count) {
-                Add-Finding 'blocking' "$rule This machine did ask Microsoft about the file, so it can still come back clean and be allowed -- but not quickly. Twenty minutes has been measured, so a few seconds of retrying proves nothing. Wait half an hour and try again."
+            if ($startedNow) {
+                Add-Finding 'blocking' "$rule It has stopped: the file ran when this report tried it."
+            }
+            elseif ($spanMinutes -ge 30) {
+                Add-Finding 'blocking' "$rule Where it lifts on its own it takes about twenty minutes, and this machine has been refusing the same file for $span. Waiting has already been tried here and has not worked, so rescanning, reinstalling or downloading it again will not help either. It needs an administrator to allow it, or a signed build."
             }
             else {
-                Add-Finding 'blocking' "$rule This machine refused it without ever asking Microsoft about it -- no cloud lookup accompanied any of the blocks. That means the verdict will not arrive on its own, and waiting, rescanning or downloading it again will all fail the same way. It needs an administrator to allow it, or a signed build."
+                Add-Finding 'blocking' "$rule It can still come back clean and be allowed, but not quickly: twenty minutes has been measured, so a few seconds of retrying proves nothing. Wait half an hour, then run this report again -- if it is still refusing by then, waiting is not going to fix it."
             }
         }
         else {

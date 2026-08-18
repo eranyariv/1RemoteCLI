@@ -184,8 +184,28 @@ else {
     if ($blocked) {
         $ransomware = @($blocked | Where-Object { $_.Rule -eq 'C1DB55AB-C21A-4637-BB3F-A12568109D35' })
 
+        # The block only lifts if the machine asks Microsoft about the file, and not
+        # every machine does. One seen here paired every block with a cloud lookup and
+        # allowed the file twenty minutes later; another blocked eight times without a
+        # single lookup and never changed its mind. Same rule, same file, opposite
+        # advice -- so measure it rather than assuming the first machine's behaviour.
+        $lookups = Get-Events 'Microsoft-Windows-Windows Defender/Operational' 2010 $since
+        $asked = @($blocked | Where-Object {
+                $block = $_.When
+                $lookups | Where-Object { [math]::Abs(($_.TimeCreated - $block).TotalSeconds) -le 90 }
+            })
+
+        Write-Fact 'asked cloud' "$($asked.Count) of $($blocked.Count) blocks"
+
         if ($ransomware) {
-            Add-Finding 'blocking' "An attack surface reduction rule blocked the launch: 'Use advanced protection against ransomware'. It refuses executables it has no reputation for, and every release is a new file with no reputation. It does lift once the file has been checked and comes back clean, but not quickly -- twenty minutes has been measured, so retrying for a few seconds proves nothing. Wait half an hour, then try again. If it still refuses, the rule is in block mode by your organisation's policy and only an administrator can allow it."
+            $rule = "An attack surface reduction rule blocked the launch: 'Use advanced protection against ransomware'. It refuses executables it has no reputation for, and every release is a new file with no reputation."
+
+            if ($asked.Count) {
+                Add-Finding 'blocking' "$rule This machine did ask Microsoft about the file, so it can still come back clean and be allowed -- but not quickly. Twenty minutes has been measured, so a few seconds of retrying proves nothing. Wait half an hour and try again."
+            }
+            else {
+                Add-Finding 'blocking' "$rule This machine refused it without ever asking Microsoft about it -- no cloud lookup accompanied any of the blocks. That means the verdict will not arrive on its own, and waiting, rescanning or downloading it again will all fail the same way. It needs an administrator to allow it, or a signed build."
+            }
         }
         else {
             Add-Finding 'blocking' "An attack surface reduction rule blocked the launch: $($blocked[0].Rule). Look it up in Microsoft's ASR rules reference; if it is enforced by policy, an administrator has to allow it."

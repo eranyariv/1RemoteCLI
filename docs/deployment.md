@@ -195,6 +195,8 @@ Get-FileHash .\1remote-win-x64.exe -Algorithm SHA256
 
 That is still a genuinely weaker guarantee than a signature: it only proves the file matches the one the workflow built, not who built it. If this ever leaves a small trusted group, buy a certificate.
 
+Being unsigned also costs something at install time, not just at first run. Windows blocks the first launch of a build it has no reputation for, and on a machine managed by an organisation that block comes from the attack surface reduction rule **"Use advanced protection against ransomware"** — reported as `Access is denied`, with a Windows Security popup that blames `powershell.exe`. Every release is a new unknown file, so this recurs on every upgrade. `install.ps1` retries the launch, which clears it once the file has been checked and comes back clean; see [getting started](getting-started.md#windows-blocked-the-install) for what to do when it does not. A certificate would end this class of problem too, since reputation accrues to the publisher rather than to each individual build.
+
 ### Install path and upgrades
 
 `install.ps1` puts the executable at `%LOCALAPPDATA%\Programs\1RemoteCLI\1remote.exe` and runs `1remote install`, which registers the logon task, the Start menu entries and the `PATH` entry.

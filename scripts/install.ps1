@@ -203,13 +203,18 @@ try {
 
     Write-Step "Installed to $installed"
 
-    # Defender opens a newly written executable to scan it before letting anything run
-    # it, and a 14 MB single-file binary takes long enough that CreateProcess can land
-    # inside that window and come back "Access is denied". It is a race, not a
-    # permission: the same call succeeds moments later. Left unhandled it fails the
-    # install at the last step, after the download and the hash check have both passed,
-    # with a message that names no cause -- and alongside a Windows Security popup that
-    # makes it look like the tool is the problem.
+    # Windows blocks the first launch of a build nobody has run before. On a machine
+    # managed by an organisation the block comes from the attack surface reduction rule
+    # "Use advanced protection against ransomware", which refuses executables it has no
+    # reputation for; it surfaces as "Access is denied" plus a Windows Security popup
+    # naming powershell.exe, and neither says anything about reputation. The verdict is
+    # not permanent -- once the file has been submitted and comes back clean, seconds
+    # later, the same launch is allowed -- so retrying is enough. Observed on a managed
+    # machine: rule C1DB55AB-C21A-4637-BB3F-A12568109D35, event 1121, blocked on the
+    # first attempt of a fresh version and allowed on the next.
+    #
+    # Each blocked attempt costs a couple of seconds inside Windows, so this is bounded
+    # by attempts rather than by a deadline.
     $attempts = 6
     $ran = $false
 
@@ -221,11 +226,19 @@ try {
         }
         catch {
             if ($attempt -eq $attempts) {
-                throw "Could not start '$installed' after $attempts attempts: $($_.Exception.Message)"
+                throw @"
+Windows would not let '$installed' start, after $attempts attempts: $($_.Exception.Message)
+
+The download is installed and its hash matched the release, so the file is fine. This
+is Windows refusing to run a build it has no reputation for yet -- these releases are
+unsigned. Look in Windows Security > Protection history: if it names an attack surface
+reduction rule, the block came from your organisation's policy and an administrator has
+to allow it. Otherwise, wait a minute and run '$installed install' again.
+"@
             }
 
             if ($attempt -eq 1) {
-                Write-Step 'Waiting for Windows to finish scanning the download'
+                Write-Step 'Windows is checking the download; waiting for it to allow the first run'
             }
 
             Start-Sleep -Milliseconds 500

@@ -202,6 +202,28 @@ Compare that against the SHA-256 published with the release. If it matches, clic
 
 If you would rather not trust a hash from the same place as the binary, build it yourself — `scripts\publish-agent.ps1` produces exactly what the release contains, and prints the hash.
 
+## Windows blocked the install
+
+Different problem, and it looks much worse than it is. The install script downloads, checks the hash, copies the file — and then fails on the last line:
+
+```
+Program '1remote.exe' failed to run: Access is denied
+```
+
+with a Windows Security popup at the same moment. Nothing is wrong with the download. Windows is refusing to run a build it has no reputation for, because it has never seen this exact file before and there is no signature to inherit trust from.
+
+On a machine managed by an organisation, the refusal usually comes from the attack surface reduction rule **"Use advanced protection against ransomware"**. Windows Security → **Protection history** names it, and confusingly blames `powershell.exe` rather than the executable it actually stopped.
+
+The verdict is not permanent. Once the file has been checked and comes back clean, seconds later, the same launch is allowed — so the install script retries, and on the machines seen so far the second attempt succeeds. If it still gives up:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\1RemoteCLI\1remote.exe" install
+```
+
+That finishes the half-done install — the executable was already in place. If *that* is blocked too, and Protection history names an attack surface reduction rule, the block is your organisation's policy and only an administrator can allow it.
+
+Both this and the SmartScreen warning above have the same root cause: these builds are unsigned. See [deployment](deployment.md#it-is-not-signed).
+
 ## Uninstalling
 
 ```powershell

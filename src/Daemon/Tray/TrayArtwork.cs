@@ -1,6 +1,7 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.Versioning;
 
@@ -23,12 +24,38 @@ namespace OneRemoteCli.Daemon.Tray;
 /// a dark taskbar when the badge is too small to resolve. Any one of the three can fail
 /// and the icon still answers the only question it exists to answer: is this working.
 /// </para>
+/// <para>
+/// The live session count is carried by the artwork itself (issue #76) rather than
+/// composited at run time: <c>assets/tray</c> holds a drawn variant per count and
+/// <c>scripts/make-icons.ps1</c> turns each into its own <c>.ico</c>. Picking a whole
+/// prepared image is what lets the number survive 16 pixels — a digit drawn into the
+/// corner at that size is a grey smudge whatever care goes into it. The count is also
+/// deliberately independent of the connection state: sessions keep running while the
+/// hub is down, so the number means the same thing in all three states and is shown in
+/// all three.
+/// </para>
 /// </summary>
 [SupportedOSPlatform("windows")]
 public static class TrayArtwork
 {
     /// <summary>Matches the <c>LogicalName</c> the daemon project embeds the icon under.</summary>
     internal const string LogoResourceName = "1RemoteCLI.Tray.Logo.ico";
+
+    /// <summary>
+    /// The counted variants, one per count. <c>{0}</c> is the count, or <c>More</c>.
+    /// </summary>
+    internal const string CountResourceFormat = "1RemoteCLI.Tray.Count.{0}.ico";
+
+    /// <summary>
+    /// The first count drawn as <c>&gt;9</c> rather than as itself.
+    /// <para>
+    /// Two digits at 16 pixels is a handful of pixels of stroke per digit, which is
+    /// mush. And nobody with ten live sessions is reading a tray icon to find out
+    /// whether it is eleven — past a point the only fact left is "a lot", so that is
+    /// what the artwork says.
+    /// </para>
+    /// </summary>
+    public const int CountCeiling = 10;
 
     private static readonly Color Green = Color.FromArgb(0x3F, 0xB9, 0x50);
     private static readonly Color Amber = Color.FromArgb(0xE3, 0xB3, 0x41);
@@ -42,7 +69,11 @@ public static class TrayArtwork
     /// </summary>
     /// <param name="state">What the agent is doing.</param>
     /// <param name="size">Edge length in pixels. Pass the shell's small-icon size.</param>
-    public static Icon Create(AgentState state, int size)
+    /// <param name="sessions">
+    /// Live sessions. Zero gets the plain mark: a permanent "0" is noise that says
+    /// exactly what an undecorated icon already says.
+    /// </param>
+    public static Icon Create(AgentState state, int size, int sessions = 0)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(size, 8);
 
@@ -55,8 +86,8 @@ public static class TrayArtwork
             graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
             graphics.Clear(Color.Transparent);
 
-            DrawMark(graphics, state, size);
-            DrawBadge(graphics, state, size);
+            DrawMark(graphics, state, size, sessions);
+            DrawBadge(graphics, state, size, sessions);
         }
 
         return FromBitmap(bitmap);
@@ -72,9 +103,9 @@ public static class TrayArtwork
     /// is cosmetic, losing the status is not.
     /// </para>
     /// </summary>
-    private static void DrawMark(Graphics graphics, AgentState state, int size)
+    private static void DrawMark(Graphics graphics, AgentState state, int size, int sessions)
     {
-        using Image? mark = LoadMark(size);
+        using Image? mark = LoadMark(size, sessions);
 
         if (mark is null)
         {
@@ -130,8 +161,8 @@ public static class TrayArtwork
     }
 
     /// <summary>
-    /// Stamps the status badge into the bottom-right corner, inside a punched-out
-    /// moat so it never dissolves into the mark behind it.
+    /// Stamps the status badge into a bottom corner, inside a punched-out moat so it
+    /// never dissolves into the mark behind it.
     /// <para>
     /// Nothing is drawn when the agent is connected. Working is the state the icon is
     /// in almost all the time, and a badge there is noise: a green dot on a green mark
@@ -139,8 +170,16 @@ public static class TrayArtwork
     /// merge into one shape. Leaving it clean makes the badge mean something — if the
     /// tray is decorated, something wants attention.
     /// </para>
+    /// <para>
+    /// Which corner depends on whether a count is showing. The counted artwork puts its
+    /// number in a disc down the right-hand side, so a badge in the usual bottom-right
+    /// would land its moat through the digit and cost the count the legibility the
+    /// separate artwork was drawn to buy. Bottom-left is empty in every counted variant,
+    /// so that is where it goes; with no count the mark is centred and the badge keeps
+    /// the corner it has always had.
+    /// </para>
     /// </summary>
-    private static void DrawBadge(Graphics graphics, AgentState state, int size)
+    private static void DrawBadge(Graphics graphics, AgentState state, int size, int sessions)
     {
         if (state == AgentState.Connected)
         {
@@ -148,7 +187,7 @@ public static class TrayArtwork
         }
 
         float diameter = Math.Max(6f, size * 0.46f);
-        float x = size - diameter;
+        float x = sessions > 0 ? 0f : size - diameter;
         float y = size - diameter;
         var bounds = new RectangleF(x, y, diameter - 1, diameter - 1);
 
@@ -191,6 +230,7 @@ public static class TrayArtwork
         _ => Grey,
     };
 
+
     private static Rectangle Inset(int size)
     {
         int margin = Math.Max(1, size / 8);
@@ -199,20 +239,41 @@ public static class TrayArtwork
     }
 
     /// <summary>
-    /// Pulls the closest frame out of the embedded <c>.ico</c>.
+    /// Pulls the closest frame out of the embedded <c>.ico</c> for this count.
     /// <para>
-    /// The container carries mark-only frames at 16, 20, 24, 32, 40 and 48 — every
+    /// Every container carries mark-only frames at 16, 20, 24, 32, 40 and 48 — every
     /// size the shell asks for across display scalings — so this is a lookup rather
     /// than a resize, and the glyph stays crisp at 150% where a scaled 16px bitmap
     /// turns to mush.
     /// </para>
+    /// <para>
+    /// A missing counted container falls back to the plain mark rather than to nothing.
+    /// Losing the number is a shame; losing the icon that tells the user whether their
+    /// machine is reachable is not something a build slip should be able to do.
+    /// </para>
     /// </summary>
-    private static Image? LoadMark(int size)
+    private static Image? LoadMark(int size, int sessions)
+    {
+        return Read(ResourceFor(sessions), size)
+            ?? (sessions > 0 ? Read(LogoResourceName, size) : null);
+    }
+
+    /// <summary>
+    /// Which embedded container carries this count.
+    /// </summary>
+    internal static string ResourceFor(int sessions) => sessions switch
+    {
+        <= 0 => LogoResourceName,
+        >= CountCeiling => string.Format(CultureInfo.InvariantCulture, CountResourceFormat, "More"),
+        _ => string.Format(CultureInfo.InvariantCulture, CountResourceFormat, sessions),
+    };
+
+    private static Image? Read(string resource, int size)
     {
         try
         {
             using Stream? stream = typeof(TrayArtwork).Assembly
-                .GetManifestResourceStream(LogoResourceName);
+                .GetManifestResourceStream(resource);
 
             if (stream is null)
             {

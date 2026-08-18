@@ -178,6 +178,110 @@ public sealed class TrayArtworkTests
         Assert.True(corner > 20, $"The badge corner barely changed between states ({corner} pixels).");
     }
 
+    [Fact]
+    public void ShowsADifferentIconForEveryCount()
+    {
+        // Ten renderings that have to be ten different pictures. The failure this
+        // catches is the quiet one: a resource name that does not resolve falls back
+        // to the plain mark, so every count would still draw something and the tray
+        // would simply stop counting without anything going red.
+        Dictionary<int, byte[]> pixels = Enumerable.Range(0, 10).ToDictionary(
+            count => count,
+            count =>
+            {
+                using Icon icon = TrayArtwork.Create(AgentState.Connected, 32, count);
+                using Bitmap bitmap = icon.ToBitmap();
+
+                return Flatten(bitmap);
+            });
+
+        foreach (int left in pixels.Keys)
+        {
+            foreach (int right in pixels.Keys.Where(c => c != left))
+            {
+                Assert.False(
+                    pixels[left].SequenceEqual(pixels[right]),
+                    $"Counts {left} and {right} render identically.");
+            }
+        }
+    }
+
+    [Fact]
+    public void StopsCountingPastTheCeiling()
+    {
+        // Ten and everything above it are one picture, and it is not the picture for
+        // nine: ">9" has to be distinguishable from the last number it replaces, or
+        // the tray silently plateaus at nine.
+        using Icon nine = TrayArtwork.Create(AgentState.Connected, 32, 9);
+        using Bitmap nineBitmap = nine.ToBitmap();
+
+        byte[] expected;
+
+        using (Icon ceiling = TrayArtwork.Create(AgentState.Connected, 32, TrayArtwork.CountCeiling))
+        using (Bitmap ceilingBitmap = ceiling.ToBitmap())
+        {
+            expected = Flatten(ceilingBitmap);
+        }
+
+        Assert.False(Flatten(nineBitmap).SequenceEqual(expected), "Nine and the ceiling render identically.");
+
+        foreach (int count in new[] { TrayArtwork.CountCeiling + 1, 47, int.MaxValue })
+        {
+            using Icon icon = TrayArtwork.Create(AgentState.Connected, 32, count);
+            using Bitmap bitmap = icon.ToBitmap();
+
+            Assert.True(Flatten(bitmap).SequenceEqual(expected), $"{count} does not render as the ceiling.");
+        }
+    }
+
+    [Theory]
+    [InlineData(AgentState.Connected)]
+    [InlineData(AgentState.Reconnecting)]
+    [InlineData(AgentState.SignedOut)]
+    public void KeepsCountingWhateverTheConnectionIsDoing(AgentState state)
+    {
+        // Sessions keep running while the hub is unreachable, so the count means the
+        // same thing in every state and has to survive every state's treatment. The
+        // greyscale one is the risk: drain the colour and a count drawn in the wrong
+        // tone would vanish into the mark.
+        using Icon idle = TrayArtwork.Create(state, 16);
+        using Icon busy = TrayArtwork.Create(state, 16, 3);
+        using Bitmap a = idle.ToBitmap();
+        using Bitmap b = busy.ToBitmap();
+
+        int differences = Silhouette(a)
+            .Zip(Silhouette(b), (x, y) => x == y ? 0 : 1)
+            .Sum();
+
+        Assert.True(differences > 8, $"{state} shows the same shape with and without a count ({differences} pixels).");
+    }
+
+    [Theory]
+    [InlineData(16)]
+    [InlineData(20)]
+    [InlineData(24)]
+    [InlineData(32)]
+    [InlineData(40)]
+    [InlineData(48)]
+    public void ShipsARealFrameForEverySizeTheShellAsksFor(int size)
+    {
+        // Every count container carries a frame at each of these sizes, so asking for
+        // one is a lookup rather than a resize. A missing frame is not an error - GDI+
+        // stretches the nearest one and the count turns to mush - so the only way to
+        // notice is to check the frames are there.
+        foreach (int count in new[] { 0, 1, 5, 9, TrayArtwork.CountCeiling })
+        {
+            using Stream stream = typeof(TrayArtwork).Assembly
+                .GetManifestResourceStream(TrayArtwork.ResourceFor(count))
+                ?? throw new InvalidOperationException($"No artwork is embedded for a count of {count}.");
+
+            using var icon = new Icon(stream, size, size);
+
+            Assert.Equal(size, icon.Width);
+            Assert.Equal(size, icon.Height);
+        }
+    }
+
     private static int Opaque(Bitmap bitmap)
     {
         int count = 0;

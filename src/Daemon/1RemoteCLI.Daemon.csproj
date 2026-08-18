@@ -19,6 +19,21 @@
          as a terminal, but the shell composites a tray icon straight onto the
          taskbar, where an opaque tile would be a black box. -->
     <EmbeddedResource Include="..\..\assets\1remote-tray.ico" LogicalName="1RemoteCLI.Tray.Logo.ico" />
+
+    <!-- One container per live-session count, plus a ">9" for everything above them
+         (issue #76). Shipping eleven drawn variants rather than compositing a digit at
+         run time is what makes the number legible at 16 pixels; see TrayArtwork and
+         scripts/make-icons.ps1, which generates all of them from assets/tray. -->
+    <EmbeddedResource Include="..\..\assets\1remote-tray-1.ico" LogicalName="1RemoteCLI.Tray.Count.1.ico" />
+    <EmbeddedResource Include="..\..\assets\1remote-tray-2.ico" LogicalName="1RemoteCLI.Tray.Count.2.ico" />
+    <EmbeddedResource Include="..\..\assets\1remote-tray-3.ico" LogicalName="1RemoteCLI.Tray.Count.3.ico" />
+    <EmbeddedResource Include="..\..\assets\1remote-tray-4.ico" LogicalName="1RemoteCLI.Tray.Count.4.ico" />
+    <EmbeddedResource Include="..\..\assets\1remote-tray-5.ico" LogicalName="1RemoteCLI.Tray.Count.5.ico" />
+    <EmbeddedResource Include="..\..\assets\1remote-tray-6.ico" LogicalName="1RemoteCLI.Tray.Count.6.ico" />
+    <EmbeddedResource Include="..\..\assets\1remote-tray-7.ico" LogicalName="1RemoteCLI.Tray.Count.7.ico" />
+    <EmbeddedResource Include="..\..\assets\1remote-tray-8.ico" LogicalName="1RemoteCLI.Tray.Count.8.ico" />
+    <EmbeddedResource Include="..\..\assets\1remote-tray-9.ico" LogicalName="1RemoteCLI.Tray.Count.9.ico" />
+    <EmbeddedResource Include="..\..\assets\1remote-tray-more.ico" LogicalName="1RemoteCLI.Tray.Count.More.ico" />
   </ItemGroup>
 
   <ItemGroup>

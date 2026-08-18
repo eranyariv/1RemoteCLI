@@ -258,8 +258,13 @@ One per machine.
 | Connected | filled green dot | Reachable. Tooltip gives the session count. |
 | Reconnecting | hollow amber ring | Trying. Tooltip says local sessions keep working regardless. |
 | Signed out | hollow grey ring with a slash | Only the user can fix it. *Sign in* is enabled. |
+Distinguishable by shape as well as colour: colour alone fails for red/green colour blindness and at 16 px against a dark taskbar. The connection badge is composited at runtime over the mark.
 
-Distinguishable by shape as well as colour: colour alone fails for red/green colour blindness and at 16 px against a dark taskbar. Icons are drawn at runtime rather than shipped as resources.
+**Session count.** The icon also carries the number of live sessions, so the answer to "is anything running on that machine" needs neither a hover nor a click. Nothing is shown for zero — a permanent "0" says exactly what a bare icon already says, and spends the annotation's one asset, that it means something when it is there. One through nine show the number; ten and above show `>9`, because two digits at 16 px is mush and nobody with ten sessions is reading a tray icon to learn whether it is eleven.
+
+The count is **shipped artwork, not drawn at runtime**. `assets/tray` holds a drawn 512 px variant per count and `scripts/make-icons.ps1` renders each into its own `.ico` at 16, 20, 24, 32, 40 and 48, which the daemon embeds and selects by count. A digit composited into a corner at 16 px is a grey smudge whatever care goes into it; picking a whole prepared image is what makes the number legible. The counted variants share one frame so the mark holds still as the number ticks over, and the count sits in a white disc so it survives a dark taskbar as well as a light one. Because the counted artwork occupies the right of the icon, the connection badge moves to the bottom-left whenever a count is showing.
+
+The count is independent of the connection state and is shown in all three: sessions keep running while the hub is unreachable, so the number means the same thing however the connection is doing. It is read from the session registry — the same source as the tooltip and the settings window, so the three can never disagree — and the shell is only asked to repaint when the icon actually changes, so a busy session does not become a repaint per output frame.
 
 The tooltip is the whole diagnostic surface for someone whose phone has stopped seeing a machine, so it leads with the state and the machine name and is truncated to the 127 characters Windows will show — beyond that Windows drops the tooltip entirely rather than truncating it.
 

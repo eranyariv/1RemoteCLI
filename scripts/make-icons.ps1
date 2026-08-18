@@ -309,23 +309,176 @@ function New-Frames {
 
 Save-Ico -Frames (New-Frames -Spec $icoFrames) -Path (Join-Path $assets "1remote.ico")
 
-Write-Host "==> Tray icon"
+Write-Host "==> Tray icons"
 
-# Separate from the application icon, and transparent, because the shell composites a
-# tray icon straight onto the taskbar. The black tile that makes the app icon read as
-# a terminal would be a black box here. Only the sizes the shell asks for across
-# display scalings, and mark-only at every one of them -- the prompt line is mush
-# below 48 and the tray never goes above it.
-$trayFrames = @(
-    @{ Size = 16; Margin = 0.02; MarkOnly = $true }
-    @{ Size = 20; Margin = 0.02; MarkOnly = $true }
-    @{ Size = 24; Margin = 0.02; MarkOnly = $true }
-    @{ Size = 32; Margin = 0.02; MarkOnly = $true }
-    @{ Size = 40; Margin = 0.02; MarkOnly = $true }
-    @{ Size = 48; Margin = 0.02; MarkOnly = $true }
-)
+# The tray family comes from its own artwork rather than from logo.png, because the
+# tray has to say something logo.png cannot: how many sessions are live. assets/tray
+# holds eleven drawn variants -- the plain mark, one per count 1..9, and one ">9" --
+# and each becomes its own .ico. Picking a whole prepared image per count is what lets
+# the count survive 16 pixels; a digit composited at run time is mush at that size.
+#
+# Transparent, and only the sizes the shell asks for across display scalings, for the
+# same reasons as before: the shell composites a tray icon straight onto the taskbar,
+# so the black tile that makes the app icon read as a terminal would be a black box
+# here, and the tray never goes above 48.
+$trayCounts = @("base", "1", "2", "3", "4", "5", "6", "7", "8", "9", "more")
+$traySizes = @(16, 20, 24, 32, 40, 48)
+$trayMargin = 0.02
+$trayArt = Join-Path $assets "tray"
 
-Save-Ico -Frames (New-Frames -Spec $trayFrames -Transparent) -Path (Join-Path $assets "1remote-tray.ico")
+function Get-Bounds {
+    <#
+        The opaque extent of a bitmap, optionally limited to the rows above `MaxY`.
+        Returns $null when nothing in range is opaque.
+    #>
+    param([System.Drawing.Bitmap]$Bitmap, [int]$MaxY = [int]::MaxValue)
+
+    $x1 = $Bitmap.Width; $x2 = -1; $y1 = $Bitmap.Height; $y2 = -1
+    $bottom = [Math]::Min($Bitmap.Height - 1, $MaxY)
+
+    $data = $Bitmap.LockBits(
+        (New-Object System.Drawing.Rectangle 0, 0, $Bitmap.Width, $Bitmap.Height),
+        [System.Drawing.Imaging.ImageLockMode]::ReadOnly,
+        [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+
+    $bytes = New-Object 'byte[]' ($data.Stride * $Bitmap.Height)
+    [System.Runtime.InteropServices.Marshal]::Copy($data.Scan0, $bytes, 0, $bytes.Length)
+    $Bitmap.UnlockBits($data)
+
+    for ($y = 0; $y -le $bottom; $y++) {
+        $row = $y * $data.Stride
+        for ($x = 0; $x -lt $Bitmap.Width; $x++) {
+            # BGRA little-endian: alpha is the fourth byte of each pixel.
+            if ($bytes[$row + ($x * 4) + 3] -lt 128) { continue }
+
+            if ($x -lt $x1) { $x1 = $x }
+            if ($x -gt $x2) { $x2 = $x }
+            if ($y -lt $y1) { $y1 = $y }
+            if ($y -gt $y2) { $y2 = $y }
+        }
+    }
+
+    if ($x2 -lt 0) { return $null }
+
+    return New-Object System.Drawing.Rectangle $x1, $y1, ($x2 - $x1 + 1), ($y2 - $y1 + 1)
+}
+
+function Get-Union {
+    param([System.Drawing.Rectangle[]]$Rectangles)
+
+    $union = $Rectangles[0]
+    foreach ($rectangle in $Rectangles) {
+        $union = [System.Drawing.Rectangle]::Union($union, $rectangle)
+    }
+
+    return $union
+}
+
+$trayBitmaps = [ordered]@{}
+foreach ($count in $trayCounts) {
+    $path = Join-Path $trayArt "$count.png"
+    if (-not (Test-Path $path)) { throw "Tray artwork not found: $path" }
+    $trayBitmaps[$count] = [System.Drawing.Bitmap]::FromFile([string](Resolve-Path $path))
+}
+
+# The artwork is the full lockup: the numeral, a count plate beside it, and "CLI"
+# underneath. "CLI" is grey mush below 48 pixels and the tray never gets that big, so
+# the same cut make-icons applies to the app icon applies here -- everything above the
+# widest band of empty rows in the plain variant. On the counted variants that band is
+# where the plate sits, which is why the cut is measured once, on `base`, and reused.
+$baseBounds = Get-Bounds -Bitmap $trayBitmaps["base"]
+$scan = $trayBitmaps["base"]
+
+# Rows the artwork occupies, then the widest empty run inside it.
+$rowInk = New-Object 'bool[]' $scan.Height
+for ($y = 0; $y -lt $scan.Height; $y++) {
+    for ($x = 0; $x -lt $scan.Width; $x++) {
+        if ($scan.GetPixel($x, $y).A -ge 128) { $rowInk[$y] = $true; break }
+    }
+}
+
+$bestStart = -1; $bestLength = 0; $gapStart = -1
+for ($y = $baseBounds.Top; $y -le $baseBounds.Bottom; $y++) {
+    if (-not $rowInk[$y]) {
+        if ($gapStart -lt 0) { $gapStart = $y }
+    }
+    elseif ($gapStart -ge 0) {
+        $length = $y - $gapStart
+        if ($length -gt $bestLength) { $bestLength = $length; $bestStart = $gapStart }
+        $gapStart = -1
+    }
+}
+
+$markMaxY = if ($bestStart -gt 0) { $bestStart + $bestLength - 1 } else { $baseBounds.Bottom }
+Write-Host ("    lockup cut above y {0}" -f $markMaxY)
+
+$trayBounds = [ordered]@{}
+foreach ($count in $trayCounts) {
+    $trayBounds[$count] = Get-Bounds -Bitmap $trayBitmaps[$count] -MaxY $markMaxY
+}
+
+# Every counted variant is framed by the union of all of them, so the mark holds still
+# as the count ticks over instead of breathing between 1 and 9. `base` keeps its own
+# tighter frame: an idle tray is the common case and gets the whole 16 pixels, and the
+# resize that comes with the first session reads as the state change it is.
+$countedFrame = Get-Union -Rectangles ($trayCounts | Where-Object { $_ -ne "base" } | ForEach-Object { $trayBounds[$_] })
+Write-Host ("    plain frame   {0}" -f $trayBounds["base"])
+Write-Host ("    counted frame {0}" -f $countedFrame)
+
+function New-TrayFrame {
+    param([System.Drawing.Bitmap]$Source, [System.Drawing.Rectangle]$Crop, [int]$Size)
+
+    $canvas = New-Object System.Drawing.Bitmap $Size, $Size, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $g = [System.Drawing.Graphics]::FromImage($canvas)
+    $g.Clear([System.Drawing.Color]::Transparent)
+    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $g.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+
+    $available = $Size * (1.0 - (2.0 * $trayMargin))
+    $ratio = [Math]::Min($available / $Crop.Width, $available / $Crop.Height)
+    $drawW = [Math]::Max(1, [int][Math]::Round($Crop.Width * $ratio))
+    $drawH = [Math]::Max(1, [int][Math]::Round($Crop.Height * $ratio))
+
+    $target = New-Object System.Drawing.Rectangle `
+        ([int][Math]::Round(($Size - $drawW) / 2.0)), `
+        ([int][Math]::Round(($Size - $drawH) / 2.0)), `
+        $drawW, `
+        $drawH
+
+    # DrawImage samples outside the source rectangle unless told not to, which drags
+    # the transparent pixels around the artwork into its edges and leaves a halo.
+    $wrap = New-Object System.Drawing.Imaging.ImageAttributes
+    $wrap.SetWrapMode([System.Drawing.Drawing2D.WrapMode]::TileFlipXY)
+
+    $g.DrawImage($Source, $target, $Crop.X, $Crop.Y, $Crop.Width, $Crop.Height, [System.Drawing.GraphicsUnit]::Pixel, $wrap)
+
+    $wrap.Dispose()
+    $g.Dispose()
+
+    return $canvas
+}
+
+foreach ($count in $trayCounts) {
+    $crop = if ($count -eq "base") { $trayBounds["base"] } else { $countedFrame }
+
+    $frames = @()
+    foreach ($size in $traySizes) {
+        $bitmap = New-TrayFrame -Source $trayBitmaps[$count] -Crop $crop -Size $size
+
+        $stream = New-Object System.IO.MemoryStream
+        $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+        $frames += , @{ Size = $size; Bytes = $stream.ToArray() }
+
+        $stream.Dispose()
+        $bitmap.Dispose()
+    }
+
+    $name = if ($count -eq "base") { "1remote-tray.ico" } else { "1remote-tray-$count.ico" }
+    Save-Ico -Frames $frames -Path (Join-Path $assets $name)
+}
+
+foreach ($bitmap in $trayBitmaps.Values) { $bitmap.Dispose() }
 
 Write-Host ""
 Write-Host "Done. Rebuild the agent and re-run scripts/publish-hub.ps1 to ship these."

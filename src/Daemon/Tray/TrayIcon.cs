@@ -39,7 +39,7 @@ public sealed class TrayIcon : IDisposable
 
     private readonly Thread _thread;
     private readonly ManualResetEventSlim _ready = new(false);
-    private readonly Dictionary<AgentState, Icon> _icons = [];
+    private readonly Dictionary<(AgentState State, int Sessions), Icon> _icons = [];
 
     /// <summary>
     /// Held in a field because the window class keeps the pointer for as long as the
@@ -59,6 +59,17 @@ public sealed class TrayIcon : IDisposable
     private int _taskbarCreated;
 
     private volatile TrayState _current = new(AgentState.Reconnecting, 0, null);
+
+    /// <summary>
+    /// What the shell was last told, so an update that changes nothing costs nothing.
+    /// <para>
+    /// The session count arrives on the registry's change event, which is quiet — but
+    /// the connection state and the signed-in account feed the same refresh, and every
+    /// one of them asking the shell to repaint an identical icon is a repaint the tray
+    /// does not need. Compared by value, so this stays correct as the state grows.
+    /// </para>
+    /// </summary>
+    private TrayState? _shown;
 
     /// <summary>
     /// Created on this thread, on demand, and kept: reopening has to focus the window
@@ -390,7 +401,8 @@ public sealed class TrayIcon : IDisposable
             return;
         }
 
-        NOTIFYICONDATA data = Describe(NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP);
+        TrayState state = _current;
+        NOTIFYICONDATA data = Describe(state, NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP);
 
         if (!Shell_NotifyIcon(NIM_ADD, ref data))
         {
@@ -398,6 +410,7 @@ public sealed class TrayIcon : IDisposable
         }
 
         _iconAdded = true;
+        _shown = state;
 
         // Opt in to the modern callback packing. Has to follow the add, and is what
         // makes WM_CONTEXTMENU arrive with the point the menu should appear at.
@@ -416,25 +429,33 @@ public sealed class TrayIcon : IDisposable
 
     private void Render()
     {
-        if (!_iconAdded)
+        TrayState state = _current;
+
+        if (!_iconAdded || state == _shown)
         {
             return;
         }
 
-        NOTIFYICONDATA data = Describe(NIF_ICON | NIF_TIP | NIF_SHOWTIP);
+        NOTIFYICONDATA data = Describe(state, NIF_ICON | NIF_TIP | NIF_SHOWTIP);
 
         Shell_NotifyIcon(NIM_MODIFY, ref data);
+
+        _shown = state;
     }
 
-    private NOTIFYICONDATA Describe(int flags)
+    private NOTIFYICONDATA Describe(TrayState state, int flags)
     {
-        TrayPresentation view = Present();
+        TrayPresentation view = TrayPresenter.Present(
+            state.State,
+            state.Sessions,
+            _machineName,
+            state.Account);
 
         NOTIFYICONDATA data = Blank();
 
         data.uFlags = flags;
         data.uCallbackMessage = WM_TRAYICON;
-        data.hIcon = IconFor(view.Badge).Handle;
+        data.hIcon = IconFor(view.Badge, state.Sessions).Handle;
         data.szTip = view.Tooltip;
 
         return data;
@@ -477,25 +498,33 @@ public sealed class TrayIcon : IDisposable
 
         _icons.Clear();
         _window = IntPtr.Zero;
+        _shown = null;
     }
 
     /// <summary>
-    /// The icon for a state, built once and kept.
+    /// The icon for a state and a session count, built once and kept.
     /// <para>
     /// Sized from the shell rather than hardcoded to 16: on a 125% or 150% display
     /// Windows asks for 20 or 24 pixels, and answering with a stretched 16 is why a
     /// tray icon looks soft next to its neighbours.
     /// </para>
+    /// <para>
+    /// The count is clamped into the cache key rather than used raw, because every
+    /// count past the ceiling draws the same "&gt;9" and a raw key would quietly hold
+    /// one identical icon per session ever started.
+    /// </para>
     /// </summary>
-    private Icon IconFor(AgentState state)
+    private Icon IconFor(AgentState state, int sessions)
     {
-        if (_icons.TryGetValue(state, out Icon? cached))
+        int count = Math.Clamp(sessions, 0, TrayArtwork.CountCeiling);
+
+        if (_icons.TryGetValue((state, count), out Icon? cached))
         {
             return cached;
         }
 
-        Icon icon = TrayArtwork.Create(state, Math.Max(8, GetSystemMetrics(SM_CXSMICON)));
-        _icons[state] = icon;
+        Icon icon = TrayArtwork.Create(state, Math.Max(8, GetSystemMetrics(SM_CXSMICON)), count);
+        _icons[(state, count)] = icon;
 
         return icon;
     }

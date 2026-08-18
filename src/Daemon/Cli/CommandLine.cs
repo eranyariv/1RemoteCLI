@@ -21,7 +21,7 @@ public enum CommandKind
     /// <summary>Report who is signed in and whether the token still works.</summary>
     Status,
 
-    /// <summary>Start the agent at logon and add Start menu shortcuts.</summary>
+    /// <summary>Start the agent now and at every logon, and add Start menu shortcuts.</summary>
     Install,
 
     /// <summary>Undo <see cref="Install"/>.</summary>
@@ -335,7 +335,7 @@ public static class CommandLine
           1remote switch-account                  Sign in as a different account
           1remote logout                          Forget the cached sign-in
           1remote status                          Show who is signed in
-          1remote install                         Start the agent at every logon
+          1remote install                         Start the agent now and at every logon
           1remote uninstall                       Stop starting the agent at logon
           1remote wrap-shortcut <shortcut.lnk>    Copy a shortcut into a shareable one
 

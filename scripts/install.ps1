@@ -10,7 +10,8 @@
     Picks the build for this machine's architecture, checks it against the SHA-256
     published with the release, puts it under %LOCALAPPDATA%, and runs
     `1remote install` so the logon task, the Start Menu entries and the PATH entry
-    are all registered.
+    are all registered -- and the agent is started, so the tray icon is there when
+    this finishes rather than after the next logon.
 
     The hash check is not optional and there is no switch to skip it. These builds
     are unsigned, so SmartScreen's warning is the only thing standing between the
@@ -255,6 +256,8 @@ which it is, or look in Windows Security > Protection history.
         throw "1remote install failed. The executable is in place; run '$installed install' to see why."
     }
 
+    Write-Host ''
+    Write-Host 'The agent is running: its icon is in the notification area, by the clock.' -ForegroundColor Green
     Write-Host ''
     Write-Host 'Open a new terminal, then:' -ForegroundColor Green
     Write-Host '  1remote login     sign in' -ForegroundColor Green

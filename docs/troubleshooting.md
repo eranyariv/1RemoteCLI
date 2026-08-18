@@ -29,7 +29,7 @@ The agent is a separate process from the wrapper, and the wrapper will not start
 
 ```powershell
 1remote agent          # start it now, in this window
-1remote install        # and have it start at every logon
+1remote install        # or have it started now and at every logon
 ```
 
 If you already ran `1remote install` and it still is not running at logon, see [the agent does not start at logon](#the-agent-does-not-start-at-logon).

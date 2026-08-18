@@ -39,7 +39,8 @@ public static class Installer
             RunKey.Remove,
             () => RunKey.Register(exePath),
             () => StartMenu.Install(exePath),
-            () => PathEntry.Register(exePath));
+            () => PathEntry.Register(exePath),
+            () => AgentLaunch.Start(exePath));
 
     /// <summary>
     /// The install sequence, with the things it does passed in.
@@ -53,7 +54,8 @@ public static class Installer
         Func<StepResult> removeRunKey,
         Func<StepResult> addRunKey,
         Func<StepResult> installShortcuts,
-        Func<StepResult> addToPath)
+        Func<StepResult> addToPath,
+        Func<StepResult> startAgent)
     {
         // The autostart rule lives in Autostart, because the settings window's checkbox
         // does the same thing and two copies of "task, else Run key" would drift.
@@ -61,10 +63,15 @@ public static class Installer
 
         steps.Add(Step(installShortcuts));
 
-        // Last, and never conditional on the autostart: the agent starting by itself and
-        // the user being able to type '1remote' are independent, and on a machine where
-        // policy refused the task, running it by hand is the repair.
+        // Never conditional on the autostart: the agent starting by itself and the user
+        // being able to type '1remote' are independent, and on a machine where policy
+        // refused the task, running it by hand is the repair.
         steps.Add(Step(addToPath));
+
+        // Last, once there is something to start and a PATH to repair it from. Not
+        // conditional on the steps above either: an agent running now is what makes the
+        // machine reachable today, whatever the logon trigger did or did not manage.
+        steps.Add(Step(startAgent));
 
         return steps;
     }
@@ -117,7 +124,7 @@ public static class Installer
         if (failed == 0)
         {
             return installing
-                ? "1remote is installed. The agent starts automatically when you log on."
+                ? "1remote is installed and running. Its icon is in the notification area, by the clock; the agent starts again on its own every time you log on."
                 : "1remote is uninstalled. The executable itself is still where you put it.";
         }
 

@@ -199,7 +199,7 @@ Being unsigned also costs something at install time, not just at first run. Wind
 
 ### Install path and upgrades
 
-`install.ps1` puts the executable at `%LOCALAPPDATA%\Programs\1RemoteCLI\1remote.exe` and runs `1remote install`, which registers the logon task, the Start menu entries and the `PATH` entry.
+`install.ps1` puts the executable at `%LOCALAPPDATA%\Programs\1RemoteCLI\1remote.exe` and runs `1remote install`, which registers the logon task, the Start menu entries and the `PATH` entry, and then starts the agent so the install does not need a logout to take effect.
 
 If you install by hand, the location is your choice but it has to be **stable**. `1remote install` registers a scheduled task pointing at wherever the executable is at that moment; move it afterwards and the agent stops starting at logon with no error.
 

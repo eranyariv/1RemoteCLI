@@ -27,7 +27,7 @@ If you are on a personal machine with no such protections, a plain PowerShell wi
 
 The same applies to upgrades: run those from the CLI too, or the new build arrives untrusted and you are back where you started.
 
-That picks the build for your architecture, **checks it against the SHA-256 published with the release**, puts it in `%LOCALAPPDATA%\Programs\1RemoteCLI`, registers the logon task and the Start menu entries, and adds it to your `PATH`.
+That picks the build for your architecture, **checks it against the SHA-256 published with the release**, puts it in `%LOCALAPPDATA%\Programs\1RemoteCLI`, registers the logon task and the Start menu entries, adds it to your `PATH` — and starts the agent, so its icon appears in the notification area straight away rather than after your next logon.
 
 No GitHub account and no token: the repository is public, so the script and the release assets both download anonymously. The only reason to set `GITHUB_TOKEN` is the GitHub API rate limit, which is counted per IP address for unauthenticated callers; the script uses the token if it finds one and does not need it otherwise.
 
@@ -78,15 +78,19 @@ Confirm:
 1remote status
 ```
 
-## 3. Start the agent
+## 3. The agent
 
-Installing registered it to start at every logon, so it will be there after the next one. To start it now without logging out:
+Installing started it and registered it to start again at every logon, so there is nothing to do here: you should already have a tray icon.
+
+That icon is the agent — one per machine, owning the connection to the hub and the list of live sessions. Sessions are *not* shared unless it is running, and the wrapper will tell you so rather than quietly running unshared.
+
+If there is no icon, start it by hand and see what it says:
 
 ```powershell
 1remote agent
 ```
 
-You will get a tray icon. That is the agent: one per machine, owning the connection to the hub and the list of live sessions. Sessions are *not* shared unless it is running — the wrapper will tell you so rather than quietly running unshared.
+That runs in the foreground, which is also how you read its output when something is wrong. See [the agent does not start at logon](troubleshooting.md#the-agent-does-not-start-at-logon).
 
 ## 4. Share a session
 
@@ -179,7 +183,7 @@ its session will be an empty terminal.
 | `1remote switch-account` | Forget the current account and sign in as a different one |
 | `1remote logout` | Forget the cached sign-in |
 | `1remote status` | Show who is signed in |
-| `1remote install` | Start the agent at every logon, and put `1remote` on your `PATH` |
+| `1remote install` | Start the agent now and at every logon, and put `1remote` on your `PATH` |
 | `1remote uninstall` | Undo `install` |
 | `1remote wrap-shortcut <path.lnk>` | Copy a desktop shortcut into one that shares its session |
 

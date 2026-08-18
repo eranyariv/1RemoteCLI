@@ -38,7 +38,8 @@ public sealed class InstallerTests
             },
             addRunKey: Never(() => added = true),
             installShortcuts: Ok(),
-            addToPath: Ok());
+            addToPath: Ok(),
+            startAgent: Ok());
 
         Assert.True(removed);
         Assert.False(added);
@@ -61,7 +62,8 @@ public sealed class InstallerTests
                 return StepResult.Success("run key added");
             },
             installShortcuts: Ok(),
-            addToPath: Ok());
+            addToPath: Ok(),
+            startAgent: Ok());
 
         Assert.True(added);
     }
@@ -82,10 +84,11 @@ public sealed class InstallerTests
                 shortcuts = true;
                 return StepResult.Success("shortcuts");
             },
-            addToPath: Ok());
+            addToPath: Ok(),
+            startAgent: Ok());
 
         Assert.True(shortcuts);
-        Assert.Equal(4, steps.Count);
+        Assert.Equal(5, steps.Count);
     }
 
     /// <summary>
@@ -107,7 +110,8 @@ public sealed class InstallerTests
             {
                 onPath = true;
                 return StepResult.Success("path");
-            });
+            },
+            startAgent: Ok());
 
         Assert.True(onPath);
     }
@@ -120,9 +124,60 @@ public sealed class InstallerTests
             removeRunKey: Ok("b"),
             addRunKey: Ok("unused"),
             installShortcuts: Ok("c"),
-            addToPath: Ok("d"));
+            addToPath: Ok("d"),
+            startAgent: Ok("e"));
 
-        Assert.Equal(["a", "b", "c", "d"], steps.Select(step => step.Message));
+        Assert.Equal(["a", "b", "c", "d", "e"], steps.Select(step => step.Message));
+    }
+
+    /// <summary>
+    /// Issue #100: registering the logon task only makes the agent appear at the next
+    /// logon, so an install that stopped there left the user with no tray icon, no
+    /// relay and nothing to show that any of it worked.
+    /// </summary>
+    [Fact]
+    public void TheAgentIsStartedRatherThanLeftUntilTheNextLogon()
+    {
+        bool started = false;
+
+        Installer.Install(
+            registerTask: Ok(),
+            removeRunKey: Ok(),
+            addRunKey: Ok(),
+            installShortcuts: Ok(),
+            addToPath: Ok(),
+            startAgent: () =>
+            {
+                started = true;
+                return StepResult.Success("started");
+            });
+
+        Assert.True(started);
+    }
+
+    /// <summary>
+    /// An agent running now is what makes the machine reachable today, whatever the
+    /// logon trigger managed — so on the machine that needs it most, the one where
+    /// policy refused everything, it must still be attempted.
+    /// </summary>
+    [Fact]
+    public void TheAgentIsStartedEvenWhenEveryEarlierStepFailed()
+    {
+        bool started = false;
+
+        Installer.Install(
+            registerTask: Fails(),
+            removeRunKey: Ok(),
+            addRunKey: Fails(),
+            installShortcuts: Fails(),
+            addToPath: Fails(),
+            startAgent: () =>
+            {
+                started = true;
+                return StepResult.Success("started");
+            });
+
+        Assert.True(started);
     }
 
     [Fact]
@@ -136,18 +191,22 @@ public sealed class InstallerTests
             removeRunKey: Ok("b"),
             addRunKey: Ok("unused"),
             installShortcuts: () => throw new NotSupportedException("no COM for you"),
-            addToPath: Ok("d"));
+            addToPath: Ok("d"),
+            startAgent: Ok("e"));
 
-        Assert.Equal(["a", "b", "no COM for you", "d"], steps.Select(step => step.Message));
+        Assert.Equal(["a", "b", "no COM for you", "d", "e"], steps.Select(step => step.Message));
         Assert.False(steps[2].Ok);
         Assert.True(steps[3].Ok);
     }
 
     [Fact]
-    public void ASuccessfulInstallSaysTheAgentWillStartByItself()
+    public void ASuccessfulInstallSaysTheAgentIsRunningAndWillStartByItself()
     {
         string summary = Installer.Summarise([StepResult.Success("a"), StepResult.Success("b")], installing: true);
 
+        // Both halves matter: the tray icon is the only evidence the user has that any
+        // of this worked, and the logon trigger is why they never have to do it again.
+        Assert.Contains("notification area", summary, StringComparison.Ordinal);
         Assert.Contains("log on", summary, StringComparison.Ordinal);
     }
 

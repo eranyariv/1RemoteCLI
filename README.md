@@ -20,7 +20,7 @@ irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.
 
 Not from a plain PowerShell window. Windows refuses to run executables it has no reputation for, and these builds are unsigned, so a plain install is likely to fail with `Access is denied` — on a work machine, permanently. A file written by your coding CLI inherits its trust and runs immediately. You already have one of those CLIs installed; putting their sessions on your phone is what this is for.
 
-No account and no token. The script picks the build for your architecture and checks it against the SHA-256 published with the release.
+No account and no token. The script picks the build for your architecture, checks it against the SHA-256 published with the release, and starts the agent — you get a tray icon straight away, no logout needed.
 
 Then, in a new terminal:
 

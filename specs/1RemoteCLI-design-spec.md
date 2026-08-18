@@ -333,6 +333,8 @@ An `HKCU\...\Run` value is the fallback when task registration is refused, which
 
 `1remote install` also adds Start menu shortcuts (*Sign in*, *Start agent*), reports every step individually, continues past a failure rather than leaving a machine half-installed silently, and exits non-zero if any step failed. `1remote uninstall` reverses all three and is safe to run on a machine that was never installed.
 
+Its last step **starts the agent**, because a logon trigger on its own means the install produces nothing the user can see until the next logon — no tray icon, no relay, and a phone that lists no machines. It goes through the registered task rather than launching the executable, so what runs now is exactly what will run at every logon; it falls back to starting the process directly where policy registered only the `Run` key, and does nothing at all when an agent is already serving this user. That last case is the common one on an upgrade, and the check is the agent's named pipe rather than the process list, because every wrapped session is also a process called `1remote`.
+
 **Responsibilities.** Session registry, one headless VT emulator per session, hub connection and authentication, output framing and flow control, idle/prompt detection, and routing input from the hub to the correct wrapper pipe.
 
 ### 4.3 Headless VT emulator

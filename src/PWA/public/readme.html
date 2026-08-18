@@ -69,8 +69,13 @@
       header img {
         width: 64px;
         height: 64px;
-        border-radius: 14px;
         flex: none;
+        /*
+          The artwork is a green mark on an opaque black square and the page is not
+          black, so an ordinary image would show a darker tile. Screening resolves
+          every black pixel to the backdrop exactly, and leaves the green alone.
+        */
+        mix-blend-mode: screen;
       }
 
       h1 {

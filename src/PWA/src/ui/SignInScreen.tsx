@@ -2,6 +2,37 @@ import { auth } from '../auth/impl'
 import { VersionLine } from './Chrome'
 
 /**
+ * The mark, sized to be the first thing seen.
+ *
+ * The artwork is a green mark on an opaque black square and the page is slate-950,
+ * which is not black, so an ordinary image would put a visibly darker tile on the
+ * page. `screen` resolves every black pixel to the backdrop exactly — the blend is
+ * `1 - (1 - a)(1 - b)`, so a zero channel returns the backdrop untouched — while the
+ * green survives being screened over a near-black page. Colour-keying the black to
+ * transparent instead would leave a dark fringe on every antialiased edge.
+ *
+ * The halo behind it is the same trick in reverse: it stops the mark ending at a
+ * square boundary, which is the other thing that would give the tile away.
+ */
+function Logo() {
+  return (
+    <div className="relative flex size-40 items-center justify-center sm:size-48">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 rounded-full bg-[radial-gradient(circle,rgba(34,197,94,0.16),transparent_70%)] blur-xl"
+      />
+      <img
+        src="/icon-512.png"
+        alt="1RemoteCLI"
+        width={512}
+        height={512}
+        className="relative size-full mix-blend-screen"
+      />
+    </div>
+  )
+}
+
+/**
  * The signed-out screen.
  *
  * It says what the product is before asking for an identity, because "sign in with
@@ -10,11 +41,12 @@ import { VersionLine } from './Chrome'
 export function SignInScreen({ busy }: { busy: boolean }) {
   return (
     <div className="flex min-h-dvh flex-col items-center justify-center gap-8 px-6 text-center">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-100">1RemoteCLI</h1>
+      <div className="flex flex-col items-center">
+        <Logo />
+        <h1 className="mt-2 text-2xl font-semibold text-slate-100">1RemoteCLI</h1>
         <p className="mx-auto mt-3 max-w-xs text-sm leading-relaxed text-slate-400">
           Attach to the terminal sessions already running on your machines. Read the output, answer
-          the prompt, press Ctrl+C — from wherever you are.
+          the prompt, press Esc, from wherever you are.
         </p>
       </div>
 

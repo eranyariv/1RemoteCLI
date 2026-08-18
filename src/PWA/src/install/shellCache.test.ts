@@ -4,6 +4,7 @@ import {
   assetResponse,
   cacheName,
   fingerprint,
+  isShellNavigation,
   navigationResponse,
   shouldHandle,
   staleCacheNames,
@@ -138,6 +139,52 @@ describe('navigationResponse', () => {
     await navigationResponse(request('/machines', { mode: 'navigate' }), cache.cache, fetcher)
 
     expect(cache.put).toHaveBeenCalledWith(ShellUrl, expect.anything())
+  })
+
+  it('does not let a static page overwrite the cached shell', async () => {
+    // The bug this prevents is nasty and entirely silent: browse to /readme.html
+    // once, and the next time the app is opened without a network it serves the
+    // readme instead of the client, with nothing to suggest why.
+    const cache = new FakeCache()
+    const fetcher = vi.fn(async () => response('readme'))
+
+    await navigationResponse(request('/readme.html', { mode: 'navigate' }), cache.cache, fetcher)
+
+    expect(cache.put).toHaveBeenCalledWith('/readme.html', expect.anything())
+    expect(cache.put).not.toHaveBeenCalledWith(ShellUrl, expect.anything())
+  })
+
+  it('falls a static page back to itself rather than to the shell', async () => {
+    // Handing somebody the terminal client because they asked for the readme
+    // offline looks like a broken link, which is worse than the browser saying
+    // plainly that there is no connection.
+    const cache = new FakeCache()
+    cache.entries.set(ShellUrl, response('shell'))
+    const fetcher = vi.fn(async () => {
+      throw new Error('offline')
+    })
+
+    await expect(
+      navigationResponse(request('/readme.html', { mode: 'navigate' }), cache.cache, fetcher),
+    ).rejects.toThrow('offline')
+  })
+})
+
+describe('isShellNavigation', () => {
+  it.each(['/', '/machines', '/machines/desk/session-7'])('treats %s as the shell', (url) => {
+    expect(isShellNavigation(url)).toBe(true)
+  })
+
+  it.each(['/readme.html', '/manifest.webmanifest', '/icon-192.png'])(
+    'treats %s as a file',
+    (url) => {
+      expect(isShellNavigation(url)).toBe(false)
+    },
+  )
+
+  it('reads the last segment, not the whole path', () => {
+    // A dot earlier in the path is part of a route, not an extension.
+    expect(isShellNavigation('/v1.2/machines')).toBe(true)
   })
 })
 

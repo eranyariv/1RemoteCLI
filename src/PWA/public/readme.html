@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#020617" />
+    <title>1RemoteCLI: answer your terminal from any browser</title>
+    <meta
+      name="description"
+      content="1RemoteCLI attaches any browser to a terminal session already running on your Windows machine. Read the output, answer the prompt, walk away again."
+    />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <!--
+      Deliberately one file with no build step and no dependencies. This is the page
+      somebody is sent before they trust the project with a machine, so it should
+      render from a cold cache on a hotel wifi, and it should keep working whatever
+      happens to the app bundle next to it.
+    -->
+    <style>
+      :root {
+        /* Slate 950/900/800/400/200, matching the app, and the phosphor green the
+           logo is drawn in. */
+        --bg: #020617;
+        --panel: #0f172a;
+        --line: #1e293b;
+        --muted: #94a3b8;
+        --text: #e2e8f0;
+        --bright: #f8fafc;
+        --accent: #05fc04;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        color-scheme: dark;
+        background: var(--bg);
+        -webkit-text-size-adjust: 100%;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+        font-size: 17px;
+        line-height: 1.65;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      main {
+        max-width: 46rem;
+        margin: 0 auto;
+        padding: 3rem 1.25rem 5rem;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        margin-bottom: 2.5rem;
+      }
+
+      header img {
+        width: 64px;
+        height: 64px;
+        border-radius: 14px;
+        flex: none;
+      }
+
+      h1 {
+        font-size: 1.9rem;
+        line-height: 1.15;
+        margin: 0;
+        color: var(--bright);
+        letter-spacing: -0.02em;
+      }
+
+      header p {
+        margin: 0.25rem 0 0;
+        color: var(--muted);
+        font-size: 1rem;
+      }
+
+      h2 {
+        font-size: 1.3rem;
+        color: var(--bright);
+        margin: 3rem 0 0.75rem;
+        padding-top: 1.75rem;
+        border-top: 1px solid var(--line);
+        letter-spacing: -0.01em;
+      }
+
+      h3 {
+        font-size: 1.02rem;
+        color: var(--bright);
+        margin: 2rem 0 0.5rem;
+      }
+
+      p,
+      ul,
+      ol {
+        margin: 0 0 1rem;
+      }
+
+      ul,
+      ol {
+        padding-left: 1.25rem;
+      }
+
+      li {
+        margin-bottom: 0.4rem;
+      }
+
+      a {
+        color: var(--accent);
+        text-decoration-color: rgba(5, 252, 4, 0.35);
+        text-underline-offset: 3px;
+      }
+
+      a:hover {
+        text-decoration-color: var(--accent);
+      }
+
+      strong {
+        color: var(--bright);
+        font-weight: 600;
+      }
+
+      code {
+        font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+        font-size: 0.88em;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        padding: 0.1em 0.4em;
+        color: var(--bright);
+      }
+
+      kbd {
+        font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+        font-size: 0.82em;
+        background: #1e293b;
+        border: 1px solid #334155;
+        border-bottom-width: 2px;
+        border-radius: 5px;
+        padding: 0.05em 0.4em;
+        color: var(--bright);
+      }
+
+      /* A command block, with the copy button sitting inside it. */
+      .cmd {
+        position: relative;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        margin: 0 0 1.25rem;
+      }
+
+      .cmd pre {
+        margin: 0;
+        padding: 1rem 4.5rem 1rem 1rem;
+        white-space: pre-wrap;
+        overflow-wrap: break-word;
+        font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+        font-size: 0.85rem;
+        line-height: 1.7;
+        color: var(--bright);
+      }
+
+      .cmd pre code {
+        background: none;
+        border: 0;
+        border-radius: 0;
+        padding: 0;
+        font-size: inherit;
+        color: inherit;
+      }
+
+      .cmd button {
+        position: absolute;
+        top: 0.55rem;
+        right: 0.55rem;
+        background: #1e293b;
+        color: var(--text);
+        border: 1px solid #334155;
+        border-radius: 6px;
+        padding: 0.25rem 0.6rem;
+        font: inherit;
+        font-size: 0.72rem;
+        cursor: pointer;
+      }
+
+      .cmd button:hover {
+        border-color: var(--accent);
+        color: var(--bright);
+      }
+
+      .note {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--accent);
+        border-radius: 8px;
+        padding: 1rem 1.1rem;
+        margin: 0 0 1.25rem;
+      }
+
+      .note p:last-child {
+        margin-bottom: 0;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 0 0 1.25rem;
+        font-size: 0.95rem;
+      }
+
+      th,
+      td {
+        text-align: left;
+        padding: 0.55rem 0.75rem;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+
+      th {
+        color: var(--bright);
+        font-weight: 600;
+        white-space: nowrap;
+      }
+
+      td code {
+        white-space: nowrap;
+      }
+
+      ol.steps {
+        counter-reset: step;
+        list-style: none;
+        padding-left: 0;
+      }
+
+      ol.steps > li {
+        counter-increment: step;
+        position: relative;
+        padding-left: 2.4rem;
+        margin-bottom: 1.75rem;
+      }
+
+      ol.steps > li::before {
+        content: counter(step);
+        position: absolute;
+        left: 0;
+        top: 0.05rem;
+        width: 1.65rem;
+        height: 1.65rem;
+        border-radius: 50%;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        color: var(--accent);
+        font-size: 0.8rem;
+        font-weight: 600;
+        display: grid;
+        place-items: center;
+      }
+
+      footer {
+        margin-top: 3.5rem;
+        padding-top: 1.5rem;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 0.88rem;
+      }
+
+      footer a {
+        white-space: nowrap;
+      }
+
+      @media (max-width: 34rem) {
+        body {
+          font-size: 16px;
+        }
+
+        main {
+          padding: 2rem 1rem 3.5rem;
+        }
+
+        h1 {
+          font-size: 1.5rem;
+        }
+
+        header img {
+          width: 48px;
+          height: 48px;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <main>
+      <header>
+        <img src="/icon-192.png" alt="" />
+        <div>
+          <h1>1RemoteCLI</h1>
+          <p>Answer your terminal from any device with a browser.</p>
+        </div>
+      </header>
+
+      <h2 id="what">What this is</h2>
+
+      <p>
+        You start a long job (a refactor, a build, an AI coding agent) and walk away. Twenty
+        minutes later it is sitting on
+        <em>“Do you want me to apply these changes? (y/n)”</em>, and has been for nineteen of
+        them.
+      </p>
+
+      <p>
+        1RemoteCLI attaches a browser to a terminal session <strong>already running</strong> on
+        your Windows machine. Read the output, answer the prompt, press
+        <kbd>Esc</kbd> to back out of a menu, walk away again. It buzzes when a session
+        needs you, and the same page works just as well from a tablet or a second desktop.
+      </p>
+
+      <p>Put <code>1remote</code> in front of whatever you were going to run:</p>
+
+      <div class="cmd">
+        <button type="button" data-copy>Copy</button>
+        <pre><code>1remote claude</code></pre>
+      </div>
+
+      <p>
+        It behaves exactly like running the program directly: same colours, same keystrokes, same
+        <kbd>Esc</kbd>, same exit code. The difference is that it is now also visible from
+        somewhere else.
+      </p>
+
+      <h3>What it is not</h3>
+
+      <ul>
+        <li>
+          <strong>Not a remote desktop.</strong> It shares one terminal session, not your screen
+          and not your machine.
+        </li>
+        <li>
+          <strong>Not an inbound connection.</strong> Both your PC and the device you are
+          watching from dial <em>out</em> to a relay, so nothing on your machine has to be
+          reachable from the internet and no ports are opened.
+        </li>
+        <li>
+          <strong>Nothing to install on the other device.</strong> The remote side is a web page.
+          On a phone or tablet you can add it to the home screen; on a desktop you can install it
+          as an app or just leave it in a tab.
+        </li>
+      </ul>
+
+      <div class="note">
+        <p>
+          <strong>Before you point it at a machine that matters:</strong> anyone holding a
+          signed-in device can type into your shared sessions. Read
+          <a href="https://github.com/eranyariv/1RemoteCLI/blob/main/docs/security.md">Security</a>
+          first.
+        </p>
+      </div>
+
+      <h2 id="install">Installing on Windows</h2>
+
+      <h3>You need</h3>
+
+      <table>
+        <tr>
+          <th>Windows</th>
+          <td>Windows 10 version 2004 (build 19041) or newer, which is where ConPTY became
+            reliable.</td>
+        </tr>
+        <tr>
+          <th>An account</th>
+          <td>
+            A Microsoft account, personal or work/school, that has been
+            <strong>added to this hub’s allowlist</strong>. If it has not been, sign-in will
+            succeed and then the hub will refuse you, which is a confusing five minutes. Ask
+            whoever runs the hub.
+          </td>
+        </tr>
+        <tr>
+          <th>Repo access</th>
+          <td>
+            The project is <strong>private</strong> for now, so you also need to have been given
+            read access to <code>eranyariv/1RemoteCLI</code>. The installer downloads from it, and
+            every GitHub link on this page needs it too. Ask whoever sent you here.
+          </td>
+        </tr>
+        <tr>
+          <th>Something to watch from</th>
+          <td>
+            Anything with a reasonably current browser: a phone, a tablet, a laptop, a second
+            desktop. On iOS you want 16.4 or newer, which is where web push arrived; anything
+            older still works, it just will not buzz. There is nothing to install on it.
+          </td>
+        </tr>
+      </table>
+
+      <p>No admin rights are needed. Everything installs under your own user account.</p>
+
+      <ol class="steps">
+        <li>
+          <h3>Install it</h3>
+          <p>In PowerShell:</p>
+          <div class="cmd">
+            <button type="button" data-copy>Copy</button>
+            <pre><code>$env:GITHUB_TOKEN = gh auth token
+$headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
+irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.ps1 -Headers $headers | iex</code></pre>
+          </div>
+          <p>
+            The token appears twice on purpose, and the two uses are not interchangeable: the
+            <strong>header</strong> is what fetches the script, because
+            <code>raw.githubusercontent.com</code> reads the request header and nothing else, and
+            the <strong>variable</strong> is what the script then uses to read the release. This is
+            only necessary while the project is private. <code>gh auth token</code> assumes the
+            GitHub CLI; a fine-grained token with read access to the repository does just as well.
+          </p>
+          <p>
+            That picks the build for your architecture, <strong>checks it against the SHA-256
+            published with the release</strong>, puts it in
+            <code>%LOCALAPPDATA%\Programs\1RemoteCLI</code>, registers it to start when you sign
+            in, and adds it to your <code>PATH</code>.
+          </p>
+          <p>
+            Then open a <strong>new</strong> terminal, because the <code>PATH</code> change only
+            reaches terminals opened after it, and check:
+          </p>
+          <div class="cmd">
+            <button type="button" data-copy>Copy</button>
+            <pre><code>1remote --version</code></pre>
+          </div>
+        </li>
+
+        <li>
+          <h3>Sign in</h3>
+          <div class="cmd">
+            <button type="button" data-copy>Copy</button>
+            <pre><code>1remote login</code></pre>
+          </div>
+          <p>
+            A browser opens. Sign in with the account that is on the allowlist. The token is
+            cached under your Windows user and encrypted with DPAPI, so another account on the
+            same PC cannot read it and it cannot be copied to another machine and reused. You
+            will not have to do this again.
+          </p>
+        </li>
+
+        <li>
+          <h3>Start the agent</h3>
+          <p>
+            It will start by itself at every sign-in from now on. To start it now without logging
+            out:
+          </p>
+          <div class="cmd">
+            <button type="button" data-copy>Copy</button>
+            <pre><code>1remote agent</code></pre>
+          </div>
+          <p>
+            You get a tray icon. That is the agent: one per machine, holding the connection and
+            the list of live sessions. Sessions are <strong>not</strong> shared unless it is
+            running.
+          </p>
+        </li>
+
+        <li>
+          <h3>Share a session</h3>
+          <div class="cmd">
+            <button type="button" data-copy>Copy</button>
+            <pre><code>1remote claude
+1remote pwsh
+1remote --name "nightly build" -- pwsh -File .\build.ps1</code></pre>
+          </div>
+          <p>
+            If you start your tool from a desktop shortcut instead of by typing its name, there
+            is no command line to put <code>1remote</code> in front of. Right-click the tray
+            icon, choose <strong>Settings…</strong>, and use
+            <strong>Wrap a desktop shortcut…</strong> to make a copy that shares its session.
+          </p>
+        </li>
+
+        <li>
+          <h3>Open it on your other device</h3>
+          <p>
+            Go to <a href="/">this same address</a> in a browser on whatever you want to watch
+            from, phone, tablet or another computer, and sign in with the same account. Your
+            machine is listed, with its sessions under it. Open one and you are attached: you get
+            the current screen immediately, not a blank terminal waiting for the next byte.
+          </p>
+          <p>
+            Then <strong>install it and allow notifications</strong>. On a phone or tablet that
+            is “Add to Home Screen”; on a desktop browser it is the install button in the address
+            bar. Without notifications you have to remember to check, which defeats the point.
+          </p>
+        </li>
+      </ol>
+
+      <h3>“Windows protected your PC”</h3>
+
+      <p>
+        The executable is not code-signed, so SmartScreen will stop you the first time. That is
+        expected, and it is not a false positive in the interesting sense: the binary genuinely
+        has no publisher identity attached to it.
+      </p>
+
+      <p>Check it is the file that was published before you get past the warning:</p>
+
+      <div class="cmd">
+        <button type="button" data-copy>Copy</button>
+        <pre><code>Get-FileHash .\1remote.exe -Algorithm SHA256</code></pre>
+      </div>
+
+      <p>
+        Compare that with the SHA-256 in <code>SHA256SUMS.txt</code> on the
+        <a href="https://github.com/eranyariv/1RemoteCLI/releases/latest">release</a>. If it
+        matches, click <strong>More info → Run anyway</strong>. If you would rather not trust a
+        hash from the same place as the binary, build it yourself: the publish script produces
+        exactly what the release contains, and prints the hash.
+      </p>
+
+      <h2 id="uninstall">Uninstalling</h2>
+
+      <div class="cmd">
+        <button type="button" data-copy>Copy</button>
+        <pre><code>1remote uninstall    # stop starting at sign-in, come off your PATH
+1remote logout       # forget the cached sign-in</code></pre>
+      </div>
+
+      <p>Then delete the two folders it used:</p>
+
+      <div class="cmd">
+        <button type="button" data-copy>Copy</button>
+        <pre><code>Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Programs\1RemoteCLI"
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\1RemoteCLI"</code></pre>
+      </div>
+
+      <p>
+        <code>uninstall</code> deliberately leaves the executable where you put it; it does not
+        delete files it did not create. Quit the tray agent first, or the second command will
+        refuse to remove a file that is in use.
+      </p>
+
+      <p>
+        On the device you were watching from, remove the installed app or home screen icon as you
+        would any other. Nothing of yours is left on the server: it relays traffic and stores no
+        terminal content.
+      </p>
+
+      <h2 id="feedback">Telling us it is broken</h2>
+
+      <p>
+        Feedback is wanted, including the blunt kind. Two ways, and the first is easier if you are
+        holding a phone:
+      </p>
+
+      <table>
+        <tr>
+          <th>Email</th>
+          <td>
+            <a id="mail" href="mailto:eran@yariv.org?subject=Feedback%20on%201RemoteCLI"
+              >eran@yariv.org</a
+            >. The <strong>Send feedback</strong> link in the agent’s settings window and in the
+            web app’s footer opens this with the version already filled in.
+          </td>
+        </tr>
+        <tr>
+          <th>GitHub</th>
+          <td>
+            <a href="https://github.com/eranyariv/1RemoteCLI/issues/new">Open an issue</a>, best
+            for anything reproducible.
+          </td>
+        </tr>
+      </table>
+
+      <p>What helps most, in order:</p>
+
+      <ol>
+        <li><strong>The version</strong>, from <code>1remote --version</code>.</li>
+        <li><strong>What you expected, and what happened instead.</strong></li>
+        <li>
+          <strong>The log</strong>, from <code>%LOCALAPPDATA%\1RemoteCLI\logs</code>, or via
+          <strong>Open logs</strong> in the settings window. It is safe to attach: it records
+          how much data moved and when, never what was on your screen. Not the output, not what
+          you typed, not even the session’s name.
+        </li>
+      </ol>
+
+      <p>
+        If something is not working at all, start with
+        <a href="https://github.com/eranyariv/1RemoteCLI/blob/main/docs/troubleshooting.md"
+          >Troubleshooting</a
+        >.
+      </p>
+
+      <footer>
+        <p>
+          <span id="version">1RemoteCLI</span> ·
+          <a href="https://github.com/eranyariv/1RemoteCLI">Source</a> ·
+          <a href="https://github.com/eranyariv/1RemoteCLI/blob/main/docs/getting-started.md"
+            >Full guide</a
+          >
+          ·
+          <a href="https://github.com/eranyariv/1RemoteCLI/blob/main/docs/security.md">Security</a>
+          · <a href="/">Open the app</a>
+        </p>
+      </footer>
+    </main>
+
+    <script>
+      // Copy buttons. Progressive enhancement on purpose: without clipboard access,
+      // or without script at all, every command above is still selectable text.
+      for (const button of document.querySelectorAll('[data-copy]')) {
+        button.addEventListener('click', async () => {
+          const code = button.parentElement.querySelector('code')
+          try {
+            await navigator.clipboard.writeText(code.innerText)
+            button.textContent = 'Copied'
+          } catch {
+            button.textContent = 'Copy failed'
+          }
+          setTimeout(() => (button.textContent = 'Copy'), 1600)
+        })
+      }
+
+      // The running hub knows its own version, and this page is served by it. Asking
+      // beats hard-coding a number that goes stale the next time anything ships.
+      fetch('/health')
+        .then((response) => (response.ok ? response.json() : null))
+        .then((health) => {
+          if (!health?.version) return
+          document.getElementById('version').textContent = `1RemoteCLI ${health.version}`
+          document.getElementById('mail').href =
+            'mailto:eran@yariv.org?subject=' +
+            encodeURIComponent(`Feedback on 1RemoteCLI, version ${health.version}`)
+        })
+        .catch(() => {})
+    </script>
+  </body>
+</html>

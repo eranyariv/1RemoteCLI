@@ -13,8 +13,12 @@ You start `claude` on a long refactor, leave your desk, and twenty minutes later
 ## Try it
 
 ```powershell
-irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.ps1 | iex
+$env:GITHUB_TOKEN = gh auth token
+irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.ps1 `
+  -Headers @{ Authorization = "Bearer $env:GITHUB_TOKEN" } | iex
 ```
+
+The token is needed twice over while this repository is private — as a header to fetch the script, as an environment variable for the script to read the release — and both are dropped once it is public.
 
 Then, in a new terminal:
 

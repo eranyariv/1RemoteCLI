@@ -144,7 +144,7 @@ That edits `VERSION` and nothing else. Committing and tagging are left to you, b
 
 ## Release the agent
 
-Users install with a one-liner that downloads from a GitHub Release and checks the hash:
+Users install with a one-liner that downloads from a GitHub Release and checks the hash — see [getting-started](getting-started.md#1-install-it) for the token the one-liner needs while the repository is private:
 
 ```powershell
 irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.ps1 | iex

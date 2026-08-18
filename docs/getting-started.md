@@ -16,15 +16,18 @@ Someone has to have deployed a hub and added your Microsoft account to its allow
 In PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.ps1 | iex
+$env:GITHUB_TOKEN = gh auth token
+$headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
+irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.ps1 -Headers $headers | iex
 ```
 
 That picks the build for your architecture, **checks it against the SHA-256 published with the release**, puts it in `%LOCALAPPDATA%\Programs\1RemoteCLI`, registers the logon task and the Start menu entries, and adds it to your `PATH`.
 
-While the repository is private you need a token that can read it:
+Both halves of the token dance are load-bearing while the repository is private, and they are not interchangeable: the **header** is what fetches the script, because `raw.githubusercontent.com` reads the request header and nothing else, and the **environment variable** is what the script then uses to read the release. Setting only the variable gets you a bare `404` from a URL that looks public.
+
+`gh auth token` assumes the GitHub CLI; a fine-grained PAT with read access to the repository works just as well. When the repository goes public, both can go away and the one-liner is simply:
 
 ```powershell
-$env:GITHUB_TOKEN = gh auth token
 irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.ps1 | iex
 ```
 

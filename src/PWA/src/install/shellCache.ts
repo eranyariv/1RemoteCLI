@@ -41,6 +41,22 @@ export function staleCacheNames(existing: readonly string[], current: string): s
 }
 
 /**
+ * Whether a navigation is the app shell rather than a page that exists as a file.
+ *
+ * The hub serves the shell for any path without a file extension and the real file
+ * for any path with one, so the extension is the same signal on both sides. It
+ * matters because the shell is cached under one fixed key: without this, browsing
+ * to a static page such as `/readme.html` would store *that* page as the shell,
+ * and the next offline launch would open the readme instead of the client.
+ */
+export function isShellNavigation(url: string): boolean {
+  // A base, because a Request's url is absolute in a browser but relative in a test,
+  // and URL refuses a relative one on its own.
+  const last = new URL(url, 'http://shell.invalid').pathname.split('/').pop() ?? ''
+  return !last.includes('.')
+}
+
+/**
  * Navigations are network-first.
  *
  * Offline-first would be the usual choice and is wrong here: this is a client for
@@ -55,14 +71,19 @@ export async function navigationResponse(
   cache: Cache,
   fetcher: typeof fetch,
 ): Promise<Response> {
+  const shell = isShellNavigation(request.url)
+
   try {
     const response = await fetcher(request)
     // Only a successful navigation is worth keeping. Caching a 500 would turn one
     // bad deploy into a permanently broken app on that phone.
-    if (response.ok) await cache.put(ShellUrl, response.clone())
+    if (response.ok) await cache.put(shell ? ShellUrl : request.url, response.clone())
     return response
   } catch (error) {
-    const cached = await cache.match(ShellUrl)
+    // A static page falls back to itself, never to the shell: handing the client
+    // to somebody who asked for the readme is worse than the browser's own
+    // offline page, because it looks like the link was wrong.
+    const cached = await cache.match(shell ? ShellUrl : request.url)
     if (cached) return cached
     throw error
   }

@@ -86,6 +86,30 @@ public sealed class TrayPresenterTests
     }
 
     [Fact]
+    public void NamesTheAccountHolderWhenTheTokenSaysWhoTheyAre()
+    {
+        // Both halves. The email identifies the account; the name is what tells the
+        // user it is the account they meant.
+        TrayPresentation view = TrayPresenter.Present(
+            AgentState.Connected,
+            1,
+            Machine,
+            "Ada Lovelace (ada@example.com)");
+
+        Assert.Equal("Signed in as Ada Lovelace (ada@example.com)", view.Account);
+    }
+
+    [Fact]
+    public void FallsBackToTheEmailAloneWithoutLookingBroken()
+    {
+        // No name claim in the cache -- an older cache, or an account that never had
+        // one. The line has to keep reading as a sentence.
+        TrayPresentation view = TrayPresenter.Present(AgentState.Connected, 1, Machine, "ada@example.com");
+
+        Assert.Equal("Signed in as ada@example.com", view.Account);
+    }
+
+    [Fact]
     public void OffersToSignOutOrSwitchOnlyWhenThereIsAnAccountToLeave()
     {
         Assert.True(TrayPresenter.Present(AgentState.Connected, 1, Machine, "someone@example.com").SignOutEnabled);

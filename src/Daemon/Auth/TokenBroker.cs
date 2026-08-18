@@ -4,7 +4,10 @@ using Microsoft.Identity.Client;
 namespace OneRemoteCli.Daemon.Auth;
 
 /// <summary>What <c>1remote status</c> found.</summary>
-/// <param name="Account">The signed-in account, or null when nobody is signed in.</param>
+/// <param name="Account">
+/// The signed-in account as the user should read it — name and email when the name is
+/// known, email alone when it is not — or null when nobody is signed in.
+/// </param>
 /// <param name="TokenValidUntil">When the cached access token expires, if one could be obtained silently.</param>
 /// <param name="Problem">Why a silent token could not be obtained, when that is the reason.</param>
 public sealed record AuthStatus(string? Account, DateTimeOffset? TokenValidUntil, string? Problem)
@@ -19,8 +22,20 @@ public sealed record AuthStatus(string? Account, DateTimeOffset? TokenValidUntil
 /// Stable identity, used to tell one account from another. Distinct from the
 /// username because that is a display detail the directory is free to change.
 /// </param>
-/// <param name="Username">What to show the user.</param>
-public sealed record SignedInAccount(string Id, string Username);
+/// <param name="Username">The email or UPN.</param>
+/// <param name="DisplayName">
+/// The human name from the cached ID token, when there is one. Optional because there
+/// often is not: see <see cref="AccountName"/>.
+/// </param>
+public sealed record SignedInAccount(string Id, string Username, string? DisplayName = null)
+{
+    /// <summary>
+    /// How to refer to this account anywhere a user will read it. Always use this
+    /// rather than <see cref="Username"/>, so the tray, the log and
+    /// <c>1remote status</c> cannot drift into describing the same account differently.
+    /// </summary>
+    public string Description => AccountName.Describe(DisplayName, Username);
+}
 
 /// <summary>
 /// The one place the agent gets a token.
@@ -63,7 +78,10 @@ public sealed class TokenBroker
 
         return account is null
             ? null
-            : new SignedInAccount(account.HomeAccountId?.Identifier ?? account.Username, account.Username);
+            : new SignedInAccount(
+                account.HomeAccountId?.Identifier ?? account.Username,
+                account.Username,
+                AccountName.Of(account));
     }
 
     /// <summary>
@@ -146,6 +164,11 @@ public sealed class TokenBroker
             return new AuthStatus(null, null, null);
         }
 
+        // Read before the token call, so the answer is the same whether or not the
+        // silent acquisition below works. A status command that names the user only
+        // while the network is up would be worse than one that never did.
+        string? name = AccountName.Of(account);
+
         try
         {
             AuthenticationResult result = await _client
@@ -153,14 +176,17 @@ public sealed class TokenBroker
                 .ExecuteAsync(cancellationToken)
                 .ConfigureAwait(false);
 
-            return new AuthStatus(account.Username, result.ExpiresOn, null);
+            return new AuthStatus(
+                AccountName.Describe(AccountName.Of(result.ClaimsPrincipal) ?? name, account.Username),
+                result.ExpiresOn,
+                null);
         }
         catch (MsalUiRequiredException ex)
         {
             // Signed in, but the refresh token is gone or a policy now demands the
             // user again. Reported rather than swallowed, because "signed in but
             // silently broken" is the state that wastes the most debugging time.
-            return new AuthStatus(account.Username, null, ex.Message);
+            return new AuthStatus(AccountName.Describe(name, account.Username), null, ex.Message);
         }
     }
 

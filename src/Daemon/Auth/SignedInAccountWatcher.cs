@@ -97,7 +97,7 @@ public sealed class SignedInAccountWatcher : IDisposable
         _logger.LogInformation(
             "Watching {Path} for sign-in changes; signed in as {Account}",
             _watcher.Path,
-            _account?.Username ?? "nobody");
+            _account?.Description ?? "nobody");
     }
 
     /// <summary>Who was signed in as of the last look.</summary>
@@ -162,7 +162,7 @@ public sealed class SignedInAccountWatcher : IDisposable
 
             _logger.LogInformation(
                 "Signed-in account changed to {Account}",
-                current?.Username ?? "nobody");
+                current?.Description ?? "nobody");
 
             // The mandatory callback first, and observers after: it is what stops the
             // agent relaying for somebody who signed out, while they are only redrawing

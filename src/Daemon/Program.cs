@@ -112,7 +112,8 @@ public static class Program
             Console.WriteLine($"1remote: {announcement}");
             AuthenticationResult result = await signIn(broker).ConfigureAwait(false);
 
-            Console.WriteLine($"Signed in as {result.Account.Username}.");
+            Console.WriteLine(
+                $"Signed in as {AccountName.Describe(AccountName.Of(result.ClaimsPrincipal), result.Account.Username)}.");
             Console.WriteLine($"Token valid until {result.ExpiresOn.ToLocalTime():yyyy-MM-dd HH:mm}.");
 
             return await ReportHubAdmissionAsync(result.AccessToken).ConfigureAwait(false);
@@ -385,7 +386,7 @@ public static class Program
                 : hub.IsSignedOut ? AgentState.SignedOut
                 : AgentState.Reconnecting,
             host.Sessions.Count,
-            accounts.Account?.Username);
+            accounts.Account?.Description);
 
         hub.StateChanged += Refresh;
         host.Sessions.Changed += Refresh;

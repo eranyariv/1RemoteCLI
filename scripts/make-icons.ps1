@@ -312,19 +312,23 @@ Save-Ico -Frames (New-Frames -Spec $icoFrames) -Path (Join-Path $assets "1remote
 Write-Host "==> Tray icons"
 
 # The tray family comes from its own artwork rather than from logo.png, because the
-# tray has to say something logo.png cannot: how many sessions are live. assets/tray
-# holds eleven drawn variants -- the plain mark, one per count 1..9, and one ">9" --
-# and each becomes its own .ico. Picking a whole prepared image per count is what lets
-# the count survive 16 pixels; a digit composited at run time is mush at that size.
+# tray has to say two things logo.png cannot: how many sessions are live, and whether
+# the hub can be reached. assets/tray holds a drawn variant for each combination --
+# the plain mark, one per count 1..9, and one ">9", in each connection state -- and
+# each becomes its own .ico. Picking a whole prepared image is what lets both survive
+# 16 pixels; anything composited at run time is mush at that size.
 #
 # Transparent, and only the sizes the shell asks for across display scalings, for the
 # same reasons as before: the shell composites a tray icon straight onto the taskbar,
 # so the black tile that makes the app icon read as a terminal would be a black box
 # here, and the tray never goes above 48.
+$trayStates = @("connected", "reconnecting", "disconnected")
 $trayCounts = @("base", "1", "2", "3", "4", "5", "6", "7", "8", "9", "more")
 $traySizes = @(16, 20, 24, 32, 40, 48)
 $trayMargin = 0.02
 $trayArt = Join-Path $assets "tray"
+$trayOut = Join-Path $assets "tray-ico"
+New-Item -ItemType Directory -Force -Path $trayOut | Out-Null
 
 function Get-Bounds {
     <#
@@ -375,19 +379,23 @@ function Get-Union {
 }
 
 $trayBitmaps = [ordered]@{}
-foreach ($count in $trayCounts) {
-    $path = Join-Path $trayArt "$count.png"
-    if (-not (Test-Path $path)) { throw "Tray artwork not found: $path" }
-    $trayBitmaps[$count] = [System.Drawing.Bitmap]::FromFile([string](Resolve-Path $path))
+foreach ($state in $trayStates) {
+    foreach ($count in $trayCounts) {
+        $path = Join-Path $trayArt "$state-$count.png"
+        if (-not (Test-Path $path)) { throw "Tray artwork not found: $path" }
+        $trayBitmaps["$state-$count"] = [System.Drawing.Bitmap]::FromFile([string](Resolve-Path $path))
+    }
 }
 
 # The artwork is the full lockup: the numeral, a count plate beside it, and "CLI"
 # underneath. "CLI" is grey mush below 48 pixels and the tray never gets that big, so
 # the same cut make-icons applies to the app icon applies here -- everything above the
 # widest band of empty rows in the plain variant. On the counted variants that band is
-# where the plate sits, which is why the cut is measured once, on `base`, and reused.
-$baseBounds = Get-Bounds -Bitmap $trayBitmaps["base"]
-$scan = $trayBitmaps["base"]
+# where the plate sits, and on the reconnecting ones the state badge fills the corner,
+# so the cut is measured once, on the plain connected mark, and reused everywhere. The
+# variants are drawn in register, so one measurement is the right one for all of them.
+$scan = $trayBitmaps["connected-base"]
+$baseBounds = Get-Bounds -Bitmap $scan
 
 # Rows the artwork occupies, then the widest empty run inside it.
 $rowInk = New-Object 'bool[]' $scan.Height
@@ -413,17 +421,29 @@ $markMaxY = if ($bestStart -gt 0) { $bestStart + $bestLength - 1 } else { $baseB
 Write-Host ("    lockup cut above y {0}" -f $markMaxY)
 
 $trayBounds = [ordered]@{}
-foreach ($count in $trayCounts) {
-    $trayBounds[$count] = Get-Bounds -Bitmap $trayBitmaps[$count] -MaxY $markMaxY
+foreach ($key in $trayBitmaps.Keys) {
+    $trayBounds[$key] = Get-Bounds -Bitmap $trayBitmaps[$key] -MaxY $markMaxY
 }
 
-# Every counted variant is framed by the union of all of them, so the mark holds still
-# as the count ticks over instead of breathing between 1 and 9. `base` keeps its own
-# tighter frame: an idle tray is the common case and gets the whole 16 pixels, and the
-# resize that comes with the first session reads as the state change it is.
-$countedFrame = Get-Union -Rectangles ($trayCounts | Where-Object { $_ -ne "base" } | ForEach-Object { $trayBounds[$_] })
-Write-Host ("    plain frame   {0}" -f $trayBounds["base"])
-Write-Host ("    counted frame {0}" -f $countedFrame)
+# Within a state, every counted variant is framed by the union of all of them, so the
+# mark holds still as the count ticks over instead of breathing between 1 and 9. The
+# plain mark keeps its own tighter frame: an idle tray is the common case and gets the
+# whole 16 pixels, and the resize that comes with the first session reads as the change
+# it is. Framing is per state rather than across all of them because a state badge is
+# drawn where the plain mark has nothing, and letting that shrink every other icon
+# would spend the count's pixels on a corner it does not use.
+$trayFrames = [ordered]@{}
+foreach ($state in $trayStates) {
+    $counted = Get-Union -Rectangles (
+        $trayCounts | Where-Object { $_ -ne "base" } | ForEach-Object { $trayBounds["$state-$_"] })
+
+    $trayFrames["$state-base"] = $trayBounds["$state-base"]
+    foreach ($count in $trayCounts | Where-Object { $_ -ne "base" }) {
+        $trayFrames["$state-$count"] = $counted
+    }
+
+    Write-Host ("    {0,-13} plain {1}  counted {2}" -f $state, $trayBounds["$state-base"], $counted)
+}
 
 function New-TrayFrame {
     param([System.Drawing.Bitmap]$Source, [System.Drawing.Rectangle]$Crop, [int]$Size)
@@ -459,23 +479,30 @@ function New-TrayFrame {
     return $canvas
 }
 
-foreach ($count in $trayCounts) {
-    $crop = if ($count -eq "base") { $trayBounds["base"] } else { $countedFrame }
+foreach ($state in $trayStates) {
+    foreach ($count in $trayCounts) {
+        $key = "$state-$count"
 
-    $frames = @()
-    foreach ($size in $traySizes) {
-        $bitmap = New-TrayFrame -Source $trayBitmaps[$count] -Crop $crop -Size $size
+        $frames = @()
+        foreach ($size in $traySizes) {
+            $bitmap = New-TrayFrame -Source $trayBitmaps[$key] -Crop $trayFrames[$key] -Size $size
 
-        $stream = New-Object System.IO.MemoryStream
-        $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
-        $frames += , @{ Size = $size; Bytes = $stream.ToArray() }
+            $stream = New-Object System.IO.MemoryStream
+            $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+            $frames += , @{ Size = $size; Bytes = $stream.ToArray() }
 
-        $stream.Dispose()
-        $bitmap.Dispose()
+            $stream.Dispose()
+            $bitmap.Dispose()
+        }
+
+        # The file name is the resource name: the daemon project globs this folder and
+        # embeds each file as 1RemoteCLI.Tray.<filename>.ico, so a new state or count
+        # needs no build edit at all -- drop the artwork in assets/tray, re-run this,
+        # and it ships.
+        $token = if ($count -eq "base") { "Base" } elseif ($count -eq "more") { "More" } else { $count }
+        $face = $state.Substring(0, 1).ToUpperInvariant() + $state.Substring(1)
+        Save-Ico -Frames $frames -Path (Join-Path $trayOut "$face.$token.ico")
     }
-
-    $name = if ($count -eq "base") { "1remote-tray.ico" } else { "1remote-tray-$count.ico" }
-    Save-Ico -Frames $frames -Path (Join-Path $assets $name)
 }
 
 foreach ($bitmap in $trayBitmaps.Values) { $bitmap.Dispose() }

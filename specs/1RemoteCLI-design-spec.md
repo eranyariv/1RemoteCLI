@@ -255,14 +255,19 @@ One per machine.
 
 | State | Icon | Meaning |
 | --- | --- | --- |
-| Connected | filled green dot | Reachable. Tooltip gives the session count. |
-| Reconnecting | hollow amber ring | Trying. Tooltip says local sessions keep working regardless. |
-| Signed out | hollow grey ring with a slash | Only the user can fix it. *Sign in* is enabled. |
-Distinguishable by shape as well as colour: colour alone fails for red/green colour blindness and at 16 px against a dark taskbar. The connection badge is composited at runtime over the mark.
+| Connected | plain green mark | Reachable. Tooltip gives the session count. |
+| Reconnecting | orange disc with a bang, over the mark | Trying. Tooltip says local sessions keep working regardless. |
+| Signed out | barred circle over the mark | Only the user can fix it. *Sign in* is enabled. |
+
+Distinguishable by shape as well as colour: colour alone fails for red/green colour blindness and at 16 px against a dark taskbar. Connected is deliberately undecorated — it is the state the tray is in almost all the time, and leaving it bare is what makes a decorated tray mean "look at me".
 
 **Session count.** The icon also carries the number of live sessions, so the answer to "is anything running on that machine" needs neither a hover nor a click. Nothing is shown for zero — a permanent "0" says exactly what a bare icon already says, and spends the annotation's one asset, that it means something when it is there. One through nine show the number; ten and above show `>9`, because two digits at 16 px is mush and nobody with ten sessions is reading a tray icon to learn whether it is eleven.
 
-The count is **shipped artwork, not drawn at runtime**. `assets/tray` holds a drawn 512 px variant per count and `scripts/make-icons.ps1` renders each into its own `.ico` at 16, 20, 24, 32, 40 and 48, which the daemon embeds and selects by count. A digit composited into a corner at 16 px is a grey smudge whatever care goes into it; picking a whole prepared image is what makes the number legible. The counted variants share one frame so the mark holds still as the number ticks over, and the count sits in a white disc so it survives a dark taskbar as well as a light one. Because the counted artwork occupies the right of the icon, the connection badge moves to the bottom-left whenever a count is showing.
+**Both cues are shipped artwork, not drawn at runtime.** `assets/tray` holds a drawn 512 px variant for every combination of state and count — thirty-three of them — and `scripts/make-icons.ps1` renders each into its own `.ico` at 16, 20, 24, 32, 40 and 48, which the daemon embeds and selects. A digit or a badge composited into a corner at 16 px is a smudge whatever care goes into it; picking a whole prepared image is what makes both legible. So `TrayArtwork` chooses a file and scales it, and does no compositing at all.
+
+Within a state the counted variants share one frame, so the mark holds still as the number ticks over; the plain mark keeps a tighter one, because an idle tray is the common case and should get all sixteen pixels. The count sits in a white disc so it survives a dark taskbar as well as a light one, and the state badge takes the opposite corner from the count so neither crowds the other.
+
+Missing artwork degrades one axis at a time rather than to nothing — the count is dropped first, then the state, leaving the plain mark. Losing the number is a shame and losing the badge is worse, but the icon is the only thing telling the user whether their machine is reachable, and that is not something a build slip should be able to take away.
 
 The count is independent of the connection state and is shown in all three: sessions keep running while the hub is unreachable, so the number means the same thing however the connection is doing. It is read from the session registry — the same source as the tooltip and the settings window, so the three can never disagree — and the shell is only asked to repaint when the icon actually changes, so a busy session does not become a repaint per output frame.
 

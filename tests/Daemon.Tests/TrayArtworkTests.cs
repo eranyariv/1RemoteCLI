@@ -151,32 +151,63 @@ public sealed class TrayArtworkTests
         Assert.True(differences < 8, $"Connected is not the plain mark ({differences} pixels differ).");
     }
 
-    [Fact]
-    public void LeavesTheCornerClearForTheBadge()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(5)]
+    public void TellsTheStatesApartOnALightTaskbarAndADarkOne(int sessions)
     {
-        // The badge is punched into the mark rather than laid over it. Without the
-        // moat it dissolves into the glyph at small sizes, which is precisely when it
-        // matters most.
-        using Icon connected = TrayArtwork.Create(AgentState.Connected, 32);
-        using Icon signedOut = TrayArtwork.Create(AgentState.SignedOut, 32);
-        using Bitmap a = connected.ToBitmap();
-        using Bitmap b = signedOut.ToBitmap();
-
-        int corner = 0;
-
-        for (int y = 20; y < 32; y++)
+        // A tray icon is composited straight onto the taskbar, and the taskbar is white
+        // on one machine and black on the next. An icon whose state cue only reads
+        // against one of them is half broken, and it is the half nobody testing on their
+        // own machine will ever see. So each state is flattened onto both extremes and
+        // compared against connected by luminance - the channel that survives a theme
+        // change, and the one colour blindness cannot take away.
+        foreach (Color background in new[] { Color.White, Color.Black })
         {
-            for (int x = 20; x < 32; x++)
+            using Bitmap reference = Flatten(AgentState.Connected, sessions, background);
+
+            foreach (AgentState state in new[] { AgentState.Reconnecting, AgentState.SignedOut })
             {
-                if (a.GetPixel(x, y).ToArgb() != b.GetPixel(x, y).ToArgb())
+                using Bitmap candidate = Flatten(state, sessions, background);
+
+                int differences = 0;
+
+                for (int y = 0; y < reference.Height; y++)
                 {
-                    corner++;
+                    for (int x = 0; x < reference.Width; x++)
+                    {
+                        if (Math.Abs(Luminance(reference.GetPixel(x, y)) - Luminance(candidate.GetPixel(x, y))) > 24)
+                        {
+                            differences++;
+                        }
+                    }
                 }
+
+                Assert.True(
+                    differences > 40,
+                    $"{state} looks like connected on a {background.Name} taskbar ({differences} pixels differ).");
             }
         }
-
-        Assert.True(corner > 20, $"The badge corner barely changed between states ({corner} pixels).");
     }
+
+    private static Bitmap Flatten(AgentState state, int sessions, Color background)
+    {
+        using Icon icon = TrayArtwork.Create(state, 16, sessions);
+        using Bitmap source = icon.ToBitmap();
+
+        var flattened = new Bitmap(source.Width, source.Height, PixelFormat.Format32bppArgb);
+
+        using (Graphics graphics = Graphics.FromImage(flattened))
+        {
+            graphics.Clear(background);
+            graphics.DrawImage(source, 0, 0, source.Width, source.Height);
+        }
+
+        return flattened;
+    }
+
+    private static double Luminance(Color colour) =>
+        (0.213 * colour.R) + (0.715 * colour.G) + (0.072 * colour.B);
 
     [Fact]
     public void ShowsADifferentIconForEveryCount()
@@ -257,6 +288,29 @@ public sealed class TrayArtworkTests
     }
 
     [Theory]
+    [InlineData(AgentState.Connected)]
+    [InlineData(AgentState.Reconnecting)]
+    [InlineData(AgentState.SignedOut)]
+    public void ShipsArtworkForEveryStateAndCount(AgentState state)
+    {
+        // Every state now has its own drawn set rather than a run-time treatment of the
+        // connected one, and TrayArtwork falls back quietly when a file is missing. That
+        // fallback is the right behaviour in production and a silent failure in a build:
+        // a typo in the generator's naming would ship a tray that never leaves the
+        // connected icon. Naming the resources from this end is what catches it.
+        var counts = new[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, TrayArtwork.CountCeiling };
+
+        foreach (int count in counts)
+        {
+            string resource = TrayArtwork.ResourceFor(state, count);
+
+            using Stream? stream = typeof(TrayArtwork).Assembly.GetManifestResourceStream(resource);
+
+            Assert.True(stream is not null, $"{resource} is not embedded.");
+        }
+    }
+
+    [Theory]
     [InlineData(16)]
     [InlineData(20)]
     [InlineData(24)]
@@ -265,20 +319,23 @@ public sealed class TrayArtworkTests
     [InlineData(48)]
     public void ShipsARealFrameForEverySizeTheShellAsksFor(int size)
     {
-        // Every count container carries a frame at each of these sizes, so asking for
-        // one is a lookup rather than a resize. A missing frame is not an error - GDI+
-        // stretches the nearest one and the count turns to mush - so the only way to
-        // notice is to check the frames are there.
-        foreach (int count in new[] { 0, 1, 5, 9, TrayArtwork.CountCeiling })
+        // Every container carries a frame at each of these sizes, so asking for one is
+        // a lookup rather than a resize. A missing frame is not an error - GDI+ stretches
+        // the nearest one and the count turns to mush - so the only way to notice is to
+        // check the frames are there.
+        foreach (AgentState state in Enum.GetValues<AgentState>())
         {
-            using Stream stream = typeof(TrayArtwork).Assembly
-                .GetManifestResourceStream(TrayArtwork.ResourceFor(count))
-                ?? throw new InvalidOperationException($"No artwork is embedded for a count of {count}.");
+            foreach (int count in new[] { 0, 1, 5, 9, TrayArtwork.CountCeiling })
+            {
+                using Stream stream = typeof(TrayArtwork).Assembly
+                    .GetManifestResourceStream(TrayArtwork.ResourceFor(state, count))
+                    ?? throw new InvalidOperationException($"No artwork is embedded for {state} at a count of {count}.");
 
-            using var icon = new Icon(stream, size, size);
+                using var icon = new Icon(stream, size, size);
 
-            Assert.Equal(size, icon.Width);
-            Assert.Equal(size, icon.Height);
+                Assert.Equal(size, icon.Width);
+                Assert.Equal(size, icon.Height);
+            }
         }
     }
 

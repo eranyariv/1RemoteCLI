@@ -16,35 +16,39 @@ namespace OneRemoteCli.Daemon.Tray;
 /// clear of Windows Forms, which issue #46 wants to remove.
 /// </para>
 /// <para>
-/// Connected is drawn as the bare mark. Every other state adds a badge, so a decorated
-/// tray means something wants attention. Within those states the cues are deliberately
-/// redundant: the badge <em>shape</em> survives colour blindness, the badge
-/// <em>colour</em> is the fastest to read at a glance, and the treatment of the mark
-/// itself — full colour, dimmed, or grey — is the one that still works at 16 pixels on
-/// a dark taskbar when the badge is too small to resolve. Any one of the three can fail
-/// and the icon still answers the only question it exists to answer: is this working.
+/// Connected is drawn as the bare mark. Every other state carries a badge, so a
+/// decorated tray means something wants attention. The cues are deliberately redundant:
+/// the badge <em>shape</em> survives colour blindness — a bang inside a disc for
+/// reconnecting, a barred circle for signed out — and the badge <em>colour</em> is the
+/// fastest to read at a glance. Either can fail and the icon still answers the only
+/// question it exists to answer: is this working.
 /// </para>
 /// <para>
-/// The live session count is carried by the artwork itself (issue #76) rather than
-/// composited at run time: <c>assets/tray</c> holds a drawn variant per count and
-/// <c>scripts/make-icons.ps1</c> turns each into its own <c>.ico</c>. Picking a whole
-/// prepared image is what lets the number survive 16 pixels — a digit drawn into the
-/// corner at that size is a grey smudge whatever care goes into it. The count is also
-/// deliberately independent of the connection state: sessions keep running while the
-/// hub is down, so the number means the same thing in all three states and is shown in
-/// all three.
+/// Both of the things the icon has to say — how many sessions are live (issue #76) and
+/// whether the hub can be reached (issue #77) — are carried by the artwork itself
+/// rather than composited at run time. <c>assets/tray</c> holds a drawn variant for
+/// every state and count, and <c>scripts/make-icons.ps1</c> turns each into its own
+/// <c>.ico</c>. Picking a whole prepared image is what lets both survive 16 pixels; a
+/// digit or a badge drawn into the corner at that size is a smudge whatever care goes
+/// into it. So this class chooses a file and scales it, and nothing else.
+/// </para>
+/// <para>
+/// The count is deliberately independent of the connection state: sessions keep running
+/// while the hub is unreachable, so the number means the same thing in all three states
+/// and is shown in all three.
 /// </para>
 /// </summary>
 [SupportedOSPlatform("windows")]
 public static class TrayArtwork
 {
-    /// <summary>Matches the <c>LogicalName</c> the daemon project embeds the icon under.</summary>
-    internal const string LogoResourceName = "1RemoteCLI.Tray.Logo.ico";
-
     /// <summary>
-    /// The counted variants, one per count. <c>{0}</c> is the count, or <c>More</c>.
+    /// The embedded artwork, one file per state and count. <c>{0}</c> is the state,
+    /// <c>{1}</c> is the count — <c>Base</c>, <c>1</c>..<c>9</c>, or <c>More</c>.
     /// </summary>
-    internal const string CountResourceFormat = "1RemoteCLI.Tray.Count.{0}.ico";
+    internal const string ResourceFormat = "1RemoteCLI.Tray.{0}.{1}.ico";
+
+    /// <summary>Matches the <c>LogicalName</c> the daemon project embeds the plain mark under.</summary>
+    internal const string LogoResourceName = "1RemoteCLI.Tray.Connected.Base.ico";
 
     /// <summary>
     /// The first count drawn as <c>&gt;9</c> rather than as itself.
@@ -87,15 +91,14 @@ public static class TrayArtwork
             graphics.Clear(Color.Transparent);
 
             DrawMark(graphics, state, size, sessions);
-            DrawBadge(graphics, state, size, sessions);
         }
 
         return FromBitmap(bitmap);
     }
 
     /// <summary>
-    /// Paints the product mark, or falls back to a plain disc when the artwork cannot
-    /// be loaded.
+    /// Paints the artwork for this state and count, or falls back to a plain disc when
+    /// none of it can be loaded.
     /// <para>
     /// The fallback matters more than it looks. A missing or corrupt resource must
     /// still leave a readable status light in the tray, because the icon is the only
@@ -105,7 +108,7 @@ public static class TrayArtwork
     /// </summary>
     private static void DrawMark(Graphics graphics, AgentState state, int size, int sessions)
     {
-        using Image? mark = LoadMark(size, sessions);
+        using Image? mark = LoadMark(state, size, sessions);
 
         if (mark is null)
         {
@@ -114,113 +117,12 @@ public static class TrayArtwork
             return;
         }
 
-        // Full bleed. At 16 pixels every one of them counts, and shrinking the mark to
-        // make room for the badge costs legibility exactly where it is scarcest. The
-        // badge earns its corner by punching a moat through the mark instead.
+        // Full bleed. At 16 pixels every one of them counts, and the artwork is already
+        // framed to the tray by scripts/make-icons.ps1 -- insetting here would shrink it
+        // twice and cost legibility exactly where it is scarcest.
         var target = new Rectangle(0, 0, size, size);
 
-        using ImageAttributes attributes = TreatmentFor(state);
-        graphics.DrawImage(mark, target, 0, 0, mark.Width, mark.Height, GraphicsUnit.Pixel, attributes);
-    }
-
-    /// <summary>
-    /// How the mark is tinted for each state: untouched, dimmed, or drained of colour.
-    /// </summary>
-    private static ImageAttributes TreatmentFor(AgentState state)
-    {
-        var attributes = new ImageAttributes();
-
-        ColorMatrix matrix = state switch
-        {
-            AgentState.Connected => new ColorMatrix(),
-
-            // Dimmed, not greyed: reconnecting is a transient state and should read as
-            // "the same thing, faded", not as a different icon. Not dimmed far - below
-            // about 0.7 the mark stops resolving against a dark taskbar, and a state
-            // you cannot see is worse than one you have to look twice at.
-            AgentState.Reconnecting => new ColorMatrix { Matrix33 = 0.7f },
-
-            // Luminance weights, not a flat average: a flat average turns this mark's
-            // saturated green into a mid grey that still looks deliberate, where the
-            // perceptual weights render it convincingly switched off. Alpha is left
-            // alone - signed out is the one state that needs the user to do something,
-            // so it is muted by hue and never by fading toward the taskbar.
-            _ => new ColorMatrix(
-            [
-                [0.213f, 0.213f, 0.213f, 0f, 0f],
-                [0.715f, 0.715f, 0.715f, 0f, 0f],
-                [0.072f, 0.072f, 0.072f, 0f, 0f],
-                [0f, 0f, 0f, 1f, 0f],
-                [0f, 0f, 0f, 0f, 1f],
-            ]),
-        };
-
-        attributes.SetColorMatrix(matrix);
-
-        return attributes;
-    }
-
-    /// <summary>
-    /// Stamps the status badge into a bottom corner, inside a punched-out moat so it
-    /// never dissolves into the mark behind it.
-    /// <para>
-    /// Nothing is drawn when the agent is connected. Working is the state the icon is
-    /// in almost all the time, and a badge there is noise: a green dot on a green mark
-    /// competes with the artwork instead of annotating it, and at 16 pixels the two
-    /// merge into one shape. Leaving it clean makes the badge mean something — if the
-    /// tray is decorated, something wants attention.
-    /// </para>
-    /// <para>
-    /// Which corner depends on whether a count is showing. The counted artwork puts its
-    /// number in a disc down the right-hand side, so a badge in the usual bottom-right
-    /// would land its moat through the digit and cost the count the legibility the
-    /// separate artwork was drawn to buy. Bottom-left is empty in every counted variant,
-    /// so that is where it goes; with no count the mark is centred and the badge keeps
-    /// the corner it has always had.
-    /// </para>
-    /// </summary>
-    private static void DrawBadge(Graphics graphics, AgentState state, int size, int sessions)
-    {
-        if (state == AgentState.Connected)
-        {
-            return;
-        }
-
-        float diameter = Math.Max(6f, size * 0.46f);
-        float x = sessions > 0 ? 0f : size - diameter;
-        float y = size - diameter;
-        var bounds = new RectangleF(x, y, diameter - 1, diameter - 1);
-
-        float moat = Math.Max(1.5f, size * 0.09f);
-        var clearing = RectangleF.Inflate(bounds, moat, moat);
-
-        // SourceCopy writes the transparent pixels rather than blending them, which is
-        // what actually erases the mark underneath. SourceOver would be a no-op.
-        CompositingMode previous = graphics.CompositingMode;
-        graphics.CompositingMode = CompositingMode.SourceCopy;
-
-        using (var eraser = new SolidBrush(Color.Transparent))
-        {
-            graphics.FillEllipse(eraser, clearing);
-        }
-
-        graphics.CompositingMode = previous;
-
-        Color colour = ColourFor(state);
-        float thickness = Math.Max(1.4f, size * 0.11f);
-
-        using var pen = new Pen(colour, thickness);
-        graphics.DrawEllipse(pen, bounds);
-
-        if (state == AgentState.SignedOut)
-        {
-            graphics.DrawLine(
-                pen,
-                bounds.Left + (bounds.Width * 0.22f),
-                bounds.Bottom - (bounds.Height * 0.22f),
-                bounds.Right - (bounds.Width * 0.22f),
-                bounds.Top + (bounds.Height * 0.22f));
-        }
+        graphics.DrawImage(mark, target, 0, 0, mark.Width, mark.Height, GraphicsUnit.Pixel);
     }
 
     private static Color ColourFor(AgentState state) => state switch
@@ -230,7 +132,6 @@ public static class TrayArtwork
         _ => Grey,
     };
 
-
     private static Rectangle Inset(int size)
     {
         int margin = Math.Max(1, size / 8);
@@ -239,7 +140,7 @@ public static class TrayArtwork
     }
 
     /// <summary>
-    /// Pulls the closest frame out of the embedded <c>.ico</c> for this count.
+    /// Pulls the closest frame out of the embedded <c>.ico</c> for this state and count.
     /// <para>
     /// Every container carries mark-only frames at 16, 20, 24, 32, 40 and 48 — every
     /// size the shell asks for across display scalings — so this is a lookup rather
@@ -247,26 +148,38 @@ public static class TrayArtwork
     /// turns to mush.
     /// </para>
     /// <para>
-    /// A missing counted container falls back to the plain mark rather than to nothing.
-    /// Losing the number is a shame; losing the icon that tells the user whether their
-    /// machine is reachable is not something a build slip should be able to do.
+    /// Missing artwork degrades one axis at a time rather than to nothing: the count is
+    /// dropped first, then the state. Losing the number is a shame and losing the badge
+    /// is worse, but losing the icon that tells the user whether their machine is
+    /// reachable is not something a build slip should be able to do.
     /// </para>
     /// </summary>
-    private static Image? LoadMark(int size, int sessions)
+    private static Image? LoadMark(AgentState state, int size, int sessions)
     {
-        return Read(ResourceFor(sessions), size)
-            ?? (sessions > 0 ? Read(LogoResourceName, size) : null);
+        return Read(ResourceFor(state, sessions), size)
+            ?? Read(ResourceFor(state, 0), size)
+            ?? Read(LogoResourceName, size);
     }
 
     /// <summary>
-    /// Which embedded container carries this count.
+    /// Which embedded container carries this state and count. The name is assembled
+    /// from the same two tokens <c>scripts/make-icons.ps1</c> names the files with.
     /// </summary>
-    internal static string ResourceFor(int sessions) => sessions switch
-    {
-        <= 0 => LogoResourceName,
-        >= CountCeiling => string.Format(CultureInfo.InvariantCulture, CountResourceFormat, "More"),
-        _ => string.Format(CultureInfo.InvariantCulture, CountResourceFormat, sessions),
-    };
+    internal static string ResourceFor(AgentState state, int sessions) => string.Format(
+        CultureInfo.InvariantCulture,
+        ResourceFormat,
+        state switch
+        {
+            AgentState.Connected => "Connected",
+            AgentState.Reconnecting => "Reconnecting",
+            _ => "Disconnected",
+        },
+        sessions switch
+        {
+            <= 0 => "Base",
+            >= CountCeiling => "More",
+            _ => sessions.ToString(CultureInfo.InvariantCulture),
+        });
 
     private static Image? Read(string resource, int size)
     {

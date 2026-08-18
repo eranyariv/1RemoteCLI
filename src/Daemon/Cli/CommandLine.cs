@@ -27,6 +27,12 @@ public enum CommandKind
     /// <summary>Undo <see cref="Install"/>.</summary>
     Uninstall,
 
+    /// <summary>
+    /// Prove this build of the executable actually works. Meant for the publish script
+    /// rather than for users, which is why it is absent from the help.
+    /// </summary>
+    SelfCheck,
+
     /// <summary>Print usage.</summary>
     Help,
 
@@ -90,6 +96,7 @@ public static class CommandLine
         ["status"] = CommandKind.Status,
         ["install"] = CommandKind.Install,
         ["uninstall"] = CommandKind.Uninstall,
+        ["self-check"] = CommandKind.SelfCheck,
     };
 
     public static ParsedCommand Parse(IReadOnlyList<string> argv)

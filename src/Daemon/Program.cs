@@ -88,6 +88,9 @@ public static class Program
             case CommandKind.Uninstall:
                 return RunUninstall();
 
+            case CommandKind.SelfCheck:
+                return RunSelfCheck();
+
             default:
                 return await RunWrappedAsync(command).ConfigureAwait(false);
         }
@@ -225,6 +228,21 @@ public static class Program
 
     private static int RunUninstall() => Report(Installer.Uninstall(), installing: false);
 
+    private static int RunSelfCheck()
+    {
+        IReadOnlyList<StepResult> checks = SelfCheck.Run();
+
+        foreach (StepResult check in checks)
+        {
+            Console.WriteLine($"  {(check.Ok ? "ok  " : "FAIL")}  {check.Message}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine(SelfCheck.Summarise(checks));
+
+        return checks.All(check => check.Ok) ? 0 : ExitInstallFailed;
+    }
+
     private static int Report(IReadOnlyList<StepResult> steps, bool installing)
     {
         foreach (StepResult step in steps)
@@ -358,12 +376,10 @@ public static class Program
         {
             tray = new TrayIcon(
                 identity.DisplayName,
-                onSignIn: () => Launch(Installer.ExecutablePath, "login"),
-
                 // Through the CLI rather than in-process, like every other credential
                 // action here: the child prints why the hub refused an account, which
                 // is the failure people actually hit and one a tray icon cannot explain.
-                onSwitchAccount: () => Launch(Installer.ExecutablePath, "switch-account"),
+                onSignIn: () => Launch(Installer.ExecutablePath, "login"),
                 onSignOut: () => Launch(Installer.ExecutablePath, "logout"),
                 onShowSessions: () => Launch(HubEndpoint.AppUri().ToString()),
                 onOpenLogs: () => Launch(FileLogger.DefaultDirectory),

@@ -70,7 +70,6 @@ internal static partial class NativeMethods
     internal const int MF_STRING = 0x00000000;
     internal const int MF_SEPARATOR = 0x00000800;
     internal const int MF_GRAYED = 0x00000001;
-
     internal const int SM_CXSMICON = 49;
 
     internal const int WS_EX_TOOLWINDOW = 0x00000080;
@@ -221,6 +220,14 @@ internal static partial class NativeMethods
     [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool SetForegroundWindow(IntPtr hWnd);
+
+    /// <summary>
+    /// Marks the item the shell should draw in bold — the Windows convention for "this
+    /// is what double-clicking does". Without it that shortcut is undiscoverable.
+    /// </summary>
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SetMenuDefaultItem(IntPtr menu, int item, int byPosition);
 
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

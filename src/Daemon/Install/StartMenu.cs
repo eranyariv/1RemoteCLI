@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.Marshalling;
 using System.Runtime.Versioning;
 
 namespace OneRemoteCli.Daemon.Install;
@@ -20,7 +21,7 @@ namespace OneRemoteCli.Daemon.Install;
 /// </para>
 /// </summary>
 [SupportedOSPlatform("windows")]
-public static class StartMenu
+public static partial class StartMenu
 {
     /// <summary>Under the user's own Start Menu, so no elevation is needed.</summary>
     public static string FolderPath => Path.Combine(
@@ -119,20 +120,26 @@ public static class StartMenu
 
     private static void CreateShortcut(string linkPath, string target, string arguments, string description)
     {
-        var link = (IShellLinkW)new ShellLink();
+        object instance = Activate(ClassIdShellLink, InterfaceIdShellLink);
 
         try
         {
+            var link = (IShellLinkW)instance;
+
             link.SetPath(target);
             link.SetArguments(arguments);
             link.SetDescription(description);
             link.SetWorkingDirectory(Path.GetDirectoryName(target) ?? string.Empty);
 
+            // The cast is a QueryInterface: the source generator makes the wrapper
+            // IDynamicInterfaceCastable, so asking for another interface declared here
+            // goes out to the object rather than being decided by the type system.
+            //
             // fRemember: false writes a copy and leaves the object's own notion of "my
             // file" unset. Passing true makes the shell link adopt the path it just
             // wrote, so the file stays associated with a live COM object and cannot be
             // deleted until that object goes away.
-            ((IPersistFile)link).Save(linkPath, fRemember: false);
+            ((IPersistFile)instance).Save(linkPath, fRemember: false);
         }
         finally
         {
@@ -141,50 +148,87 @@ public static class StartMenu
             // process, and removing this line alone does not reintroduce the failure.
             // It is still worth doing: a COM object whose lifetime is decided by the GC
             // is a latent version of exactly that bug.
-            _ = Marshal.FinalReleaseComObject(link);
+            (instance as IDisposable)?.Dispose();
         }
     }
 
     /// <summary>
-    /// The <c>ShellLink</c> coclass. Not sealed: the cast to <see cref="IShellLinkW"/>
-    /// is only legal on a type the compiler cannot prove does not implement it, and the
-    /// runtime supplies the actual implementation.
+    /// Creates a COM object and wraps it, without the built-in COM support that
+    /// <c>PublishTrimmed</c> switches off.
+    /// <para>
+    /// Casting a <c>new</c>-ed <c>[ComImport]</c> coclass is the usual way to write this,
+    /// and was how this started, but built-in COM is a documented hole in trimming: the
+    /// linker cannot see which interfaces survive, so it fails the build, and forcing the
+    /// switch back on only moves the failure to a <see cref="NotSupportedException"/> on
+    /// the user's machine. That is issue #72. The interfaces below are source-generated
+    /// instead, which the linker can follow, leaving only activation to do by hand.
+    /// </para>
     /// </summary>
-    [ComImport]
-    [Guid("00021401-0000-0000-C000-000000000046")]
-    private class ShellLink
+    private static object Activate(Guid classId, Guid interfaceId)
     {
+        const uint ClsCtxInprocServer = 0x1;
+
+        int hr = CoCreateInstance(in classId, IntPtr.Zero, ClsCtxInprocServer, in interfaceId, out IntPtr unknown);
+
+        if (hr < 0)
+        {
+            Marshal.ThrowExceptionForHR(hr);
+        }
+
+        try
+        {
+            // UniqueInstance rather than a cached wrapper, so that disposing above
+            // actually releases instead of handing the same wrapper to the next caller.
+            return Wrappers.GetOrCreateObjectForComInstance(unknown, CreateObjectFlags.UniqueInstance);
+        }
+        finally
+        {
+            // The wrapper took a reference of its own; this is the one CoCreateInstance
+            // handed us, and it is ours to give back.
+            _ = Marshal.Release(unknown);
+        }
     }
 
-    [ComImport]
+    private static readonly StrategyBasedComWrappers Wrappers = new();
+
+    private static readonly Guid ClassIdShellLink = new("00021401-0000-0000-C000-000000000046");
+
+    private static readonly Guid InterfaceIdShellLink = new("000214F9-0000-0000-C000-000000000046");
+
+    [LibraryImport("ole32.dll")]
+    private static partial int CoCreateInstance(
+        in Guid rclsid,
+        IntPtr pUnkOuter,
+        uint dwClsContext,
+        in Guid riid,
+        out IntPtr ppv);
+
+    [GeneratedComInterface(StringMarshalling = StringMarshalling.Utf16)]
     [Guid("000214F9-0000-0000-C000-000000000046")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IShellLinkW
+    internal partial interface IShellLinkW
     {
-        // Only the setters are declared, but the order and signature of every member
+        // Only the setters are ever called, but the order and signature of every member
         // must match the vtable exactly - an interface is a layout, not a list of the
-        // methods you happen to want.
-        void GetPath(
-            [MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pszFile,
-            int cch,
-            IntPtr pfd,
-            int fFlags);
+        // methods you happen to want. The members that are never called take a raw
+        // pointer where the real signature has a string buffer: a slot that exists only
+        // to be counted does not need marshalling generated for it.
+        void GetPath(IntPtr pszFile, int cch, IntPtr pfd, int fFlags);
 
         void GetIDList(out IntPtr ppidl);
 
         void SetIDList(IntPtr pidl);
 
-        void GetDescription([MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pszName, int cch);
+        void GetDescription(IntPtr pszName, int cch);
 
-        void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+        void SetDescription(string pszName);
 
-        void GetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pszDir, int cch);
+        void GetWorkingDirectory(IntPtr pszDir, int cch);
 
-        void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string pszDir);
+        void SetWorkingDirectory(string pszDir);
 
-        void GetArguments([MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pszArgs, int cch);
+        void GetArguments(IntPtr pszArgs, int cch);
 
-        void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string pszArgs);
+        void SetArguments(string pszArgs);
 
         void GetHotkey(out short pwHotkey);
 
@@ -194,33 +238,37 @@ public static class StartMenu
 
         void SetShowCmd(int iShowCmd);
 
-        void GetIconLocation([MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pszIconPath, int cch, out int piIcon);
+        void GetIconLocation(IntPtr pszIconPath, int cch, out int piIcon);
 
-        void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string pszIconPath, int iIcon);
+        void SetIconLocation(string pszIconPath, int iIcon);
 
-        void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string pszPathRel, int dwReserved);
+        void SetRelativePath(string pszPathRel, int dwReserved);
 
         void Resolve(IntPtr hwnd, int fFlags);
 
-        void SetPath([MarshalAs(UnmanagedType.LPWStr)] string pszFile);
+        void SetPath(string pszFile);
     }
 
-    [ComImport]
+    /// <summary>
+    /// <c>IPersistFile</c>, which derives from <c>IPersist</c> in COM. Declared flat, with
+    /// <c>GetClassID</c> first, because that inherited member owns a vtable slot and the
+    /// slots have to line up.
+    /// </summary>
+    [GeneratedComInterface(StringMarshalling = StringMarshalling.Utf16)]
     [Guid("0000010b-0000-0000-C000-000000000046")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IPersistFile
+    internal partial interface IPersistFile
     {
         void GetClassID(out Guid pClassID);
 
         [PreserveSig]
         int IsDirty();
 
-        void Load([MarshalAs(UnmanagedType.LPWStr)] string pszFileName, int dwMode);
+        void Load(string pszFileName, int dwMode);
 
-        void Save([MarshalAs(UnmanagedType.LPWStr)] string pszFileName, [MarshalAs(UnmanagedType.Bool)] bool fRemember);
+        void Save(string pszFileName, [MarshalAs(UnmanagedType.Bool)] bool fRemember);
 
-        void SaveCompleted([MarshalAs(UnmanagedType.LPWStr)] string pszFileName);
+        void SaveCompleted(string pszFileName);
 
-        void GetCurFile([MarshalAs(UnmanagedType.LPWStr)] out string ppszFileName);
+        void GetCurFile(out string ppszFileName);
     }
 }

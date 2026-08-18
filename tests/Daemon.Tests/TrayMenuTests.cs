@@ -37,7 +37,6 @@ public sealed class TrayMenuTests
 
         Assert.True(Item(menu, TrayCommand.SignIn).Enabled);
         Assert.False(Item(menu, TrayCommand.SignOut).Enabled);
-        Assert.False(Item(menu, TrayCommand.SwitchAccount).Enabled);
     }
 
     [Fact]
@@ -47,7 +46,6 @@ public sealed class TrayMenuTests
 
         Assert.False(Item(menu, TrayCommand.SignIn).Enabled);
         Assert.True(Item(menu, TrayCommand.SignOut).Enabled);
-        Assert.True(Item(menu, TrayCommand.SwitchAccount).Enabled);
     }
 
     [Fact]
@@ -85,6 +83,29 @@ public sealed class TrayMenuTests
         // A label, not a command: clicking it must not look like it did something.
         Assert.Equal(TrayCommand.None, version.Command);
         Assert.False(version.Enabled);
+    }
+
+    [Fact]
+    public void ExactlyOneItemIsTheDefaultAndItIsWhatDoubleClickDoes()
+    {
+        // The bold item is a promise about what double-clicking the icon does. Two
+        // defaults would leave the shell to pick which one to embolden, and none would
+        // make the shortcut undiscoverable.
+        TrayMenuItem theDefault = Menu(AgentState.Connected, "ada@example.com")
+            .Single(item => item.IsDefault);
+
+        Assert.Equal(TrayMenu.DefaultCommand, theDefault.Command);
+        Assert.True(theDefault.Enabled);
+    }
+
+    [Fact]
+    public void TheMenuDoesNotOfferToSwitchAccounts()
+    {
+        // It was sign-out followed by sign-in, both of which are already on the menu,
+        // so it cost a permanent line for a once-ever action (issue #71).
+        IReadOnlyList<TrayMenuItem> menu = Menu(AgentState.Connected, "ada@example.com");
+
+        Assert.DoesNotContain(menu, item => item.Text.Contains("different account", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

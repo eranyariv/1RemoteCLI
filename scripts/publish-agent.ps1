@@ -100,6 +100,22 @@ $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
 # is the numeric form Windows insists on and nobody quotes in a bug report.
 $version = $item.VersionInfo.ProductVersion
 
+# Run the executable that was just produced. The test suite runs against an untrimmed
+# build and so proves nothing about this file: trimming drops whatever the linker
+# cannot see it being used, and the paths that reach their work through COM vtables,
+# reflection over JSON properties, or formatters emitted at run time are invisible to
+# it. Those failures reach the user with no warning of any kind -- see issue #72, where
+# a published build could not create its own Start Menu shortcuts while every test
+# passed. Self-check writes only under a temp folder it then deletes.
+Write-Host ''
+Write-Host '==> Checking the published executable' -ForegroundColor Cyan
+
+& $exe self-check
+
+if ($LASTEXITCODE -ne 0) {
+    throw "The published executable failed its own self-check, so it is broken in a way the tests cannot see. Do not ship $exe."
+}
+
 Write-Host ''
 Write-Host "  path     $exe" -ForegroundColor Green
 Write-Host ("  size     {0:N1} MB" -f ($item.Length / 1MB)) -ForegroundColor Green

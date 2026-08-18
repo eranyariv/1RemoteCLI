@@ -63,7 +63,6 @@ public sealed class TrayIcon : IDisposable
     public TrayIcon(
         string machineName,
         Action onSignIn,
-        Action onSwitchAccount,
         Action onSignOut,
         Action onShowSessions,
         Action onOpenLogs,
@@ -75,7 +74,6 @@ public sealed class TrayIcon : IDisposable
         _commands = new Dictionary<TrayCommand, Action>
         {
             [TrayCommand.SignIn] = onSignIn ?? throw new ArgumentNullException(nameof(onSignIn)),
-            [TrayCommand.SwitchAccount] = onSwitchAccount ?? throw new ArgumentNullException(nameof(onSwitchAccount)),
             [TrayCommand.SignOut] = onSignOut ?? throw new ArgumentNullException(nameof(onSignOut)),
             [TrayCommand.ShowSessions] = onShowSessions ?? throw new ArgumentNullException(nameof(onShowSessions)),
             [TrayCommand.OpenLogs] = onOpenLogs ?? throw new ArgumentNullException(nameof(onOpenLogs)),
@@ -270,9 +268,10 @@ public sealed class TrayIcon : IDisposable
                 break;
 
             // What people try first, so it should do the most useful thing rather than
-            // nothing.
+            // nothing. Read from the menu rather than named here, so the item drawn in
+            // bold and the action this performs cannot drift apart.
             case WM_LBUTTONDBLCLK:
-                Invoke(TrayCommand.ShowSessions);
+                Invoke(TrayMenu.DefaultCommand);
                 break;
         }
     }
@@ -302,6 +301,13 @@ public sealed class TrayIcon : IDisposable
                 // One past the index: TrackPopupMenuEx returns 0 for "nothing chosen",
                 // so no item may own that value.
                 AppendMenu(menu, MF_STRING | (item.Enabled ? 0 : MF_GRAYED), i + 1, item.Text);
+
+                if (item.IsDefault)
+                {
+                    // By position rather than by id, because a separator has no id and
+                    // the two numbering schemes diverge as soon as one is appended.
+                    SetMenuDefaultItem(menu, i, 1);
+                }
             }
 
             // Required, and easy to miss. A popup menu whose owner is not in the

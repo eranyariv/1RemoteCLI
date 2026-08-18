@@ -126,6 +126,24 @@ public sealed class InstallerTests
     }
 
     [Fact]
+    public void AStepThatThrowsBecomesAFailedStepAndTheRestStillRun()
+    {
+        // Issue #72: a step threw a type the step itself did not catch, which abandoned
+        // every later step while keeping the effects of the earlier ones. A half-done
+        // install is worse than a reported failure, because nothing says which half.
+        IReadOnlyList<StepResult> steps = Installer.Install(
+            registerTask: Ok("a"),
+            removeRunKey: Ok("b"),
+            addRunKey: Ok("unused"),
+            installShortcuts: () => throw new NotSupportedException("no COM for you"),
+            addToPath: Ok("d"));
+
+        Assert.Equal(["a", "b", "no COM for you", "d"], steps.Select(step => step.Message));
+        Assert.False(steps[2].Ok);
+        Assert.True(steps[3].Ok);
+    }
+
+    [Fact]
     public void ASuccessfulInstallSaysTheAgentWillStartByItself()
     {
         string summary = Installer.Summarise([StepResult.Success("a"), StepResult.Success("b")], installing: true);

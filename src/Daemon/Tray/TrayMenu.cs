@@ -8,7 +8,6 @@ public enum TrayCommand
     /// <summary>Not a command: a separator, or a label that exists to be read.</summary>
     None,
     SignIn,
-    SwitchAccount,
     SignOut,
     ShowSessions,
     OpenLogs,
@@ -20,7 +19,15 @@ public enum TrayCommand
 /// <param name="Command">What to run, or <see cref="TrayCommand.None"/> for a separator or label.</param>
 /// <param name="Text">What it says. Empty means a separator.</param>
 /// <param name="Enabled">Whether it can be chosen.</param>
-public readonly record struct TrayMenuItem(TrayCommand Command, string Text, bool Enabled)
+/// <param name="IsDefault">
+/// Whether this is what double-clicking the icon does. The shell draws it in bold,
+/// which is the only thing that makes that shortcut discoverable.
+/// </param>
+public readonly record struct TrayMenuItem(
+    TrayCommand Command,
+    string Text,
+    bool Enabled,
+    bool IsDefault = false)
 {
     public static TrayMenuItem Separator { get; } = new(TrayCommand.None, string.Empty, false);
 
@@ -45,6 +52,16 @@ public readonly record struct TrayMenuItem(TrayCommand Command, string Text, boo
 /// </summary>
 public static class TrayMenu
 {
+    /// <summary>
+    /// What double-clicking the icon does.
+    /// <para>
+    /// Declared here, next to the item that is drawn in bold, because the bold is a
+    /// promise about this: two places naming the action separately is how a menu comes
+    /// to advertise a shortcut that does something else.
+    /// </para>
+    /// </summary>
+    public const TrayCommand DefaultCommand = TrayCommand.ShowSessions;
+
     public static IReadOnlyList<TrayMenuItem> Build(TrayPresentation view) =>
     [
         // Who, before what. The account is first because it is the one fact the icon
@@ -53,11 +70,13 @@ public static class TrayMenu
         TrayMenuItem.Separator,
 
         new(TrayCommand.SignIn, "Sign in", view.SignInEnabled),
-        new(TrayCommand.SwitchAccount, "Sign in as a different account\u2026", view.SignOutEnabled),
         new(TrayCommand.SignOut, "Sign out", view.SignOutEnabled),
         TrayMenuItem.Separator,
 
-        new(TrayCommand.ShowSessions, "Show sessions", true),
+        // Bold, because this is what double-clicking the icon does. Signing in as a
+        // different account is deliberately not offered here: it was only ever sign-out
+        // followed by sign-in, both of which are directly above (issue #71).
+        new(TrayCommand.ShowSessions, "Show sessions", true, IsDefault: DefaultCommand == TrayCommand.ShowSessions),
         new(TrayCommand.OpenLogs, "Open logs", true),
         new(TrayCommand.SendFeedback, "Send feedback\u2026", true),
         TrayMenuItem.Separator,

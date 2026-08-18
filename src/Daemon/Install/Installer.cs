@@ -57,38 +57,63 @@ public static class Installer
     {
         List<StepResult> steps = [];
 
-        StepResult task = registerTask();
+        StepResult task = Step(registerTask);
         steps.Add(task);
 
         if (task.Ok)
         {
             // Only ever one autostart. Both together would race at logon, and the loser
             // exits with "an agent is already running" — which reads like a bug.
-            steps.Add(removeRunKey());
+            steps.Add(Step(removeRunKey));
         }
         else
         {
             // Task registration is refused outright by policy on some managed machines.
             // A worse trigger beats no trigger.
-            steps.Add(addRunKey());
+            steps.Add(Step(addRunKey));
         }
 
-        steps.Add(installShortcuts());
+        steps.Add(Step(installShortcuts));
 
         // Last, and never conditional on the autostart: the agent starting by itself and
         // the user being able to type '1remote' are independent, and on a machine where
         // policy refused the task, running it by hand is the repair.
-        steps.Add(addToPath());
+        steps.Add(Step(addToPath));
 
         return steps;
     }
 
+    /// <summary>
+    /// Runs one step, turning anything it throws into a failure rather than letting it
+    /// end the install.
+    /// <para>
+    /// Every step here already reports its own expected failures, so this only catches
+    /// the unforeseen ones - and those are the dangerous case. An escaping exception
+    /// abandons the steps after it while keeping the effects of the steps before it,
+    /// leaving a half-installed machine and a stack trace instead of a summary saying
+    /// which part did not take. That is how issue #72 presented: one call throwing
+    /// <see cref="NotSupportedException"/>, a type nobody had thought to catch, silently
+    /// cost the user the PATH entry as well.
+    /// </para>
+    /// </summary>
+    private static StepResult Step(Func<StepResult> step)
+    {
+        try
+        {
+            return step();
+        }
+        catch (Exception ex)
+        {
+            return StepResult.Failure(ex.Message);
+        }
+    }
+
     public static IReadOnlyList<StepResult> Uninstall() =>
     [
-        TaskRegistration.Remove(),
-        RunKey.Remove(),
-        StartMenu.Remove(),
-        PathEntry.Remove(ExecutablePath),
+        Step(() => TaskRegistration.Remove()),
+        Step(() => RunKey.Remove()),
+        Step(() => StartMenu.Remove()),
+        Step(() => PathEntry.Remove(ExecutablePath)),
     ];
 
     /// <summary>

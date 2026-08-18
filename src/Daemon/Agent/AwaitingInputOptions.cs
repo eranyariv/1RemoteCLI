@@ -16,7 +16,7 @@ namespace OneRemoteCli.Daemon.Agent;
 /// person being interrupted, not the person who can rebuild.
 /// </para>
 /// </summary>
-public sealed record AwaitingInputOptions
+public sealed partial record AwaitingInputOptions
 {
     /// <summary>Silence this long, with the screen in the right shape, means waiting.</summary>
     public TimeSpan QuietPeriod { get; init; } = TimeSpan.FromSeconds(8);
@@ -79,9 +79,9 @@ public sealed record AwaitingInputOptions
                 return Default;
             }
 
-            SettingsFile? file = JsonSerializer.Deserialize<SettingsFile>(
+            SettingsFile? file = JsonSerializer.Deserialize(
                 File.ReadAllText(path),
-                SettingsJson.Options);
+                SettingsFileJson.Default.SettingsFile);
 
             AwaitingInputSettings? settings = file?.AwaitingInput;
             if (settings is null)
@@ -203,13 +203,24 @@ public sealed record AwaitingInputOptions
         public List<string>? PromptPatterns { get; set; }
     }
 
-    private static class SettingsJson
-    {
-        public static readonly JsonSerializerOptions Options = new()
-        {
-            PropertyNameCaseInsensitive = true,
-            ReadCommentHandling = JsonCommentHandling.Skip,
-            AllowTrailingCommas = true,
-        };
-    }
+    /// <summary>
+    /// How the settings file is read.
+    /// <para>
+    /// Source-generated rather than reflection-based, so the shapes below survive
+    /// trimming (issue #46). Without it the trimmer has no way to see that these
+    /// properties are read by name, and the first thing a user would notice is their
+    /// settings file being silently ignored.
+    /// </para>
+    /// <para>
+    /// The three options are what make this file hand-editable: comments and a
+    /// trailing comma are what somebody writes when they are commenting a setting out,
+    /// and case-insensitivity forgives the capitalisation nobody remembers.
+    /// </para>
+    /// </summary>
+    [JsonSourceGenerationOptions(
+        PropertyNameCaseInsensitive = true,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true)]
+    [JsonSerializable(typeof(SettingsFile))]
+    private sealed partial class SettingsFileJson : JsonSerializerContext;
 }

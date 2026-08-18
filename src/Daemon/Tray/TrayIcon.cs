@@ -1,7 +1,7 @@
 using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using System.Windows.Forms;
-using OneRemoteCli.Protocol;
+using static OneRemoteCli.Daemon.Tray.NativeMethods;
 
 namespace OneRemoteCli.Daemon.Tray;
 
@@ -14,39 +14,51 @@ namespace OneRemoteCli.Daemon.Tray;
 /// without being clicked, the only question they have: is this working.
 /// </para>
 /// <para>
-/// Runs its own message loop on its own thread. A tray icon needs a pumping window,
-/// the agent's main thread is busy awaiting a pipe server, and marrying the two would
-/// mean either a WinForms application context around the whole agent or a hand-rolled
-/// synchronisation context. A thread that owns the icon and nothing else is smaller
-/// than either and cannot deadlock the part that matters.
+/// Talks to the shell directly rather than through <c>NotifyIcon</c>. Windows Forms
+/// was referenced for this one control and dragged the whole Windows Desktop runtime
+/// into every download — around 40 MB for an icon and a popup menu (issue #46).
+/// </para>
+/// <para>
+/// Runs its own message loop on its own thread. A tray icon needs a window to deliver
+/// its callbacks to and a thread pumping messages for it, and the agent's main thread
+/// is busy awaiting a pipe server. A thread that owns the icon and nothing else cannot
+/// deadlock the part that matters.
 /// </para>
 /// </summary>
 [SupportedOSPlatform("windows")]
 public sealed class TrayIcon : IDisposable
 {
+    /// <summary>
+    /// The shell's whole notion of identity here is the pair (window handle, id), and
+    /// the handle is already unique per process, so one id is enough.
+    /// </summary>
+    private const int IconId = 1;
+
     private readonly string _machineName;
-    private readonly Action _onSignIn;
-    private readonly Action _onSwitchAccount;
-    private readonly Action _onSignOut;
-    private readonly Action _onShowSessions;
-    private readonly Action _onOpenLogs;
-    private readonly Action _onSendFeedback;
-    private readonly Action _onQuit;
+    private readonly Dictionary<TrayCommand, Action> _commands;
 
     private readonly Thread _thread;
     private readonly ManualResetEventSlim _ready = new(false);
-
-    private NotifyIcon? _icon;
-    private ToolStripMenuItem? _account;
-    private ToolStripMenuItem? _signIn;
-    private ToolStripMenuItem? _switchAccount;
-    private ToolStripMenuItem? _signOut;
-    private ApplicationContext? _context;
     private readonly Dictionary<AgentState, Icon> _icons = [];
 
-    private AgentState _state = AgentState.Reconnecting;
-    private int _sessions;
-    private string? _username;
+    /// <summary>
+    /// Held in a field because the window class keeps the pointer for as long as the
+    /// class exists. A delegate that only exists as an argument is collected as soon as
+    /// the call returns, and the next message dispatched into it takes the process down.
+    /// </summary>
+    private readonly WndProc _wndProc;
+
+    private IntPtr _window;
+    private bool _iconAdded;
+
+    /// <summary>
+    /// Explorer broadcasts this when it restarts, and every tray icon has to add itself
+    /// back. Without it the agent survives an Explorer crash but vanishes from the tray
+    /// until it is restarted, which looks exactly like the agent having crashed.
+    /// </summary>
+    private int _taskbarCreated;
+
+    private volatile TrayState _current = new(AgentState.Reconnecting, 0, null);
 
     public TrayIcon(
         string machineName,
@@ -59,13 +71,19 @@ public sealed class TrayIcon : IDisposable
         Action onQuit)
     {
         _machineName = machineName ?? string.Empty;
-        _onSignIn = onSignIn ?? throw new ArgumentNullException(nameof(onSignIn));
-        _onSwitchAccount = onSwitchAccount ?? throw new ArgumentNullException(nameof(onSwitchAccount));
-        _onSignOut = onSignOut ?? throw new ArgumentNullException(nameof(onSignOut));
-        _onShowSessions = onShowSessions ?? throw new ArgumentNullException(nameof(onShowSessions));
-        _onOpenLogs = onOpenLogs ?? throw new ArgumentNullException(nameof(onOpenLogs));
-        _onSendFeedback = onSendFeedback ?? throw new ArgumentNullException(nameof(onSendFeedback));
-        _onQuit = onQuit ?? throw new ArgumentNullException(nameof(onQuit));
+
+        _commands = new Dictionary<TrayCommand, Action>
+        {
+            [TrayCommand.SignIn] = onSignIn ?? throw new ArgumentNullException(nameof(onSignIn)),
+            [TrayCommand.SwitchAccount] = onSwitchAccount ?? throw new ArgumentNullException(nameof(onSwitchAccount)),
+            [TrayCommand.SignOut] = onSignOut ?? throw new ArgumentNullException(nameof(onSignOut)),
+            [TrayCommand.ShowSessions] = onShowSessions ?? throw new ArgumentNullException(nameof(onShowSessions)),
+            [TrayCommand.OpenLogs] = onOpenLogs ?? throw new ArgumentNullException(nameof(onOpenLogs)),
+            [TrayCommand.SendFeedback] = onSendFeedback ?? throw new ArgumentNullException(nameof(onSendFeedback)),
+            [TrayCommand.Quit] = onQuit ?? throw new ArgumentNullException(nameof(onQuit)),
+        };
+
+        _wndProc = HandleMessage;
 
         _thread = new Thread(Pump)
         {
@@ -73,8 +91,8 @@ public sealed class TrayIcon : IDisposable
             Name = "1remote tray",
         };
 
-        // Required: the shell's drag-and-drop and common dialogs are single-threaded
-        // apartment, and a NotifyIcon on an MTA thread fails in ways that look random.
+        // The shell's context menus and common dialogs are single-threaded apartment,
+        // and a tray icon on an MTA thread fails in ways that look random.
         _thread.SetApartmentState(ApartmentState.STA);
     }
 
@@ -89,145 +107,344 @@ public sealed class TrayIcon : IDisposable
     /// Tells the tray what the agent is doing.
     /// <para>
     /// Callable from any thread — it is called from the hub's reconnect loop and from
-    /// the session registry's change event, neither of which knows this exists.
+    /// the session registry's change event, neither of which knows this exists. The
+    /// state is swapped in one go and the icon's own thread is asked to redraw it,
+    /// because touching a window from another thread is how tray icons come to be wedged.
     /// </para>
     /// </summary>
     public void Update(AgentState state, int sessions, string? account = null)
     {
-        _state = state;
-        _sessions = sessions;
-        _username = account;
+        _current = new TrayState(state, sessions, account);
 
-        Post(Render);
+        Ask(WM_TRAY_UPDATE);
     }
 
     public void Dispose()
     {
-        Post(() =>
-        {
-            if (_icon is not null)
-            {
-                // Explicitly, and before anything else: an unhidden NotifyIcon leaves a
-                // ghost in the tray that survives the process and only disappears when
-                // the user hovers over it.
-                _icon.Visible = false;
-                _icon.Dispose();
-            }
-
-            foreach (Icon icon in _icons.Values)
-            {
-                icon.Dispose();
-            }
-
-            _context?.ExitThread();
-        });
+        Ask(WM_TRAY_QUIT);
 
         _thread.Join(TimeSpan.FromSeconds(2));
         _ready.Dispose();
     }
 
+    private void Ask(int message)
+    {
+        IntPtr window = _window;
+
+        if (window != IntPtr.Zero)
+        {
+            PostMessage(window, message, IntPtr.Zero, IntPtr.Zero);
+        }
+    }
+
     private void Pump()
     {
-        var menu = new ContextMenuStrip();
-
-        // Who, before what. The account is the first thing on the menu because it is
-        // the one fact the icon cannot show and the one people get wrong.
-        _account = new ToolStripMenuItem("Not signed in") { Enabled = false };
-        _signIn = new ToolStripMenuItem("Sign in", null, (_, _) => _onSignIn());
-        _switchAccount = new ToolStripMenuItem("Sign in as a different account\u2026", null, (_, _) => _onSwitchAccount());
-        _signOut = new ToolStripMenuItem("Sign out", null, (_, _) => _onSignOut());
-
-        menu.Items.Add(_account);
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(_signIn);
-        menu.Items.Add(_switchAccount);
-        menu.Items.Add(_signOut);
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(new ToolStripMenuItem("Show sessions", null, (_, _) => _onShowSessions()));
-        menu.Items.Add(new ToolStripMenuItem("Open logs", null, (_, _) => _onOpenLogs()));
-        menu.Items.Add(new ToolStripMenuItem("Send feedback\u2026", null, (_, _) => _onSendFeedback()));
-        menu.Items.Add(new ToolStripSeparator());
-        // Disabled, because it is a label rather than a command. It is here because
-        // the tray is the only part of the agent a user ever looks at, and "which
-        // version are you running" is the first question any report needs answered.
-        menu.Items.Add(new ToolStripMenuItem($"Version {ProductVersion.Current}") { Enabled = false });
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(new ToolStripMenuItem("Quit", null, (_, _) => _onQuit()));
-
-        _icon = new NotifyIcon
+        try
         {
-            ContextMenuStrip = menu,
-            Visible = true,
-        };
+            _taskbarCreated = RegisterWindowMessage("TaskbarCreated");
+            _window = CreateHiddenWindow();
 
-        // Double-click is what people try first, and it should do the most useful
-        // thing rather than nothing.
-        _icon.DoubleClick += (_, _) => _onShowSessions();
-
-        Render();
-
-        _ready.Set();
-
-        _context = new ApplicationContext();
-        Application.Run(_context);
-    }
-
-    private void Render()
-    {
-        if (_icon is null)
+            AddIcon();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ExternalException)
         {
+            // The tray is decoration. An agent with no icon still relays sessions, and
+            // taking the process down over a failed icon would cost the user the thing
+            // they actually wanted.
+            _ready.Set();
             return;
         }
-
-        TrayPresentation view = TrayPresenter.Present(_state, _sessions, _machineName, _username);
-
-        _icon.Icon = IconFor(view.Badge);
-        _icon.Text = view.Tooltip;
-
-        if (_account is not null)
+        finally
         {
-            _account.Text = view.Account;
+            _ready.Set();
         }
 
-        if (_signIn is not null)
+        while (GetMessage(out MSG message, IntPtr.Zero, 0, 0) > 0)
         {
-            _signIn.Enabled = view.SignInEnabled;
+            TranslateMessage(ref message);
+            DispatchMessage(ref message);
         }
 
-        if (_switchAccount is not null)
+        Cleanup();
+    }
+
+    /// <summary>
+    /// Creates the window the shell delivers callbacks to.
+    /// <para>
+    /// A real top-level window rather than a message-only one, and deliberately: a
+    /// popup menu will not dismiss correctly unless its owner can be brought to the
+    /// foreground, and an <c>HWND_MESSAGE</c> window cannot be. It is never shown, and
+    /// <c>WS_EX_TOOLWINDOW</c> keeps it out of the taskbar and Alt-Tab.
+    /// </para>
+    /// </summary>
+    private IntPtr CreateHiddenWindow()
+    {
+        IntPtr instance = GetModuleHandle(null);
+
+        // Unique per process: registering a class name that already exists fails, and a
+        // second agent starting up must not be able to break the first.
+        string className = $"1RemoteCLI.Tray.{Environment.ProcessId}";
+
+        var windowClass = new WNDCLASSEX
         {
-            _switchAccount.Enabled = view.SignOutEnabled;
+            cbSize = Marshal.SizeOf<WNDCLASSEX>(),
+            lpfnWndProc = Marshal.GetFunctionPointerForDelegate(_wndProc),
+            hInstance = instance,
+            lpszClassName = className,
+        };
+
+        if (RegisterClassEx(ref windowClass) == 0)
+        {
+            throw new InvalidOperationException(
+                $"Registering the tray window class failed: {Marshal.GetLastWin32Error()}");
         }
 
-        if (_signOut is not null)
+        IntPtr window = CreateWindowEx(
+            WS_EX_TOOLWINDOW,
+            className,
+            "1RemoteCLI",
+            0,
+            0,
+            0,
+            0,
+            0,
+            IntPtr.Zero,
+            IntPtr.Zero,
+            instance,
+            IntPtr.Zero);
+
+        return window == IntPtr.Zero
+            ? throw new InvalidOperationException(
+                $"Creating the tray window failed: {Marshal.GetLastWin32Error()}")
+            : window;
+    }
+
+    private IntPtr HandleMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam)
+    {
+        // Not a constant, so it cannot be switched on: Windows allocates the number at
+        // runtime and it differs per session.
+        if (message == _taskbarCreated)
         {
-            _signOut.Enabled = view.SignOutEnabled;
+            _iconAdded = false;
+            AddIcon();
+
+            return IntPtr.Zero;
+        }
+
+        switch (message)
+        {
+            case WM_TRAYICON:
+                OnIconClicked(wParam, lParam);
+                return IntPtr.Zero;
+
+            case WM_TRAY_UPDATE:
+                Render();
+                return IntPtr.Zero;
+
+            case WM_TRAY_QUIT:
+                DestroyWindow(window);
+                return IntPtr.Zero;
+
+            case WM_DESTROY:
+                PostQuitMessage(0);
+                return IntPtr.Zero;
+
+            default:
+                return DefWindowProc(window, message, wParam, lParam);
         }
     }
 
-    /// <summary>Runs an action on the icon's thread, or drops it if there is no icon yet.</summary>
-    private void Post(Action action)
+    /// <summary>
+    /// Unpacks a version 4 callback: the anchor point in <paramref name="wParam"/>, the
+    /// event in the low half of <paramref name="lParam"/>. This packing is the reason
+    /// for asking for version 4 at all — the shell supplies the point the menu belongs
+    /// at, including when the tray was opened from the keyboard and there is no cursor
+    /// to ask about.
+    /// </summary>
+    private void OnIconClicked(IntPtr wParam, IntPtr lParam)
     {
-        if (_icon is not { } icon)
+        switch (LowWord(lParam))
+        {
+            case WM_CONTEXTMENU:
+                ShowMenu(SignedLowWord(wParam), SignedHighWord(wParam));
+                break;
+
+            // What people try first, so it should do the most useful thing rather than
+            // nothing.
+            case WM_LBUTTONDBLCLK:
+                Invoke(TrayCommand.ShowSessions);
+                break;
+        }
+    }
+
+    private void ShowMenu(int x, int y)
+    {
+        IReadOnlyList<TrayMenuItem> items = TrayMenu.Build(Present());
+        IntPtr menu = CreatePopupMenu();
+
+        if (menu == IntPtr.Zero)
         {
             return;
         }
 
         try
         {
-            if (icon.ContextMenuStrip is { InvokeRequired: true } menu)
+            for (int i = 0; i < items.Count; i++)
             {
-                menu.BeginInvoke(action);
+                TrayMenuItem item = items[i];
+
+                if (item.IsSeparator)
+                {
+                    AppendMenu(menu, MF_SEPARATOR, IntPtr.Zero, null);
+                    continue;
+                }
+
+                // One past the index: TrackPopupMenuEx returns 0 for "nothing chosen",
+                // so no item may own that value.
+                AppendMenu(menu, MF_STRING | (item.Enabled ? 0 : MF_GRAYED), i + 1, item.Text);
             }
-            else
+
+            // Required, and easy to miss. A popup menu whose owner is not in the
+            // foreground stays on screen after the user clicks elsewhere, leaving what
+            // looks like a stuck menu over their desktop.
+            SetForegroundWindow(_window);
+
+            int chosen = TrackPopupMenuEx(
+                menu,
+                TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_RETURNCMD,
+                x,
+                y,
+                _window,
+                IntPtr.Zero);
+
+            // The other half of the same defect: with no message to process, the menu is
+            // not taken down until this window happens to receive one.
+            PostMessage(_window, WM_NULL, IntPtr.Zero, IntPtr.Zero);
+
+            if (chosen > 0 && chosen <= items.Count)
             {
-                action();
+                Invoke(items[chosen - 1].Command);
             }
         }
-        catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException)
+        finally
         {
-            // The tray is decoration. It must never take the agent down with it.
+            DestroyMenu(menu);
         }
+    }
+
+    /// <summary>
+    /// Runs a menu action, off the message loop.
+    /// <para>
+    /// On another thread because these open browsers, launch mail clients and stop the
+    /// agent, and any of them blocking would freeze the loop that owns the icon —
+    /// leaving the tray unresponsive at exactly the moment the user has asked it to do
+    /// something.
+    /// </para>
+    /// </summary>
+    private void Invoke(TrayCommand command)
+    {
+        if (!_commands.TryGetValue(command, out Action? action))
+        {
+            return;
+        }
+
+        _ = Task.Run(action);
+    }
+
+    private void AddIcon()
+    {
+        if (_iconAdded)
+        {
+            return;
+        }
+
+        NOTIFYICONDATA data = Describe(NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP);
+
+        if (!Shell_NotifyIcon(NIM_ADD, ref data))
+        {
+            return;
+        }
+
+        _iconAdded = true;
+
+        // Opt in to the modern callback packing. Has to follow the add, and is what
+        // makes WM_CONTEXTMENU arrive with the point the menu should appear at.
+        NOTIFYICONDATA version = Blank();
+        version.uVersion = NOTIFYICON_VERSION_4;
+
+        Shell_NotifyIcon(NIM_SETVERSION, ref version);
+    }
+
+    private TrayPresentation Present()
+    {
+        TrayState state = _current;
+
+        return TrayPresenter.Present(state.State, state.Sessions, _machineName, state.Account);
+    }
+
+    private void Render()
+    {
+        if (!_iconAdded)
+        {
+            return;
+        }
+
+        NOTIFYICONDATA data = Describe(NIF_ICON | NIF_TIP | NIF_SHOWTIP);
+
+        Shell_NotifyIcon(NIM_MODIFY, ref data);
+    }
+
+    private NOTIFYICONDATA Describe(int flags)
+    {
+        TrayPresentation view = Present();
+
+        NOTIFYICONDATA data = Blank();
+
+        data.uFlags = flags;
+        data.uCallbackMessage = WM_TRAYICON;
+        data.hIcon = IconFor(view.Badge).Handle;
+        data.szTip = view.Tooltip;
+
+        return data;
+    }
+
+    /// <summary>
+    /// The identifying fields, and empty strings for the rest.
+    /// <para>
+    /// The strings are fixed-length buffers the marshaller copies into, and it will not
+    /// copy a null. Leaving them unset throws before the shell is ever called.
+    /// </para>
+    /// </summary>
+    private NOTIFYICONDATA Blank() => new()
+    {
+        cbSize = Marshal.SizeOf<NOTIFYICONDATA>(),
+        hWnd = _window,
+        uID = IconId,
+        szTip = string.Empty,
+        szInfo = string.Empty,
+        szInfoTitle = string.Empty,
+    };
+
+    private void Cleanup()
+    {
+        if (_iconAdded)
+        {
+            // Explicitly: an icon the shell was never told about leaves a ghost in the
+            // tray that survives the process and only disappears when the user happens
+            // to hover over it.
+            NOTIFYICONDATA data = Blank();
+
+            Shell_NotifyIcon(NIM_DELETE, ref data);
+            _iconAdded = false;
+        }
+
+        foreach (Icon icon in _icons.Values)
+        {
+            icon.Dispose();
+        }
+
+        _icons.Clear();
+        _window = IntPtr.Zero;
     }
 
     /// <summary>
@@ -245,9 +462,26 @@ public sealed class TrayIcon : IDisposable
             return cached;
         }
 
-        Icon icon = TrayArtwork.Create(state, SystemInformation.SmallIconSize.Width);
+        Icon icon = TrayArtwork.Create(state, Math.Max(8, GetSystemMetrics(SM_CXSMICON)));
         _icons[state] = icon;
 
         return icon;
     }
+
+    private static int LowWord(IntPtr value) => (int)((long)value & 0xFFFF);
+
+    private static int SignedLowWord(IntPtr value) => (short)((long)value & 0xFFFF);
+
+    private static int SignedHighWord(IntPtr value) => (short)(((long)value >> 16) & 0xFFFF);
+
+    /// <summary>
+    /// Everything the tray shows, swapped as one value.
+    /// <para>
+    /// A record rather than three fields because <see cref="Update"/> is called from
+    /// other threads: three separate writes can be read back as a mixture of two
+    /// updates, and "connected, 0 sessions" is a combination that would send the user
+    /// looking for a fault that never existed.
+    /// </para>
+    /// </summary>
+    private sealed record TrayState(AgentState State, int Sessions, string? Account);
 }

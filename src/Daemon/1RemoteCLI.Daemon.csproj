@@ -26,6 +26,10 @@
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="8.0.28" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
     <PackageReference Include="Microsoft.Identity.Client" Version="4.66.2" />
+    <!-- Draws the tray icon. Worth checking before adding anything here: this package
+         is GDI+ and nothing else, so it does not pull in the Windows Desktop runtime
+         the way a Windows Forms reference does. -->
+    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
   </ItemGroup>
 
@@ -43,13 +47,49 @@
     <Nullable>enable</Nullable>
     <InvariantGlobalization>true</InvariantGlobalization>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <!-- Required by the LibraryImport source generator used for the ConPTY P/Invokes. -->
+    <!-- Required by the LibraryImport source generator used for the ConPTY and tray P/Invokes. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <!-- For the tray icon only (spec §4.2). Deliberately NOT WinExe: the same binary
-         is the wrapper, and a windows-subsystem process has no stdout to write a
-         terminal to. The agent hides its own console instead. -->
-    <UseWindowsForms>true</UseWindowsForms>
+    <!-- Not WinExe, deliberately: the same binary is the wrapper, and a
+         windows-subsystem process has no stdout to write a terminal to. The agent
+         hides its own console instead.
+
+         There is no UseWindowsForms here either. It was referenced for the tray icon
+         alone and cost about 40 MB of Windows Desktop runtime in every download; the
+         tray now calls Shell_NotifyIcon directly. See TrayIcon and issue #46. -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- 1remote is a wrapper you drop on your PATH, so its download size is a feature.
+         Removing Windows Forms took it from 70 MB to 35; trimming takes it to 13.
+
+         Trim warnings are errors here (TreatWarningsAsErrors, above), which is the
+         point. The failures trimming causes are silent ones at run time: a settings
+         file that stops being read, a machine identity that regenerates itself and
+         takes the user's paired machine with it. They are only cheap to prevent while
+         the compiler is still telling us where reflection is being used, which is why
+         the JSON in this project is source-generated.
+
+         ILLink reports our own assemblies and project references site by site, and
+         collapses each NuGet package to a single IL2104. IL2104 is suppressed because
+         MessagePack builds its formatters with Reflection.Emit and SignalR reflects
+         over hub signatures, so both are unanalysable by construction and there is
+         nothing we can do about it from here. Suppressing only the rollup keeps every
+         warning about code we can actually fix. See the roots below for how the risk
+         those two libraries do carry is handled. -->
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>partial</TrimMode>
+    <NoWarn>$(NoWarn);IL2104</NoWarn>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- Kept whole rather than trimmed. MessagePack picks its formatters by
+         reflecting over its own resolvers and then emits accessors for the members of
+         our wire types, none of which ILLink can see, so a member the linker judged
+         unreachable would come back as a serialization failure on one message type on
+         a user's machine. Protocol is a project reference and would not be trimmed in
+         partial mode anyway; it is listed because being explicit about which types the
+         wire format depends on is worth more than the line costs.
+
+         Together these are worth a little over a megabyte, against a 22 MB saving. -->
+    <TrimmerRootAssembly Include="MessagePack" />
+    <TrimmerRootAssembly Include="1RemoteCLI.Protocol" />
+  </ItemGroup>
 
 </Project>

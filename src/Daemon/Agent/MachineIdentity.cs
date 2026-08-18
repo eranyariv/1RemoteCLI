@@ -14,20 +14,10 @@ namespace OneRemoteCli.Daemon.Agent;
 /// what the phone shows and what the user may rename freely.
 /// </para>
 /// </summary>
-public sealed class MachineIdentity
+public sealed partial class MachineIdentity
 {
     private const string FolderName = "1RemoteCLI";
     private const string FileName = "machine.json";
-
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        WriteIndented = true,
-        // camelCase and case-insensitive reads because this file is meant to be
-        // opened and hand-edited by the user renaming their machine.
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        PropertyNameCaseInsensitive = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
 
     [JsonConstructor]
     public MachineIdentity(string machineId, string displayName)
@@ -70,9 +60,9 @@ public sealed class MachineIdentity
         {
             try
             {
-                MachineIdentity? loaded = JsonSerializer.Deserialize<MachineIdentity>(
+                MachineIdentity? loaded = JsonSerializer.Deserialize(
                     File.ReadAllText(path),
-                    SerializerOptions);
+                    MachineIdentityJson.Default.MachineIdentity);
 
                 if (loaded is not null && Guid.TryParse(loaded.MachineId, out _) &&
                     !string.IsNullOrWhiteSpace(loaded.DisplayName))
@@ -106,7 +96,28 @@ public sealed class MachineIdentity
         Directory.CreateDirectory(directory);
 
         string temporary = path + ".tmp";
-        File.WriteAllText(temporary, JsonSerializer.Serialize(this, SerializerOptions));
+        File.WriteAllText(temporary, JsonSerializer.Serialize(this, MachineIdentityJson.Default.MachineIdentity));
         File.Move(temporary, path, overwrite: true);
     }
+
+    /// <summary>
+    /// How the identity file is written and read.
+    /// <para>
+    /// Source-generated rather than reflection-based, so it survives trimming (issue
+    /// #46). This one matters more than most: a trimmed build that could not read the
+    /// file would silently generate a new identity, and the user's phone would find an
+    /// unfamiliar machine and none of their sessions.
+    /// </para>
+    /// <para>
+    /// camelCase and case-insensitive reads because this file is meant to be opened
+    /// and hand-edited by the user renaming their machine.
+    /// </para>
+    /// </summary>
+    [JsonSourceGenerationOptions(
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonSerializable(typeof(MachineIdentity))]
+    private sealed partial class MachineIdentityJson : JsonSerializerContext;
 }

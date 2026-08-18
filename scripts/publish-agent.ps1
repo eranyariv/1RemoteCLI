@@ -18,8 +18,10 @@
     invisible next to the start-up of anything worth wrapping -- a shell, a coding
     agent -- and a 180 MB download for a personal tool looks broken. So: small.
 
-    The size is dominated by Windows Forms, which is there for one tray icon and
-    brings the whole desktop runtime with it. See issue #46.
+    Those figures are from before issue #46, which took the download from 70 MB to 13
+    by dropping the Windows Forms reference held for one tray icon and turning on
+    trimming. Both live in the project file, so this script and the release workflow
+    get them without a flag.
 
     The build is NOT signed. There is no code-signing certificate for this project, so
     SmartScreen will warn the first time it runs. The published SHA-256 is printed

@@ -182,7 +182,7 @@ Making the repository public would remove that step; nothing else about the flow
 
 Produces one self-contained `1remote.exe` in `artifacts/win-x64/` — no .NET install needed on the target machine, nothing to unpack — and prints its SHA-256. `-Runtime win-arm64` for a Snapdragon machine. This is the same script the release workflow runs, so a release is never built by a path nobody has run locally, and it takes no version argument because the build reads `VERSION`.
 
-It is roughly 70 MB. That is Windows Forms, dragged in for a single tray icon; [#46](https://github.com/eranyariv/1RemoteCLI/issues/46) is about removing it.
+It is roughly 13 MB. It was 70 until [#46](https://github.com/eranyariv/1RemoteCLI/issues/46) removed the Windows Forms reference held for a single tray icon — which brought the entire Windows Desktop runtime with it — and turned on trimming. Both settings live in `src/Daemon/1RemoteCLI.Daemon.csproj`, not in this script, so a release built by the workflow is the same size as one built by hand.
 
 ### It is not signed
 

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using OneRemoteCli.Hub.Auth;
+using OneRemoteCli.Hub.Ops;
 using OneRemoteCli.Hub.Push;
 using OneRemoteCli.Protocol;
 using OneRemoteCli.Protocol.Hub;
@@ -33,6 +34,7 @@ public sealed class RelayHub(
     IAccessTokenValidator tokenValidator,
     PushSubscriptionStore pushSubscriptions,
     IPushNotifier push,
+    IUsageRecorder usage,
     ILogger<RelayHub> logger) : Microsoft.AspNetCore.SignalR.Hub
 {
     private readonly RelayRegistry _registry = registry ?? throw new ArgumentNullException(nameof(registry));
@@ -43,6 +45,12 @@ public sealed class RelayHub(
     private readonly PushSubscriptionStore _pushSubscriptions =
         pushSubscriptions ?? throw new ArgumentNullException(nameof(pushSubscriptions));
     private readonly IPushNotifier _push = push ?? throw new ArgumentNullException(nameof(push));
+
+    // Counts and durations for the operator's weekly digest. Every call takes a user
+    // key and a number; nothing here can hand it a machine or session display name,
+    // which is what keeps one user's session names out of another human's chat.
+    private readonly IUsageRecorder _usage = usage ?? throw new ArgumentNullException(nameof(usage));
+
     private readonly ILogger<RelayHub> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
     public override async Task OnConnectedAsync()
@@ -60,6 +68,11 @@ public sealed class RelayHub(
         }
 
         _registry.Connect(userKey, Context.ConnectionId);
+
+        // "A new user joined" in the only sense that is a signal rather than noise: an
+        // allowlisted account connecting for the first time ever. Not the config change
+        // that admitted them, which the operator had just made.
+        _usage.AccountSeen(userKey, UserKey.PreferredUsername(Context.User!));
 
         // The token is checked once, at the handshake, and never again by SignalR. From
         // here the hub owns its lifetime.
@@ -121,6 +134,10 @@ public sealed class RelayHub(
         string userKey = RequireUserKey();
         MachineInfo machine = _registry.RegisterMachine(userKey, Context.ConnectionId, request);
 
+        // The version, and only the version. An agent well behind the hub is how
+        // protocol bugs start, and it is invisible until one produces a symptom.
+        _usage.AgentSeen(request.AgentVersion);
+
         _logger.LogInformation(
             "Machine {MachineId} ({DisplayName}) online.",
             machine.MachineId,
@@ -147,6 +164,11 @@ public sealed class RelayHub(
             return Error(ErrorCodes.MachineNotFound, "Register the machine first.");
         }
 
+        // The session id goes in so open and close can be paired into a duration; it is
+        // hashed on the way in and never comes back out. The session *name*, which is
+        // right there on the notification, is not passed and must not be.
+        _usage.SessionOpened(address.UserKey, notification.Session.SessionId);
+
         await Clients.Clients(_registry.ClientsOf(address.UserKey)).SendAsync(
             HubMethods.Client.SessionOpened,
             new ClientSessionOpenedNotification
@@ -171,6 +193,8 @@ public sealed class RelayHub(
         {
             return Error(ErrorCodes.SessionNotFound, "No such session on this machine.", notification.SessionId);
         }
+
+        _usage.SessionClosed(address.UserKey, notification.SessionId);
 
         await Clients.Clients(_registry.ClientsOf(address.UserKey)).SendAsync(
             HubMethods.Client.SessionClosed,
@@ -226,6 +250,11 @@ public sealed class RelayHub(
         {
             return Task.CompletedTask;
         }
+
+        // The hottest path in the hub, so this is an interlocked add and nothing more.
+        // Length is a count of bytes on the wire — the payload is opaque here and is
+        // never decoded, which is exactly why it can be measured without being read.
+        _usage.BytesRelayed(address.UserKey, notification.Data?.Length ?? 0);
 
         IReadOnlyList<string> watchers = _registry.ClientsAttachedTo(
             address.UserKey,

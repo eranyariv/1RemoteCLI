@@ -135,6 +135,47 @@ public sealed class ConnectionTokens(TimeProvider time)
     public DateTimeOffset? ExpiryOf(string connectionId) =>
         _entries.TryGetValue(connectionId, out Entry? entry) ? entry.ExpiresAt : null;
 
+    /// <summary>
+    /// Ends every live connection belonging to one account, and reports how many.
+    /// <para>
+    /// What <c>/kick</c> and <c>/deny</c> are for. Removing somebody from the allowlist
+    /// stops them reconnecting and stops their next token refresh, but a socket they
+    /// already hold would survive until its token expired — up to an hour for a phone
+    /// left attached. If revocation is worth having from a phone, it has to take effect
+    /// while the operator is still looking at it.
+    /// </para>
+    /// <para>
+    /// Removed before aborting, for the same reason <see cref="Sweep"/> does it in that
+    /// order: the abort raises <c>OnDisconnectedAsync</c>, which calls
+    /// <see cref="Forget"/>, and an entry still present would be aborted twice.
+    /// </para>
+    /// </summary>
+    public int AbortAllFor(string userKey)
+    {
+        if (string.IsNullOrWhiteSpace(userKey))
+        {
+            return 0;
+        }
+
+        int closed = 0;
+
+        foreach ((string connectionId, Entry entry) in _entries)
+        {
+            if (!string.Equals(entry.UserKey, userKey, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (_entries.TryRemove(connectionId, out _))
+            {
+                entry.Abort();
+                closed++;
+            }
+        }
+
+        return closed;
+    }
+
     private sealed record Entry(string UserKey, DateTimeOffset ExpiresAt, Action Abort, bool Warned);
 }
 

@@ -33,6 +33,16 @@ public sealed class PushSubscriptionStore
 
     public int UserCount => _byUser.Count;
 
+    /// <summary>
+    /// Every account with at least one live subscription.
+    /// <para>
+    /// For <c>/broadcast</c>, which is the one thing in this product that has to reach
+    /// everybody rather than one person's own devices. "The hub is down for ten minutes"
+    /// is otherwise impossible to say.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> Users => [.. _byUser.Keys];
+
     /// <summary>Adds or replaces a subscription. Returns false if it was already known, unchanged.</summary>
     public bool Register(string userKey, PushSubscription subscription)
     {

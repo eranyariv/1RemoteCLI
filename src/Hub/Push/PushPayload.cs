@@ -75,6 +75,27 @@ public sealed record PushPayload
             Tag = deepLink,
         };
 
+    /// <summary>
+    /// A message from whoever runs this hub, to everybody.
+    /// <para>
+    /// The only payload not about a session, so it has no deep link and lands on the app
+    /// itself. One fixed tag, so a second announcement replaces the first rather than
+    /// stacking: an operator sending a correction wants the correction read, not both.
+    /// </para>
+    /// <para>
+    /// Not perishable. "The hub is down for ten minutes" is worth reading late, which is
+    /// exactly when somebody whose phone was off most needs it.
+    /// </para>
+    /// </summary>
+    public static PushPayload FromOperator(string text) =>
+        new()
+        {
+            Title = "1RemoteCLI",
+            Body = text,
+            Url = "/",
+            Tag = "operator",
+        };
+
     /// <summary>The deep link for one session. Query rather than path: the app is a single page.</summary>
     public static string DeepLink(string machineId, string sessionId) =>
         $"/?machine={Uri.EscapeDataString(machineId)}&session={Uri.EscapeDataString(sessionId)}";

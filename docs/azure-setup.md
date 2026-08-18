@@ -272,3 +272,24 @@ Verify:
 Invoke-WebRequest https://1remotecli-hub.azurewebsites.net/push/vapid -UseBasicParsing | Select-Object -Expand Content
 # {"key":"BM...."}
 ```
+
+## The operator channel (Telegram)
+
+Optional, and off until configured — the same shape as VAPID. Not an Azure resource either: a Telegram bot, and two app settings.
+
+Talk to [@BotFather](https://t.me/BotFather), `/newbot`, keep the token. Then **message your new bot once**; a bot cannot open a conversation, so until you speak first it has nowhere to send anything. Your chat id is `result[].message.chat.id` from `https://api.telegram.org/bot<token>/getUpdates`.
+
+```powershell
+. .\scripts\az-env.ps1
+
+az webapp config appsettings set -g 1remotecli-rg -n 1remotecli-hub --settings `
+  "Telegram__BotToken=<token>" `
+  "Telegram__ChatId=<chat id>" `
+  "Telegram__Commands=false"
+```
+
+**The token is a credential, and it sits in the URL path** of every Bot API call — so anything that logs a request URI logs it. Do not paste that `getUpdates` URL anywhere, and do not let a shell echo it. If it leaks, `/revoke` in BotFather and set the new one.
+
+`Telegram__Commands=true` additionally lets the bot's chat run `/allow`, `/deny`, `/kick` and `/broadcast`. That turns a write-only notification credential into an administrative one, which is why it is a separate switch. Leave it off unless you want it.
+
+What the hub reports, what it structurally cannot report, and the full command list are in [Operator channel](operator-channel.md).

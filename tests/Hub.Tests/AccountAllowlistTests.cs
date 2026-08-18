@@ -105,6 +105,148 @@ public class AccountAllowlistTests
         Assert.True(new AccountAllowlist([$"  {Key}  "]).Check(Principal(), "Session.Access").IsAllowed);
     }
 
+    // ------------------------------------------------- runtime amendments
+
+    /// <summary>
+    /// <c>/allow</c> admits somebody without a redeploy, which is the point: the operator
+    /// gets the refusal on their phone and can answer it from the same screen.
+    /// </summary>
+    [Fact]
+    public void AllowingAnAccountAdmitsItImmediately()
+    {
+        var allowlist = new AccountAllowlist([]);
+
+        Assert.False(allowlist.Check(Principal(), "Session.Access").IsAllowed);
+        Assert.True(allowlist.Add(Key));
+        Assert.True(allowlist.Check(Principal(), "Session.Access").IsAllowed);
+    }
+
+    [Fact]
+    public void AllowingSomebodyAlreadyAllowedChangesNothing()
+    {
+        Assert.False(new AccountAllowlist([Key]).Add(Key));
+    }
+
+    /// <summary>
+    /// The load-bearing rule of <c>/deny</c>: it overrides configuration. Revoking a
+    /// compromised account has to work now, not after somebody edits App Service settings
+    /// and waits for a restart.
+    /// </summary>
+    [Fact]
+    public void DenyingOverridesTheConfiguredList()
+    {
+        var allowlist = new AccountAllowlist([Key]);
+
+        Assert.True(allowlist.Deny(Key));
+        Assert.False(allowlist.Check(Principal(), "Session.Access").IsAllowed);
+        Assert.Equal(AccessDecision.NotAllowlisted, allowlist.Check(Principal(), "Session.Access").Decision);
+    }
+
+    /// <summary>
+    /// Denying and then allowing returns an account to where it started, rather than
+    /// leaving it denied by a rule that is no longer visible anywhere.
+    /// </summary>
+    [Fact]
+    public void AllowingLiftsAPreviousDenial()
+    {
+        var allowlist = new AccountAllowlist([Key]);
+
+        allowlist.Deny(Key);
+        Assert.True(allowlist.Add(Key));
+        Assert.True(allowlist.Check(Principal(), "Session.Access").IsAllowed);
+    }
+
+    [Fact]
+    public void DenyingSomebodyAlreadyDeniedChangesNothing()
+    {
+        var allowlist = new AccountAllowlist([Key]);
+
+        Assert.True(allowlist.Deny(Key));
+        Assert.False(allowlist.Deny(Key));
+    }
+
+    /// <summary>An email works as well as a key, because that is what an operator has to hand.</summary>
+    [Fact]
+    public void AmendmentsWorkByUsernameToo()
+    {
+        var allowlist = new AccountAllowlist([]);
+
+        allowlist.Add("SomeOne@Example.COM");
+
+        Assert.True(allowlist.Check(Principal(), "Session.Access").IsAllowed);
+        Assert.True(allowlist.Contains("someone@example.com"));
+    }
+
+    /// <summary>
+    /// What gets persisted. Only the amendments — configuration is already durable, and
+    /// writing it back would silently fork the two.
+    /// </summary>
+    [Fact]
+    public void OnlyTheAmendmentsAreReportedForPersistence()
+    {
+        var allowlist = new AccountAllowlist([Key]);
+
+        allowlist.Add("newcomer@example.com");
+        allowlist.Deny("leaver@example.com");
+
+        (IReadOnlyList<string> added, IReadOnlyList<string> denied) = allowlist.Amendments();
+
+        Assert.Equal(["newcomer@example.com"], added);
+        Assert.Equal(["leaver@example.com"], denied);
+    }
+
+    /// <summary>Replaying the amendments after a restart reproduces the state exactly.</summary>
+    [Fact]
+    public void ReplayingAmendmentsRestoresTheSameDecisions()
+    {
+        var before = new AccountAllowlist([Key, "leaver@example.com"]);
+        before.Add("newcomer@example.com");
+        before.Deny("leaver@example.com");
+
+        (IReadOnlyList<string> added, IReadOnlyList<string> denied) = before.Amendments();
+
+        var after = new AccountAllowlist([Key, "leaver@example.com"]);
+
+        foreach (string entry in added)
+        {
+            after.Add(entry);
+        }
+
+        foreach (string entry in denied)
+        {
+            after.Deny(entry);
+        }
+
+        Assert.True(after.Contains("newcomer@example.com"));
+        Assert.False(after.Contains("leaver@example.com"));
+        Assert.True(after.Check(Principal(), "Session.Access").IsAllowed);
+    }
+
+    [Fact]
+    public void BlankAmendmentsAreIgnoredRatherThanStored()
+    {
+        var allowlist = new AccountAllowlist([Key]);
+
+        Assert.False(allowlist.Add("   "));
+        Assert.False(allowlist.Deny(string.Empty));
+        Assert.Empty(allowlist.Amendments().Added);
+        Assert.Empty(allowlist.Amendments().Denied);
+    }
+
+    /// <summary>
+    /// A hub whose entire allowlist has been denied is refusing everybody — the same
+    /// total outage as an empty list, and worth being able to detect the same way.
+    /// </summary>
+    [Fact]
+    public void DenyingTheLastAccountLeavesTheHubEmpty()
+    {
+        var allowlist = new AccountAllowlist([Key]);
+
+        allowlist.Deny(Key);
+
+        Assert.True(allowlist.IsEmpty);
+    }
+
     private static ClaimsPrincipal Principal(
         string? tenantId = Tenant,
         string? objectId = ObjectId,

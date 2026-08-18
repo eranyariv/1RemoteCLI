@@ -20,6 +20,7 @@ The problem it solves: you start `claude` on a long refactor, leave your desk, a
 | --- | --- |
 | **[Deployment](deployment.md)** | Deploy the hub, configure it, add someone to the allowlist, cut an agent release. |
 | **[Azure setup](azure-setup.md)** | The one-time app registration and resource provisioning, from zero. |
+| **[Operator channel](operator-channel.md)** | Have the hub report to you on Telegram — counts and statistics only — and take a few admin commands back. |
 | **[Logging](logging.md)** | Where the logs are and how to turn the volume up. |
 | **[Implementation plan](implementation-plan.md)** | The stages and tasks v1 was built from. |
 

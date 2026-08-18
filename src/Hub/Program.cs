@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.Extensions.Options;
 using OneRemoteCli.Hub.Auth;
+using OneRemoteCli.Hub.Ops;
 using OneRemoteCli.Hub.Push;
 using OneRemoteCli.Hub.Relay;
 using OneRemoteCli.Protocol;
@@ -64,6 +65,70 @@ builder.Services.AddSingleton<IPushSender>(services =>
         : new DisabledPushSender();
 });
 builder.Services.AddHostedService<PushDispatcher>();
+
+// Fan-out of an operator broadcast to every subscribed phone. A separate interface
+// from IPushNotifier so that nothing in Ops ever names a PushPayload — see
+// OperatorMessage for why that boundary is drawn with a type rather than a comment.
+builder.Services.AddSingleton<IPushBroadcaster, PushBroadcaster>();
+
+// The operator channel (spec: docs/operator-channel.md). Counts and statistics to a
+// private Telegram chat, and admin commands back. Every registration below is
+// substitutable with a disabled implementation, because a hub with no bot token must
+// behave exactly as it did before this existed.
+builder.Services.Configure<OperatorChannelOptions>(
+    builder.Configuration.GetSection(OperatorChannelOptions.Section));
+
+builder.Services.AddSingleton<OperatorStateStore>();
+builder.Services.AddSingleton<OperatorQueue>();
+builder.Services.AddSingleton<UsageCounters>();
+builder.Services.AddSingleton<FailureRates>();
+builder.Services.AddSingleton<IHubAdministration, HubAdministration>();
+
+// One HttpClient for both directions. Its timeout has to exceed the 30-second long
+// poll, or every idle getUpdates would surface as a cancelled request.
+//
+// The loggers are removed, and that is not tidiness. The Bot API puts the token in the
+// *path*, and the default HttpClient logging writes the request URI at Information
+// level — so leaving it on publishes the credential into App Service's log stream on
+// every poll, forever, where TelegramBotApi itself takes care to log only status codes.
+// A leak nobody would find by reading this project's own code.
+builder.Services.AddHttpClient<TelegramBotApi>().RemoveAllLoggers();
+
+builder.Services.AddSingleton<IOperatorNotifier>(services =>
+    services.GetRequiredService<IOptions<OperatorChannelOptions>>().Value.Configured
+        ? services.GetRequiredService<OperatorQueue>()
+        : new DisabledOperatorNotifier());
+
+builder.Services.AddSingleton<IOperatorSender>(services =>
+    services.GetRequiredService<IOptions<OperatorChannelOptions>>().Value.Configured
+        ? services.GetRequiredService<TelegramBotApi>()
+        : new DisabledOperatorSender());
+
+builder.Services.AddSingleton<IOperatorUpdateSource>(services =>
+    services.GetRequiredService<IOptions<OperatorChannelOptions>>().Value.CommandsEnabled
+        ? services.GetRequiredService<TelegramBotApi>()
+        : new DisabledOperatorSender());
+
+// Counting is the one part that touches the relay hot path, so an unconfigured hub
+// gets a recorder that does nothing at all rather than one that accumulates numbers
+// nobody will ever read.
+builder.Services.AddSingleton<IUsageRecorder>(services =>
+    services.GetRequiredService<IOptions<OperatorChannelOptions>>().Value.Configured
+        ? services.GetRequiredService<UsageCounters>()
+        : new NullUsageRecorder());
+
+builder.Services.AddHostedService<OperatorDispatcher>();
+builder.Services.AddHostedService<OperatorStateFlusher>();
+
+// Registered as itself and then handed to the host, rather than AddHostedService<T>,
+// because /digest asks it for a report on demand and AddHostedService only ever
+// exposes it as an IHostedService. Same shape as PushQueue/IPushNotifier above: one
+// instance, two ways of reaching it.
+builder.Services.AddSingleton<WeeklyDigestService>();
+builder.Services.AddHostedService(services => services.GetRequiredService<WeeklyDigestService>());
+
+builder.Services.AddHostedService<OperatorCommandService>();
+builder.Services.AddHostedService<ClientSecretWatch>();
 
 builder.Services
     .AddSignalR(RelayLiveness.Apply)
@@ -149,6 +214,19 @@ if (!app.Services.GetRequiredService<IOptions<VapidOptions>>().Value.Configured)
         "Sessions still work; phones will not be told when one is waiting.",
         VapidOptions.Section);
 }
+
+if (!app.Services.GetRequiredService<IOptions<OperatorChannelOptions>>().Value.Configured)
+{
+    app.Logger.LogInformation(
+        "The operator channel is off: no bot token and chat id under '{Section}'. " +
+        "Nothing is counted and nothing is reported.",
+        OperatorChannelOptions.Section);
+}
+
+// Replays the allowlist amendments made by /allow and /deny before the first request
+// is served, so a restart does not silently undo an admission the operator made from
+// their phone. Also announces the restart itself.
+OperatorStartup.Begin(app.Services, app.Logger);
 
 app.Run();
 

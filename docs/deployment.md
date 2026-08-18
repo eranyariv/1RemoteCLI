@@ -62,6 +62,11 @@ Everything is App Service application settings. **No secrets in the repo.**
 | `Push__Vapid__Subject` | `mailto:` address the push services contact about your key |
 | `Push__Vapid__PublicKey` | Handed to the phone at `/push/vapid` |
 | `Push__Vapid__PrivateKey` | Signs push messages. Secret. |
+| `Telegram__BotToken` | Bot token for the [operator channel](operator-channel.md). Secret. Absent disables it. |
+| `Telegram__ChatId` | The operator's chat. Reports go here and only this chat's commands are obeyed. |
+| `Telegram__Commands` | `true` to accept inbound admin commands. Default `false`. |
+| `Telegram__MonthlyCost` | What this deployment costs a month, for the digest's cost-per-user line. |
+| `Telegram__ClientSecretExpiresOn` | When the Entra client secret expires, so the hub can warn you before it does. Only relevant if the registration has one; today's does not. |
 | `ASPNETCORE_ENVIRONMENT` | `Production` |
 
 Read them back:
@@ -237,11 +242,15 @@ git checkout <good-sha>
 .\scripts\publish-hub.ps1
 ```
 
-The hub holds no persistent state — no database, no migrations, nothing to undo. Rolling back is just running the older code. Sessions survive it the same way they survive a restart: agents and phones reconnect within a few seconds.
+The hub holds no persistent state worth migrating — no database, nothing to undo. The one file it does keep, the [operator channel's](operator-channel.md) counters under `$HOME/data`, is versioned and tolerant of being read by older code; the worst case is a week of statistics, not a session. Rolling back is just running the older code. Sessions survive it the same way they survive a restart: agents and phones reconnect within a few seconds.
 
 ## Health
 
-There is no monitoring wired up. `/health` returns status and version and is what the deploy script polls; point an uptime check at it if this becomes something people depend on. Hub logs go to App Service's log stream:
+`/health` returns status and version and is what the deploy script polls; point an uptime check at it if this becomes something people depend on.
+
+Beyond that, monitoring is the [operator channel](operator-channel.md) — set `Telegram__BotToken` and `Telegram__ChatId` and the hub reports its own starts, refused sign-ins, push and token failure spikes, agent version skew, the approaching client secret expiry, and a weekly digest, to one Telegram chat. Counts and statistics only; it can never report terminal content, machine names or session names. It is off until configured, and off is a supported state.
+
+Hub logs go to App Service's log stream:
 
 ```powershell
 az webapp log tail -g 1remotecli-rg -n 1remotecli-hub --only-show-errors

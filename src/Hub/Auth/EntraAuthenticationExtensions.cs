@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Options;
+using OneRemoteCli.Hub.Ops;
 
 namespace OneRemoteCli.Hub.Auth;
 
@@ -65,6 +66,19 @@ public static class EntraAuthenticationExtensions
                         return Task.CompletedTask;
                     },
 
+                    // A token that did not validate at all: wrong signature, wrong
+                    // audience, expired beyond the skew. One is a clock that drifted;
+                    // a run of them is a misconfiguration or somebody trying the door,
+                    // and neither is otherwise discoverable until a user complains.
+                    OnAuthenticationFailed = context =>
+                    {
+                        context.HttpContext.RequestServices
+                            .GetRequiredService<FailureRates>()
+                            .TokenRejected();
+
+                        return Task.CompletedTask;
+                    },
+
                     OnTokenValidated = context =>
                     {
                         // The token is genuine by this point. Whether this person may
@@ -99,16 +113,24 @@ public static class EntraAuthenticationExtensions
 }
 
 /// <summary>
-/// Logs each account the hub sees, once.
+/// Logs each account the hub sees, once — and tells the operator about the ones it
+/// turned away.
 /// <para>
 /// Onboarding needs the resolved <c>{tid}:{oid}</c>, and nobody can look it up
 /// before their first connection — so the hub prints it, including for accounts it
 /// just turned away. Once, because a phone that reconnects on every tunnel change
 /// would otherwise bury the log.
 /// </para>
+/// <para>
+/// The Telegram alert hangs off the same de-duplication rather than having its own.
+/// A refused phone retries on a timer, and an operator woken forty times by one
+/// misconfigured account would mute the channel — which is a worse outcome than
+/// never having built it.
+/// </para>
 /// </summary>
-public sealed class AdmissionLog
+public sealed class AdmissionLog(IOperatorNotifier notifier)
 {
+    private readonly IOperatorNotifier _notifier = notifier ?? throw new ArgumentNullException(nameof(notifier));
     private readonly ConcurrentDictionary<string, byte> _seen = new(StringComparer.Ordinal);
 
     public void Record(ILoggerFactory loggerFactory, AccessResult result)
@@ -130,15 +152,31 @@ public sealed class AdmissionLog
                 "Admitted {Username} as {UserKey}.",
                 result.Username ?? "(no username)",
                 result.Key);
+
+            return;
         }
-        else
-        {
-            logger.LogWarning(
-                "Refused {Username} ({UserKey}): {Reason}. Add \"{UserKey}\" to Entra:Allowlist to admit them.",
-                result.Username ?? "(no username)",
-                result.Key ?? "(no user key)",
-                result.Reason,
-                result.Key ?? result.Username ?? string.Empty);
-        }
+
+        logger.LogWarning(
+            "Refused {Username} ({UserKey}): {Reason}. Add \"{UserKey}\" to Entra:Allowlist to admit them.",
+            result.Username ?? "(no username)",
+            result.Key ?? "(no user key)",
+            result.Reason,
+            result.Key ?? result.Username ?? string.Empty);
+
+        // The highest-value thing this channel does, and it needs no storage. Without
+        // it the person sees a failure, nobody is told, and a valid user is stuck at a
+        // dead end that takes one line of configuration to clear.
+        //
+        // Mapped to the channel's own enum rather than passing the AccessResult, whose
+        // Reason is an assembled sentence. The vocabulary takes no free text, by design.
+        _notifier.Send(new OperatorMessage.AccountRefused(
+            result.Username ?? string.Empty,
+            result.Key,
+            result.Decision switch
+            {
+                AccessDecision.MissingScope => RefusalKind.MissingScope,
+                AccessDecision.NoUserKey => RefusalKind.NoUserKey,
+                _ => RefusalKind.NotAllowlisted,
+            }));
     }
 }

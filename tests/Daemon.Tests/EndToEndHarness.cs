@@ -16,6 +16,7 @@ using OneRemoteCli.Daemon.Ipc;
 using OneRemoteCli.Daemon.Pty;
 using OneRemoteCli.Daemon.Wrapper;
 using OneRemoteCli.Hub.Auth;
+using OneRemoteCli.Hub.Ops;
 using OneRemoteCli.Hub.Push;
 using OneRemoteCli.Hub.Relay;
 using OneRemoteCli.Protocol.Hub;
@@ -150,6 +151,11 @@ internal sealed class EndToEndHarness : IAsyncDisposable
         // exactly what a hub with no VAPID keys does in production.
         builder.Services.AddSingleton<PushSubscriptionStore>();
         builder.Services.AddSingleton<IPushNotifier, DiscardingNotifier>();
+
+        // The operator channel, for the same reason and on the same terms: the hub
+        // counts usage for it, an unconfigured deployment counts nothing, and what it
+        // reports is covered by the hub's own tests.
+        builder.Services.AddSingleton<IUsageRecorder, NullUsageRecorder>();
 
         builder.Services.AddSignalR(RelayLiveness.Apply).AddMessagePackProtocol();
 

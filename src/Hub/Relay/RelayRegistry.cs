@@ -57,6 +57,17 @@ public sealed record DisconnectResult
 public sealed record AttachResult(RelayTarget Target, Attachment? Displaced);
 
 /// <summary>
+/// How much the hub is currently holding. Numbers only, deliberately.
+/// <para>
+/// This is what the operator channel is allowed to see, and the shape is the point: it
+/// answers "how many machines" without ever being able to answer "which machines". An
+/// admin console is exactly where naming them would feel like a reasonable next
+/// addition, so the type that would carry the names is not reachable from there at all.
+/// </para>
+/// </summary>
+public readonly record struct RelayCounts(int Accounts, int Machines, int Sessions, int Connections);
+
+/// <summary>
 /// The hub's entire routing state, partitioned by user key.
 /// <para>
 /// <b>The partitioning is the security property, not a lookup optimisation.</b> Every
@@ -337,6 +348,50 @@ public sealed class RelayRegistry
                     .Select(machine => machine.ToInfo())
                     .ToArray()
                 : [];
+        }
+    }
+
+    /// <summary>
+    /// How much is connected right now, across every partition.
+    /// <para>
+    /// The one method here that crosses partitions, which is safe precisely because it
+    /// returns nothing but counts — there is no identifier in a <see cref="RelayCounts"/>
+    /// to attribute to the wrong person. It exists for the operator channel, which is
+    /// allowed to know how busy the hub is and is not allowed to know whose machines
+    /// those are.
+    /// </para>
+    /// <para>
+    /// Machines are counted only while an agent is connected. An offline machine is
+    /// remembered so it can be reported offline, but counting it here would tell the
+    /// operator the hub is holding more than it is.
+    /// </para>
+    /// </summary>
+    public RelayCounts Counts()
+    {
+        lock (_gate)
+        {
+            int machines = 0;
+            int sessions = 0;
+
+            foreach (UserPartition partition in _partitions.Values)
+            {
+                foreach (RegisteredMachine machine in partition.Machines.Values)
+                {
+                    if (machine.ConnectionId is null)
+                    {
+                        continue;
+                    }
+
+                    machines++;
+                    sessions += machine.Sessions.Count;
+                }
+            }
+
+            return new RelayCounts(
+                Accounts: _connections.Values.Select(record => record.UserKey).Distinct(StringComparer.Ordinal).Count(),
+                Machines: machines,
+                Sessions: sessions,
+                Connections: _connections.Count);
         }
     }
 

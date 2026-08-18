@@ -24,11 +24,13 @@ public sealed class WebPushSender(
     PushSubscriptionStore store,
     PushServiceClient client,
     IOptions<VapidOptions> options,
+    OneRemoteCli.Hub.Ops.FailureRates failures,
     ILogger<WebPushSender> logger) : IPushSender
 {
     private readonly PushSubscriptionStore _store = store;
     private readonly PushServiceClient _client = client;
     private readonly VapidOptions _vapid = options.Value;
+    private readonly OneRemoteCli.Hub.Ops.FailureRates _failures = failures;
     private readonly ILogger<WebPushSender> _logger = logger;
 
     public async ValueTask SendAsync(
@@ -95,12 +97,17 @@ public sealed class WebPushSender(
             // process, and the phone will register again next time it opens the app.
             _store.Forget(userKey, subscription.Endpoint);
             _logger.LogInformation("Dropped an expired push subscription ({Status}).", ex.StatusCode);
+
+            // Counted, because one is routine and a run of them is not: a restart drops
+            // every subscription, and the first sign is a burst of 410s.
+            _failures.PushFailed(expired: true);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // Never fatal. A push service being unreachable must not affect the relay,
             // which is the half of the product that has a user waiting on it.
             _logger.LogWarning(ex, "Push delivery failed.");
+            _failures.PushFailed(expired: false);
         }
     }
 

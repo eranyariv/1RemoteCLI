@@ -182,7 +182,9 @@ jobs:
             echo
             echo "That downloads the build for this machine's architecture, checks it against the"
             echo 'hash below, puts it in `%LOCALAPPDATA%\Programs\1RemoteCLI`, registers the logon'
-            echo 'task and adds it to your `PATH`. Then open a new terminal and run `1remote login`.'
+            echo 'task, adds it to your `PATH` and starts the agent -- so its icon is in the'
+            echo 'notification area when the install finishes, rather than after your next logon.'
+            echo 'Then open a new terminal and run `1remote login`.'
             echo
             echo 'On a personal machine with no such protections, a plain PowerShell window works'
             echo 'too. To install by hand instead, download the executable for your architecture and'

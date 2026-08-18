@@ -147,7 +147,14 @@ internal sealed class SettingsWindow
 
         Refresh(reread: true);
 
-        ShowWindow(_window, SW_SHOW);
+        // Not ShowWindow. A process's *first* ShowWindow call ignores the command it is
+        // given and obeys the launcher's STARTUPINFO instead, and this agent is started
+        // deliberately hidden — by the scheduled task, by the installer, by anything
+        // that does not want a console flashing up at logon. So the one call that has to
+        // work is exactly the one Windows overrules, and the window is created, sized,
+        // filled and then hidden, with no error anywhere to say so. SetWindowPos is not
+        // subject to the rule.
+        SetWindowPos(_window, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW);
         SetForegroundWindow(_window);
     }
 
@@ -221,6 +228,15 @@ internal sealed class SettingsWindow
             throw new InvalidOperationException(
                 $"Creating the settings window failed: {Marshal.GetLastWin32Error()}");
         }
+
+        // Deliberately thrown away. Windows overrules the first ShowWindow call a
+        // process makes, substituting whatever the launcher asked for in STARTUPINFO —
+        // which for an agent started by the scheduled task is "hidden". Spending that
+        // one call here, on a window that is not on screen yet and is about to be shown
+        // by SetWindowPos anyway, means every later call behaves as written. Without it
+        // the minimise box is a trap: restoring the window would be the first call
+        // instead, and would silently do nothing.
+        ShowWindow(_window, SW_HIDE);
 
         // Only askable once the window exists, which is why the size is applied after
         // creation rather than passed in.

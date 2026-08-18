@@ -297,8 +297,26 @@ internal static partial class NativeMethods
     internal const int BST_UNCHECKED = 0;
     internal const int BST_CHECKED = 1;
 
+    internal const int SW_HIDE = 0;
     internal const int SW_SHOW = 5;
     internal const int SW_RESTORE = 9;
+
+    /// <summary>
+    /// How a window is shown for the first time, when <c>ShowWindow</c> cannot be
+    /// trusted to do it.
+    /// <para>
+    /// The first <c>ShowWindow</c> call a process makes ignores the command it is
+    /// given and uses whatever the launcher put in <c>STARTUPINFO</c> instead. The
+    /// agent is launched deliberately hidden — that is the whole point of the
+    /// scheduled task's <c>Hidden</c> setting — so that inherited command is
+    /// <c>SW_HIDE</c>, and the first window the agent ever opens would be created,
+    /// laid out, and then quietly hidden. <c>SetWindowPos</c> has no such rule.
+    /// </para>
+    /// </summary>
+    internal const int SWP_NOSIZE = 0x0001;
+    internal const int SWP_NOMOVE = 0x0002;
+    internal const int SWP_NOZORDER = 0x0004;
+    internal const int SWP_SHOWWINDOW = 0x0040;
 
     internal const int COLOR_BTNFACE = 15;
     internal const int TRANSPARENT = 1;
@@ -345,6 +363,17 @@ internal static partial class NativeMethods
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool ShowWindow(IntPtr hWnd, int command);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SetWindowPos(
+        IntPtr hWnd,
+        IntPtr insertAfter,
+        int x,
+        int y,
+        int width,
+        int height,
+        int flags);
 
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

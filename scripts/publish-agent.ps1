@@ -10,18 +10,27 @@
     DLLs would make it something you install rather than something you drop on the
     PATH.
 
-    ReadyToRun is deliberately OFF and compression is ON, which is the opposite of the
-    usual advice. Measured on this project: ReadyToRun uncompressed is 180 MB and
-    starts in 118 ms; no ReadyToRun compressed is 70 MB and starts in 168 ms;
-    ReadyToRun compressed is the worst of both at 76 MB and 618 ms, because the larger
-    ReadyToRun images have to be decompressed on every launch. Fifty milliseconds is
-    invisible next to the start-up of anything worth wrapping -- a shell, a coding
-    agent -- and a 180 MB download for a personal tool looks broken. So: small.
+    Compression is deliberately OFF, and that is not a size decision. A compressed
+    single-file bundle is a self-extracting high-entropy blob, which is structurally
+    what a packer looks like -- and the attack surface reduction rule "Use advanced
+    protection against ransomware" refuses it outright on managed machines. Measured
+    with the rule active, three launches each, files staged by an ordinary shell:
+    compressed refused 0 of 3, uncompressed ran 3 of 3, same source, same folder,
+    seconds apart. Every other suspect was eliminated first (issue #101): a novel
+    unsigned probe ran, the same probe padded to 13 MB of random bytes ran, bundled
+    and padded-bundled ran, and changing the agent's hash changed nothing.
 
-    Those figures are from before issue #46, which took the download from 70 MB to 13
-    by dropping the Windows Forms reference held for one tray icon and turning on
-    trimming. Both live in the project file, so this script and the release workflow
-    get them without a flag.
+    It costs 6 MB of download and it makes start-up faster, because there is nothing
+    to decompress: 263 ms against 284 ms, medians of eight.
+
+    ReadyToRun stays OFF, which is still the opposite of the usual advice. Measured
+    before issue #46: ReadyToRun uncompressed was 180 MB and started in 118 ms
+    against 70 MB and 168 ms without it. Fifty milliseconds is invisible next to the
+    start-up of anything worth wrapping -- a shell, a coding agent -- and a 180 MB
+    download for a personal tool looks broken. That issue then took the download from
+    70 MB to 13 by dropping the Windows Forms reference held for one tray icon and
+    turning on trimming; both live in the project file, so this script and the release
+    workflow get them without a flag.
 
     The build is NOT signed. There is no code-signing certificate for this project, so
     SmartScreen will warn the first time it runs. The published SHA-256 is printed
@@ -69,7 +78,7 @@ dotnet publish $project `
     --self-contained true `
     -p:PublishSingleFile=true `
     -p:IncludeNativeLibrariesForSelfExtract=true `
-    -p:EnableCompressionInSingleFile=true `
+    -p:EnableCompressionInSingleFile=false `
     -p:PublishReadyToRun=false `
     -p:DebugType=none `
     --nologo

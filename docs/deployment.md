@@ -181,7 +181,9 @@ The repository is public, so the one-liner needs no token and no GitHub account.
 
 Produces one self-contained `1remote.exe` in `artifacts/win-x64/` — no .NET install needed on the target machine, nothing to unpack — and prints its SHA-256. `-Runtime win-arm64` for a Snapdragon machine. This is the same script the release workflow runs, so a release is never built by a path nobody has run locally, and it takes no version argument because the build reads `VERSION`.
 
-It is roughly 13 MB. It was 70 until [#46](https://github.com/eranyariv/1RemoteCLI/issues/46) removed the Windows Forms reference held for a single tray icon — which brought the entire Windows Desktop runtime with it — and turned on trimming. Both settings live in `src/Daemon/1RemoteCLI.Daemon.csproj`, not in this script, so a release built by the workflow is the same size as one built by hand.
+It is roughly 20 MB. It was 70 until [#46](https://github.com/eranyariv/1RemoteCLI/issues/46) removed the Windows Forms reference held for a single tray icon — which brought the entire Windows Desktop runtime with it — and turned on trimming. Both settings live in `src/Daemon/1RemoteCLI.Daemon.csproj`, not in this script, so a release built by the workflow is the same size as one built by hand.
+
+It would be 13 MB with single-file compression on, which is how it shipped up to 0.08. Compression is off now because that is what the "Use advanced protection against ransomware" attack surface reduction rule was refusing to launch: a compressed bundle is a self-extracting high-entropy blob, and that is the shape of a packer. Measured with the rule active, same source, seconds apart, compressed was refused 0 of 3 and uncompressed ran 3 of 3 — see [#101](https://github.com/eranyariv/1RemoteCLI/issues/101), which also lists everything that was ruled out first. Start-up got slightly faster too, since there is nothing to decompress.
 
 ### It is not signed
 

@@ -8,7 +8,7 @@ The agent runs unattended under a scheduled task with no console. When your phon
 %LOCALAPPDATA%\1RemoteCLI\logs\agent-YYYY-MM-DD.log
 ```
 
-The tray icon's **Open logs** goes straight there. One file per day, fourteen days kept, oldest pruned on startup and at each date rollover.
+The settings window's **Open logs** goes straight there. One file per day, fourteen days kept, oldest pruned on startup and at each date rollover.
 
 You can read, copy or delete the file **while the agent is running** — it is opened and closed per write rather than held open. Attach the last day or two to a bug report.
 

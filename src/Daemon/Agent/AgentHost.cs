@@ -27,7 +27,6 @@ public sealed class AgentHost : IAsyncDisposable
 {
     private readonly AgentPipeServer _server;
     private readonly ISessionSink _sink;
-    private readonly AwaitingInputMonitor _awaitingInput;
     private readonly Action<string>? _log;
     private readonly List<Task> _connections = [];
     private readonly object _connectionsLock = new();
@@ -45,12 +44,21 @@ public sealed class AgentHost : IAsyncDisposable
         _sink = sink ?? NullSessionSink.Instance;
         _server = server ?? new AgentPipeServer();
         _log = log;
-        _awaitingInput = new AwaitingInputMonitor(Sessions, _sink, awaitingInput, log: log);
+        AwaitingInput = new AwaitingInputMonitor(Sessions, _sink, awaitingInput, log: log);
     }
 
     public MachineIdentity Identity { get; }
 
     public SessionRegistry Sessions { get; }
+
+    /// <summary>
+    /// Exposed so the tray can ask the same question the notifications answer. Sharing
+    /// the monitor rather than the heuristic keeps the thresholds and the compiled
+    /// patterns in one place — two copies would eventually disagree about the same
+    /// session, and the user would see one of them say "waiting" while the other did
+    /// not.
+    /// </summary>
+    public AwaitingInputMonitor AwaitingInput { get; }
 
     public string PipeName => _server.PipeName;
 
@@ -67,7 +75,7 @@ public sealed class AgentHost : IAsyncDisposable
         // sessions that already exist, and it must keep running while the loop is
         // blocked waiting for the next wrapper to connect - which is most of the time.
         using var stopping = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        Task monitor = Task.Run(() => _awaitingInput.RunAsync(stopping.Token), CancellationToken.None);
+        Task monitor = Task.Run(() => AwaitingInput.RunAsync(stopping.Token), CancellationToken.None);
 
         try
         {

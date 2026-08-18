@@ -7,10 +7,10 @@ namespace OneRemoteCli.Daemon.Tests;
 /// The tray menu's contents.
 /// <para>
 /// Testable at all only since the menu became a list rather than a tree of live
-/// widgets. It is the only part of the agent a user ever clicks, and the thing worth
-/// pinning is that a menu built while signed out cannot offer to sign out — an item
-/// that does nothing is indistinguishable, to the person clicking it, from an agent
-/// that has hung.
+/// widgets. It is the only part of the agent a user ever clicks, and since the
+/// settings window took over the account, the logs, feedback and the version
+/// (issue #73), what is worth pinning is mostly what is <em>not</em> here: a second
+/// copy of that information would eventually disagree with the first.
 /// </para>
 /// </summary>
 public sealed class TrayMenuTests
@@ -30,59 +30,37 @@ public sealed class TrayMenuTests
             Menu(AgentState.Connected, "Ada Lovelace (ada@example.com)")[0].Text);
     }
 
-    [Fact]
-    public void SignedOutOffersOnlySigningIn()
-    {
-        IReadOnlyList<TrayMenuItem> menu = Menu(AgentState.SignedOut);
-
-        Assert.True(Item(menu, TrayCommand.SignIn).Enabled);
-        Assert.False(Item(menu, TrayCommand.SignOut).Enabled);
-    }
-
-    [Fact]
-    public void SignedInOffersLeavingButNotArrivingAgain()
-    {
-        IReadOnlyList<TrayMenuItem> menu = Menu(AgentState.Connected, "ada@example.com");
-
-        Assert.False(Item(menu, TrayCommand.SignIn).Enabled);
-        Assert.True(Item(menu, TrayCommand.SignOut).Enabled);
-    }
-
-    [Fact]
-    public void ReconnectingStillLetsTheUserLeaveTheAccount()
-    {
-        // Keyed off the account, not the connection. A machine on a train is
-        // reconnecting, and its user must still be able to sign out.
-        Assert.True(Item(Menu(AgentState.Reconnecting, "ada@example.com"), TrayCommand.SignOut).Enabled);
-    }
-
     [Theory]
     [InlineData(AgentState.SignedOut)]
     [InlineData(AgentState.Reconnecting)]
     [InlineData(AgentState.Connected)]
-    public void TheThingsThatAlwaysWorkAlwaysWork(AgentState state)
+    public void EverythingOnTheMenuAlwaysWorks(AgentState state)
     {
-        // None of these depend on being signed in, and a disconnected agent is exactly
-        // when someone needs its logs or wants to complain about it.
+        // Nothing left on the menu depends on being signed in, and a disconnected agent
+        // is exactly when someone needs to open the window that says why.
         IReadOnlyList<TrayMenuItem> menu = Menu(state);
 
+        Assert.True(Item(menu, TrayCommand.Settings).Enabled);
         Assert.True(Item(menu, TrayCommand.ShowSessions).Enabled);
-        Assert.True(Item(menu, TrayCommand.OpenLogs).Enabled);
-        Assert.True(Item(menu, TrayCommand.SendFeedback).Enabled);
         Assert.True(Item(menu, TrayCommand.Quit).Enabled);
     }
 
     [Fact]
-    public void TheVersionIsOnTheMenuAndIsNotClickable()
+    public void SigningInAndOutMovedIntoTheWindow()
     {
-        TrayMenuItem version = Menu(AgentState.Connected, "ada@example.com")
-            .Single(item => item.Text.StartsWith("Version ", StringComparison.Ordinal));
+        // Two places offering to sign out is two places that can disagree about whether
+        // you are signed in, and the wrong one is the one somebody reads.
+        IReadOnlyList<TrayMenuItem> menu = Menu(AgentState.SignedOut);
 
-        Assert.Equal($"Version {ProductVersion.Current}", version.Text);
+        Assert.DoesNotContain(menu, item => item.Text.Contains("Sign ", StringComparison.OrdinalIgnoreCase));
+    }
 
-        // A label, not a command: clicking it must not look like it did something.
-        Assert.Equal(TrayCommand.None, version.Command);
-        Assert.False(version.Enabled);
+    [Fact]
+    public void TheVersionMovedIntoTheWindowToo()
+    {
+        Assert.DoesNotContain(
+            Menu(AgentState.Connected, "ada@example.com"),
+            item => item.Text.StartsWith("Version ", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -95,14 +73,15 @@ public sealed class TrayMenuTests
             .Single(item => item.IsDefault);
 
         Assert.Equal(TrayMenu.DefaultCommand, theDefault.Command);
+        Assert.Equal(TrayCommand.Settings, theDefault.Command);
         Assert.True(theDefault.Enabled);
     }
 
     [Fact]
     public void TheMenuDoesNotOfferToSwitchAccounts()
     {
-        // It was sign-out followed by sign-in, both of which are already on the menu,
-        // so it cost a permanent line for a once-ever action (issue #71).
+        // It was sign-out followed by sign-in, both of which are in the window now, so
+        // it cost a permanent line for a once-ever action (issue #71).
         IReadOnlyList<TrayMenuItem> menu = Menu(AgentState.Connected, "ada@example.com");
 
         Assert.DoesNotContain(menu, item => item.Text.Contains("different account", StringComparison.OrdinalIgnoreCase));
@@ -119,6 +98,14 @@ public sealed class TrayMenuTests
 
         Assert.Equal(commands.Length, commands.Distinct().Count());
         Assert.Equal(Enum.GetValues<TrayCommand>().Length - 1, commands.Length);
+    }
+
+    [Fact]
+    public void TheMenuStaysShort()
+    {
+        // The point of the window was to stop this growing. A menu long enough to need
+        // reading is one nobody reads.
+        Assert.True(Menu(AgentState.Connected, "ada@example.com").Count <= 8);
     }
 
     [Fact]

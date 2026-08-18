@@ -263,9 +263,38 @@ Distinguishable by shape as well as colour: colour alone fails for red/green col
 
 The tooltip is the whole diagnostic surface for someone whose phone has stopped seeing a machine, so it leads with the state and the machine name and is truncated to the 127 characters Windows will show — beyond that Windows drops the tooltip entirely rather than truncating it.
 
-Menu: *Sign in* (disabled when already connected), *Show sessions* (opens the PWA), *Open settings folder*, *Quit*.
+Menu: the account line, *Settings…* (the default action, so a double-click opens it), *Open the web app*, *Quit*. Deliberately short — everything else lives in the settings window, so there is only ever one place that answers "am I signed in".
 
 The icon runs its own STA thread with its own message pump. The agent's main thread is busy awaiting the pipe server, and the tray is optional decoration: a machine with no interactive desktop, a policy that blocks shell integration or a broken shell must not stop the agent relaying. Failure to create it is logged and ignored.
+
+**Settings window.** A raw Win32 dialog created on the tray thread — no Windows Forms and no WPF, because the Windows Desktop runtime pack was removed from the build and adding it back doubles the download for one dialog. Controls are `CreateWindowExW` children of a registered window class, laid out at fixed offsets scaled by `GetDpiForWindow`, and given a `CreateFontW` "Segoe UI" via `WM_SETFONT` — without which every control draws in the 1990s bitmap system font.
+
+It shows, in order: the signed-in account and the hub connection in words; the live sessions with their program, age and whether each is waiting for input; a *Start when I sign in to Windows* checkbox; *Wrap a desktop shortcut…*; and the version with *Open logs* and *Send feedback…*.
+
+Three decisions are load-bearing:
+
+- The window is created on the **tray thread**, so `TrayCommand.Settings` is dispatched by posting a private `WM_APP` message back to that thread rather than by `Task.Run` as every other command is. A window belongs to the thread that created it.
+- `IsDialogMessage` runs in the tray pump before `TranslateMessage`, which is the whole of the dialog's keyboard behaviour: Tab, Space, Escape and Enter.
+- A one-second `WM_TIMER` refreshes the connection line and the session list, but **not** the checkbox — reading the real autostart state spawns `schtasks.exe`, so it is read on open and after a toggle only. The checkbox reflects reality rather than what the installer once did, because the failure it exists to explain is somebody having turned the agent off in Task Manager's Startup tab.
+
+The session list is only refilled when its lines actually change, and the scroll position is preserved across refreshes, so a list being read cannot jump under the reader once a second.
+
+**Wrapping a desktop shortcut.** Users who start a CLI from a `.lnk` on the desktop have no command line to put `1remote` in front of. `1remote wrap-shortcut <path.lnk>`, and the settings window's button, read the shortcut through `IShellLink`/`IPersistFile` and write a sibling — `Claude Code (1Remote).lnk` — that targets the agent with `--name "Claude Code" -- "<original target>" <original args>`, carrying the working directory and icon across. The original is never modified.
+
+The reads are the awkward part: `GetPath` is asked for `SLGP_RAWPATH` and the result expanded by hand, because a shortcut may store `%LOCALAPPDATA%\...` and the shell's own expansion is not guaranteed; and the buffer is cleared before each getter because several return `S_FALSE` and write nothing at all, leaving the previous string in place.
+
+Four cases are refused rather than half-wrapped, each with its own sentence, because "it didn't work" is the one message that cannot be acted on:
+
+| Refusal | Why |
+| --- | --- |
+| No filesystem target | Store/MSIX shortcuts carry an app identity, not a program. There is nothing to hand to a ConPTY. |
+| Already wrapped | A session inside a session, and two entries on the phone for one terminal. |
+| `SLDF_RUNAS_USER` | The agent is per-user and unelevated; an elevated wrapper could not reach its pipe. |
+| Name collision | Never overwritten and never `X (1Remote) (1Remote)` — numbered instead. |
+
+A windowed program is a warning, not a refusal: the subsystem is read out of the PE header (`e_lfanew`, `PE\0\0`, subsystem `2` = GUI) and the user is told the session will be an empty terminal, then allowed to proceed.
+
+All of this COM is `[GeneratedComInterface]` with activation by hand through `CoCreateInstance`, because built-in COM interop is disabled for trimming; `1remote self-check` therefore round-trips a real shortcut and instantiates the file dialog, since that is exactly the kind of breakage a trimmed publish produces and no unit test would catch.
 
 The binary is a **console** subsystem executable, because the same binary is the wrapper and a windows-subsystem process has no stdout to write a terminal to. "No console window" for the agent therefore comes from the scheduled task's `Hidden` setting, not from the subsystem.
 
@@ -769,7 +798,9 @@ Guarded remote spawn from per-machine profiles; detachable sessions that survive
     /Terminal             Headless VT parser, screen model, re-serializer
     /Ipc                  Named pipe server and client
     /Hub                  SignalR client, framing, flow control
-    /Tray                 Tray icon, autostart registration
+    /Tray                 Tray icon and settings window
+    /Shell                Shortcut read/write, wrapping rules, file picker
+    /Install              Autostart registration, Start menu, PATH
   /Hub                    C# — ASP.NET Core 8 + SignalR relay
   /PWA                    React + Vite + Tailwind + xterm.js
 /tests

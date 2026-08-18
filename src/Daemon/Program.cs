@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Microsoft.Identity.Client;
 using OneRemoteCli.Daemon.Agent;
@@ -12,6 +13,7 @@ using OneRemoteCli.Daemon.Diagnostics;
 using OneRemoteCli.Daemon.Hub;
 using OneRemoteCli.Daemon.Install;
 using OneRemoteCli.Daemon.Pty;
+using OneRemoteCli.Daemon.Shell;
 using OneRemoteCli.Daemon.Tray;
 using OneRemoteCli.Daemon.Wrapper;
 using OneRemoteCli.Protocol;
@@ -44,6 +46,9 @@ public static class Program
 
     /// <summary>At least one install or uninstall step did not work.</summary>
     private const int ExitInstallFailed = 7;
+
+    /// <summary>A shortcut could not be wrapped, and the reason has been printed.</summary>
+    private const int ExitCannotWrap = 8;
 
     public static async Task<int> Main(string[] args)
     {
@@ -90,6 +95,9 @@ public static class Program
 
             case CommandKind.SelfCheck:
                 return RunSelfCheck();
+
+            case CommandKind.WrapShortcut:
+                return RunWrapShortcut(command);
 
             default:
                 return await RunWrappedAsync(command).ConfigureAwait(false);
@@ -243,8 +251,107 @@ public static class Program
         return checks.All(check => check.Ok) ? 0 : ExitInstallFailed;
     }
 
-    private static int Report(IReadOnlyList<StepResult> steps, bool installing)
+    /// <summary>
+    /// <c>1remote wrap-shortcut</c>: the same work the settings window's button does,
+    /// on the command line.
+    /// <para>
+    /// Both exist deliberately. The window is where somebody finds this; the command is
+    /// what a setup script calls, and what the tests drive — none of the interesting
+    /// behaviour here is reachable through a file dialog.
+    /// </para>
+    /// </summary>
+    private static int RunWrapShortcut(ParsedCommand command)
     {
+        SettingsNotice result = Wrap(command.ShortcutPath!, command.OutputPath);
+
+        if (result.Kind == NoticeKind.Problem)
+        {
+            Console.Error.WriteLine($"1remote: {result.Text}");
+            return ExitCannotWrap;
+        }
+
+        Console.WriteLine(result.Text);
+        return 0;
+    }
+
+    /// <summary>
+    /// Reads a shortcut, decides what to do about it, and writes the result.
+    /// <para>
+    /// Shared by the command and the settings window so that the two cannot come to
+    /// disagree about what is refused. The outcome comes back as something to say
+    /// rather than as an exit code, because one caller prints it and the other puts it
+    /// in a message box.
+    /// </para>
+    /// </summary>
+    private static SettingsNotice Wrap(string sourcePath, string? outputPath)
+    {
+        string full;
+
+        try
+        {
+            full = Path.GetFullPath(sourcePath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return new SettingsNotice($"'{sourcePath}' is not a usable path ({ex.Message}).", NoticeKind.Problem);
+        }
+
+        if (!File.Exists(full))
+        {
+            return new SettingsNotice($"There is no file at '{full}'.", NoticeKind.Problem);
+        }
+
+        // Checked before reading rather than after: the shell will happily load a
+        // non-shortcut through IPersistFile and hand back an empty target, which would
+        // otherwise be reported as "Store or packaged app" and send the user looking in
+        // the wrong place entirely.
+        if (!string.Equals(Path.GetExtension(full), ".lnk", StringComparison.OrdinalIgnoreCase))
+        {
+            return new SettingsNotice(
+                $"'{Path.GetFileName(full)}' is not a shortcut. Pick the .lnk you double-click, not the program itself.",
+                NoticeKind.Problem);
+        }
+
+        ShellLinkInfo source;
+
+        try
+        {
+            source = ShellLink.Read(full);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or COMException)
+        {
+            return new SettingsNotice($"Could not read '{Path.GetFileName(full)}': {ex.Message}", NoticeKind.Problem);
+        }
+
+        WrapPlan plan = ShortcutWrapper.Plan(full, source, Installer.ExecutablePath, outputPath);
+
+        if (!plan.Ok)
+        {
+            return new SettingsNotice(plan.Problem!, NoticeKind.Problem);
+        }
+
+        try
+        {
+            ShellLink.Write(plan.OutputPath, plan.Link);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or COMException)
+        {
+            return new SettingsNotice($"Could not write '{plan.OutputPath}': {ex.Message}", NoticeKind.Problem);
+        }
+
+        string done =
+            $"Wrapped '{plan.DisplayName}'.{Environment.NewLine}{Environment.NewLine}"
+            + $"Created {plan.OutputPath}.{Environment.NewLine}"
+            + "Start it from there and the session shows up on your phone.";
+
+        return plan.Warning is null
+            ? new SettingsNotice(done, NoticeKind.Information)
+            : new SettingsNotice(
+                $"{done}{Environment.NewLine}{Environment.NewLine}{plan.Warning}",
+                NoticeKind.Warning);
+    }
+
+    private static int Report(IReadOnlyList<StepResult> steps, bool installing)    {
         foreach (StepResult step in steps)
         {
             Console.WriteLine($"  {(step.Ok ? "ok  " : "FAIL")}  {step.Message}");
@@ -370,24 +477,56 @@ public static class Program
             return null;
         }
 
+        AgentState State() =>
+            hub.IsConnected ? AgentState.Connected
+            : hub.IsSignedOut ? AgentState.SignedOut
+            : AgentState.Reconnecting;
+
+        // Built fresh every time the window asks, which is once a second while it is
+        // open. A snapshot handed over at startup is the version of this that shows a
+        // session which ended twenty minutes ago.
+        IReadOnlyList<SessionSummary> Sessions() =>
+        [
+            .. host.Sessions.Snapshot().Select(session => new SessionSummary(
+                session.DisplayName,
+                session.StartedUtc,
+                host.AwaitingInput.IsAwaitingInput(session))),
+        ];
+
+        var settings = new SettingsActions(
+            Read: () => SettingsPresenter.Present(
+                State(),
+                accounts.Account?.Description,
+                Sessions(),
+                DateTimeOffset.UtcNow),
+
+            // Asked of Task Scheduler and the registry, never remembered. The user can
+            // have turned this off in Task Manager's Startup tab since the agent
+            // started, and a tick that lies about it is worse than no tick.
+            ReadStartAtLogon: Autostart.IsEnabled,
+            WriteStartAtLogon: SetStartAtLogon,
+
+            // Through the CLI rather than in-process, like every other credential
+            // action here: the child prints why the hub refused an account, which is
+            // the failure people actually hit and one a tray icon cannot explain.
+            SignIn: () => Launch(Installer.ExecutablePath, "login"),
+            SignOut: () => Launch(Installer.ExecutablePath, "logout"),
+            OpenLogs: () => Launch(FileLogger.DefaultDirectory),
+
+            // A mailto: goes to the shell exactly like a URL does, so the user's own
+            // mail client opens with the version already in the subject.
+            SendFeedback: () => Launch(Feedback.MailTo),
+            WrapShortcut: PickAndWrap);
+
         TrayIcon tray;
 
         try
         {
             tray = new TrayIcon(
                 identity.DisplayName,
-                // Through the CLI rather than in-process, like every other credential
-                // action here: the child prints why the hub refused an account, which
-                // is the failure people actually hit and one a tray icon cannot explain.
-                onSignIn: () => Launch(Installer.ExecutablePath, "login"),
-                onSignOut: () => Launch(Installer.ExecutablePath, "logout"),
                 onShowSessions: () => Launch(HubEndpoint.AppUri().ToString()),
-                onOpenLogs: () => Launch(FileLogger.DefaultDirectory),
-
-                // A mailto: goes to the shell exactly like a URL does, so the user's
-                // own mail client opens with the version already in the subject.
-                onSendFeedback: () => Launch(Feedback.MailTo),
-                onQuit: stopping.Cancel);
+                onQuit: stopping.Cancel,
+                settings);
 
             tray.Start();
         }
@@ -397,12 +536,7 @@ public static class Program
             return null;
         }
 
-        void Refresh() => tray.Update(
-            hub.IsConnected ? AgentState.Connected
-                : hub.IsSignedOut ? AgentState.SignedOut
-                : AgentState.Reconnecting,
-            host.Sessions.Count,
-            accounts.Account?.Description);
+        void Refresh() => tray.Update(State(), host.Sessions.Count, accounts.Account?.Description);
 
         hub.StateChanged += Refresh;
         host.Sessions.Changed += Refresh;
@@ -411,6 +545,49 @@ public static class Program
         Refresh();
 
         return tray;
+    }
+
+    /// <summary>
+    /// Turns start-at-logon on or off, and says what went wrong if anything did.
+    /// <para>
+    /// The same two steps <c>1remote install</c> runs, so a machine set up from the
+    /// window and one set up from the command line end up identical. Only the first
+    /// failure is reported: the fallback to the Run key means a failed step is often
+    /// followed by a successful one, and listing both would read as though nothing had
+    /// worked.
+    /// </para>
+    /// </summary>
+    private static string? SetStartAtLogon(bool enable)
+    {
+        IReadOnlyList<StepResult> steps = enable
+            ? Autostart.Enable(Installer.ExecutablePath, Installer.CurrentUserId)
+            : Autostart.Disable();
+
+        return Autostart.IsEnabled() == enable
+            ? null
+            : steps.FirstOrDefault(step => !step.Ok).Message is { Length: > 0 } problem
+                ? problem
+                : Autostart.Summarise(steps, enable);
+    }
+
+    /// <summary>
+    /// Asks for a shortcut and wraps it, for the settings window's button.
+    /// <para>
+    /// Starts in the Desktop folder, because a shortcut somebody launches their CLI
+    /// from is on their desktop by definition — that is the entire premise of the
+    /// feature (issue #66).
+    /// </para>
+    /// </summary>
+    private static SettingsNotice? PickAndWrap(IntPtr owner)
+    {
+        string? picked = FilePicker.PickShortcut(
+            owner,
+            "Choose a shortcut to wrap",
+            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory));
+
+        // Cancelling is a decision, not a failure. Saying anything about it would make
+        // backing out of the dialog cost an extra click.
+        return picked is null ? null : Wrap(picked, null);
     }
 
     /// <summary>Hands something to the shell to open — a URL, a folder or this executable.</summary>

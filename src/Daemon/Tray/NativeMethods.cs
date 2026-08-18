@@ -18,6 +18,11 @@ internal static partial class NativeMethods
 {
     internal const int WM_NULL = 0x0000;
     internal const int WM_DESTROY = 0x0002;
+    internal const int WM_CLOSE = 0x0010;
+    internal const int WM_SETFONT = 0x0030;
+    internal const int WM_COMMAND = 0x0111;
+    internal const int WM_TIMER = 0x0113;
+    internal const int WM_CTLCOLORSTATIC = 0x0138;
     internal const int WM_LBUTTONDBLCLK = 0x0203;
     internal const int WM_CONTEXTMENU = 0x007B;
     internal const int WM_APP = 0x8000;
@@ -30,6 +35,13 @@ internal static partial class NativeMethods
 
     /// <summary>Posted from other threads to ask the icon's thread to shut down.</summary>
     internal const int WM_TRAY_QUIT = WM_APP + 3;
+
+    /// <summary>
+    /// Posted from other threads to ask the icon's thread to open the settings window.
+    /// A window has to be created on the thread that pumps its messages, and every
+    /// other menu action deliberately runs off that thread.
+    /// </summary>
+    internal const int WM_TRAY_SETTINGS = WM_APP + 4;
 
     internal const int NIM_ADD = 0x00000000;
     internal const int NIM_MODIFY = 0x00000001;
@@ -245,4 +257,167 @@ internal static partial class NativeMethods
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     internal static extern IntPtr GetModuleHandle(string? moduleName);
+
+    internal const int WS_OVERLAPPED = 0x00000000;
+    internal const int WS_CAPTION = 0x00C00000;
+    internal const int WS_SYSMENU = 0x00080000;
+    internal const int WS_MINIMIZEBOX = 0x00020000;
+    internal const int WS_VISIBLE = 0x10000000;
+    internal const int WS_CHILD = 0x40000000;
+    internal const int WS_TABSTOP = 0x00010000;
+    internal const int WS_GROUP = 0x00020000;
+    internal const int WS_VSCROLL = 0x00200000;
+    internal const int WS_BORDER = 0x00800000;
+    internal const int WS_EX_APPWINDOW = 0x00040000;
+
+    internal const int BS_DEFPUSHBUTTON = 0x00000001;
+    internal const int BS_AUTOCHECKBOX = 0x00000003;
+    internal const int SS_LEFT = 0x00000000;
+    internal const int SS_ENDELLIPSIS = 0x00004000;
+
+    /// <summary>
+    /// The list is a read-out, not a chooser: nothing in the window acts on a selected
+    /// session, and a highlight that leads nowhere invites clicking.
+    /// </summary>
+    internal const int LBS_NOSEL = 0x00004000;
+
+    /// <summary>
+    /// Keeps the box the height we asked for. By default a list box silently shrinks
+    /// to a whole number of rows, which would leave it out of line with the buttons.
+    /// </summary>
+    internal const int LBS_NOINTEGRALHEIGHT = 0x00000100;
+
+    internal const int LB_ADDSTRING = 0x0180;
+    internal const int LB_RESETCONTENT = 0x0184;
+    internal const int LB_SETTOPINDEX = 0x0197;
+    internal const int LB_GETTOPINDEX = 0x018E;
+
+    internal const int BM_GETCHECK = 0x00F0;
+    internal const int BM_SETCHECK = 0x00F1;
+    internal const int BST_UNCHECKED = 0;
+    internal const int BST_CHECKED = 1;
+
+    internal const int SW_SHOW = 5;
+    internal const int SW_RESTORE = 9;
+
+    internal const int COLOR_BTNFACE = 15;
+    internal const int TRANSPARENT = 1;
+
+    internal const int SM_CXSCREEN = 0;
+    internal const int SM_CYSCREEN = 1;
+
+    /// <summary>The two commands <c>IsDialogMessage</c> synthesises, for Enter and Escape.</summary>
+    internal const int IDOK = 1;
+    internal const int IDCANCEL = 2;
+
+    internal const int MB_OK = 0x00000000;
+    internal const int MB_ICONERROR = 0x00000010;
+    internal const int MB_ICONWARNING = 0x00000030;
+    internal const int MB_ICONINFORMATION = 0x00000040;
+
+    internal const int DEFAULT_CHARSET = 1;
+    internal const int FW_NORMAL = 400;
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct RECT
+    {
+        public int left;
+        public int top;
+        public int right;
+        public int bottom;
+    }
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode)]
+    internal static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    /// <summary>
+    /// The same call, for the messages whose <c>lParam</c> is text. A separate
+    /// declaration rather than a cast, so the marshaller allocates and frees the
+    /// native string for us.
+    /// </summary>
+    [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode)]
+    internal static extern IntPtr SendMessageString(IntPtr hWnd, int msg, IntPtr wParam, string lParam);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowTextW", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool SetWindowText(IntPtr hWnd, string text);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool ShowWindow(IntPtr hWnd, int command);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool IsIconic(IntPtr hWnd);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    internal static partial IntPtr SetFocus(IntPtr hWnd);
+
+    /// <summary>
+    /// What makes Tab move between the controls and Escape close the window. A window
+    /// created with <c>CreateWindowEx</c> gets neither for free; both come from
+    /// feeding its messages through here before dispatching them.
+    /// </summary>
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool IsDialogMessage(IntPtr dialog, ref MSG message);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    internal static partial IntPtr SetTimer(IntPtr hWnd, IntPtr eventId, uint milliseconds, IntPtr callback);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool KillTimer(IntPtr hWnd, IntPtr eventId);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool AdjustWindowRect(ref RECT rect, int style, [MarshalAs(UnmanagedType.Bool)] bool hasMenu);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool MoveWindow(
+        IntPtr hWnd,
+        int x,
+        int y,
+        int width,
+        int height,
+        [MarshalAs(UnmanagedType.Bool)] bool repaint);
+
+    /// <summary>
+    /// Present since Windows 10 1607, which is below our floor, so no probing for it.
+    /// Returns 96 when the process is not DPI aware, which is the honest answer: the
+    /// OS is bitmap-scaling us and the layout should be built at 96.
+    /// </summary>
+    [LibraryImport("user32.dll")]
+    internal static partial uint GetDpiForWindow(IntPtr hWnd);
+
+    [LibraryImport("user32.dll")]
+    internal static partial IntPtr GetSysColorBrush(int index);
+
+    [DllImport("user32.dll", EntryPoint = "MessageBoxW", CharSet = CharSet.Unicode)]
+    internal static extern int MessageBox(IntPtr owner, string text, string caption, int type);
+
+    [DllImport("gdi32.dll", EntryPoint = "CreateFontW", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern IntPtr CreateFont(
+        int height,
+        int width,
+        int escapement,
+        int orientation,
+        int weight,
+        int italic,
+        int underline,
+        int strikeOut,
+        int charSet,
+        int outputPrecision,
+        int clipPrecision,
+        int quality,
+        int pitchAndFamily,
+        string faceName);
+
+    [LibraryImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool DeleteObject(IntPtr handle);
+
+    [LibraryImport("gdi32.dll")]
+    internal static partial int SetBkMode(IntPtr deviceContext, int mode);
 }

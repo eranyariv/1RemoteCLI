@@ -126,6 +126,35 @@ public sealed class AwaitingInputMonitor
         }
     }
 
+    /// <summary>
+    /// Whether a session looks like it is waiting for the user, right now.
+    /// <para>
+    /// The same judgement the sweep makes, without the arming rule that keeps a
+    /// notification from repeating. A notification fires once per quiet episode; a
+    /// window shows what is true while it is open, and one that stopped saying
+    /// "waiting" the moment it had said it once would be wrong for as long as the
+    /// prompt stayed unanswered.
+    /// </para>
+    /// <para>
+    /// Lives here rather than in the settings window because the compiled patterns and
+    /// the thresholds are here, and a second copy of the heuristic would eventually
+    /// disagree with the notifications about the same session.
+    /// </para>
+    /// </summary>
+    public bool IsAwaitingInput(TerminalSession session, DateTimeOffset? now = null)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+
+        DateTimeOffset instant = now ?? _time.GetUtcNow();
+
+        var signals = new IdleSignals(
+            instant - session.StartedUtc,
+            instant - session.LastOutputUtc,
+            session.Screen.Posture());
+
+        return AwaitingInputHeuristic.Evaluate(signals, _options, _patterns) != AwaitingInputVerdict.No;
+    }
+
     private void Forget(IReadOnlyList<TerminalSession> sessions)
     {
         if (_announced.Count == 0)

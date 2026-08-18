@@ -38,6 +38,12 @@ public enum CommandKind
 
     /// <summary>Print the version.</summary>
     Version,
+
+    /// <summary>
+    /// Copy an existing <c>.lnk</c> into one that starts the same program inside a
+    /// shareable session.
+    /// </summary>
+    WrapShortcut,
 }
 
 /// <summary>A parsed command line.</summary>
@@ -49,13 +55,17 @@ public enum CommandKind
 /// False only when the user passed <c>--no-agent</c>. See <see cref="CommandLine.NoAgentFlag"/>.
 /// </param>
 /// <param name="Error">Why parsing failed, or null when it succeeded.</param>
+/// <param name="ShortcutPath">The <c>.lnk</c> to wrap, for <see cref="CommandKind.WrapShortcut"/>.</param>
+/// <param name="OutputPath">Where to write the wrapped shortcut, when the user named a place.</param>
 public sealed record ParsedCommand(
     CommandKind Kind,
     string? Program = null,
     IReadOnlyList<string>? Args = null,
     string? DisplayName = null,
     bool RequireAgent = true,
-    string? Error = null)
+    string? Error = null,
+    string? ShortcutPath = null,
+    string? OutputPath = null)
 {
     public IReadOnlyList<string> Args { get; init; } = Args ?? [];
 }
@@ -98,6 +108,12 @@ public static class CommandLine
         ["uninstall"] = CommandKind.Uninstall,
         ["self-check"] = CommandKind.SelfCheck,
     };
+
+    /// <summary>
+    /// Not in <see cref="Subcommands"/> because that table is only consulted when the
+    /// word is the last token, and this one is always followed by a path.
+    /// </summary>
+    private const string WrapShortcutCommand = "wrap-shortcut";
 
     public static ParsedCommand Parse(IReadOnlyList<string> argv)
     {
@@ -169,16 +185,74 @@ public static class CommandLine
             return new ParsedCommand(subcommand);
         }
 
+        // The one subcommand with arguments of its own, so the rule above cannot
+        // recognise it — that rule requires the subcommand to be the last token. The
+        // position rule still holds: `1remote pwsh wrap-shortcut` runs PowerShell.
+        if (string.Equals(program, WrapShortcutCommand, StringComparison.Ordinal))
+        {
+            return ParseWrapShortcut(argv, i + 1);
+        }
+
         return new ParsedCommand(
             CommandKind.Wrap,
             program,
             argv.Skip(i + 1).ToArray(),
             displayName,
             requireAgent);
-
-        static ParsedCommand Fail(string message) =>
-            new(CommandKind.Help, Error: message);
     }
+
+    /// <summary>
+    /// <c>wrap-shortcut &lt;path.lnk&gt; [--output &lt;path.lnk&gt;]</c>.
+    /// <para>
+    /// Its own parser rather than more cases in the loop above, because the loop's
+    /// governing rule is that a bare word ends our options and starts the child's
+    /// command line — and here a bare word is the shortcut, with our options still to
+    /// come after it.
+    /// </para>
+    /// </summary>
+    private static ParsedCommand ParseWrapShortcut(IReadOnlyList<string> argv, int i)
+    {
+        string? source = null;
+        string? output = null;
+
+        while (i < argv.Count)
+        {
+            string token = argv[i];
+
+            if (token == "--output")
+            {
+                if (i + 1 >= argv.Count)
+                {
+                    return Fail("--output requires a value.");
+                }
+
+                output = argv[i + 1];
+                i += 2;
+                continue;
+            }
+
+            if (token.StartsWith('-'))
+            {
+                return Fail($"Unknown option '{token}'.");
+            }
+
+            if (source is not null)
+            {
+                // Two paths almost always means an unquoted one with a space in it, and
+                // wrapping the wrong file silently is worse than saying so.
+                return Fail("wrap-shortcut takes one shortcut. Quote the path if it contains spaces.");
+            }
+
+            source = token;
+            i++;
+        }
+
+        return source is null
+            ? Fail("wrap-shortcut needs the path of a .lnk to wrap.")
+            : new ParsedCommand(CommandKind.WrapShortcut, ShortcutPath: source, OutputPath: output);
+    }
+
+    private static ParsedCommand Fail(string message) => new(CommandKind.Help, Error: message);
 
     /// <summary>
     /// Joins a program and its arguments into the single string <c>CreateProcess</c> wants,
@@ -263,10 +337,12 @@ public static class CommandLine
           1remote status                          Show who is signed in
           1remote install                         Start the agent at every logon
           1remote uninstall                       Stop starting the agent at logon
+          1remote wrap-shortcut <shortcut.lnk>    Copy a shortcut into a shareable one
 
         Options:
           --name <text>   Friendly name for the session (defaults to the program name)
           --no-agent      Run without the agent. The session is NOT shareable.
+          --output <path> Where wrap-shortcut writes (defaults to beside the original)
           --version       Print the version
           -h, --help      Print this help
 

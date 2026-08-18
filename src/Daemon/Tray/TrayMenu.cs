@@ -1,5 +1,3 @@
-using OneRemoteCli.Protocol;
-
 namespace OneRemoteCli.Daemon.Tray;
 
 /// <summary>What choosing a menu item should do.</summary>
@@ -7,11 +5,8 @@ public enum TrayCommand
 {
     /// <summary>Not a command: a separator, or a label that exists to be read.</summary>
     None,
-    SignIn,
-    SignOut,
+    Settings,
     ShowSessions,
-    OpenLogs,
-    SendFeedback,
     Quit,
 }
 
@@ -49,6 +44,12 @@ public readonly record struct TrayMenuItem(
 /// Being a plain list also makes the menu assertable. It is the only part of the tray
 /// a user interacts with, and until now none of it could be tested.
 /// </para>
+/// <para>
+/// Deliberately short. Signing in and out, the logs, feedback and the version all
+/// moved into the settings window (issue #73); keeping them here as well would mean
+/// two places saying whether you are signed in, and the one that was wrong would be
+/// the one somebody read.
+/// </para>
 /// </summary>
 public static class TrayMenu
 {
@@ -60,31 +61,21 @@ public static class TrayMenu
     /// to advertise a shortcut that does something else.
     /// </para>
     /// </summary>
-    public const TrayCommand DefaultCommand = TrayCommand.ShowSessions;
+    public const TrayCommand DefaultCommand = TrayCommand.Settings;
 
     public static IReadOnlyList<TrayMenuItem> Build(TrayPresentation view) =>
     [
         // Who, before what. The account is first because it is the one fact the icon
-        // cannot show and the one people get wrong.
+        // cannot show and the one people get wrong. Still a label, not a command —
+        // changing it is now the first thing in the window below.
         TrayMenuItem.Label(view.Account),
         TrayMenuItem.Separator,
 
-        new(TrayCommand.SignIn, "Sign in", view.SignInEnabled),
-        new(TrayCommand.SignOut, "Sign out", view.SignOutEnabled),
-        TrayMenuItem.Separator,
-
-        // Bold, because this is what double-clicking the icon does. Signing in as a
-        // different account is deliberately not offered here: it was only ever sign-out
-        // followed by sign-in, both of which are directly above (issue #71).
-        new(TrayCommand.ShowSessions, "Show sessions", true, IsDefault: DefaultCommand == TrayCommand.ShowSessions),
-        new(TrayCommand.OpenLogs, "Open logs", true),
-        new(TrayCommand.SendFeedback, "Send feedback\u2026", true),
-        TrayMenuItem.Separator,
-
-        // A label rather than a command. It is here because the tray is the only part
-        // of the agent a user ever looks at, and "which version are you running" is the
-        // first question any report needs answered.
-        TrayMenuItem.Label($"Version {ProductVersion.Current}"),
+        // Bold, because this is what double-clicking the icon does. It is the settings
+        // window rather than the web app: this menu is opened when something looks
+        // wrong, and the window is the only place that says what.
+        new(TrayCommand.Settings, "Settings\u2026", true, IsDefault: DefaultCommand == TrayCommand.Settings),
+        new(TrayCommand.ShowSessions, "Open the web app", true),
         TrayMenuItem.Separator,
 
         new(TrayCommand.Quit, "Quit", true),

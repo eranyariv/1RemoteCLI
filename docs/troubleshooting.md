@@ -104,9 +104,9 @@ On a managed machine, policy sometimes refuses task registration outright. `1rem
 
 **It signed in as the wrong account, without asking.** Fixed, but worth recognising in older builds. Sign-in used to let the browser choose, so on a machine already signed in to a work account Entra returned a token for that account with no prompt at all — a sign-in that *succeeds*, prints an unexpected address, and only fails later when the hub refuses it. `1remote login` now asks which account every time. If a build still does this, clearing cookies for `login.microsoftonline.com` is the only other way out.
 
-**I want to use a different account.** Right-click the tray icon → **Sign out**, then → **Sign in**. Or `1remote switch-account` from a terminal, which does both in one step. Plain `1remote login` will not do it on its own: it succeeds silently on the account you already have, because its first move is to try the cached one. Signing out first is what forces the browser to ask.
+**I want to use a different account.** Double-click the tray icon to open **Settings…**, then **Sign out** and **Sign in**. Or `1remote switch-account` from a terminal, which does both in one step. Plain `1remote login` will not do it on its own: it succeeds silently on the account you already have, because its first move is to try the cached one. Signing out first is what forces the browser to ask.
 
-The tray menu's first line always says which account is signed in. If it is not the one you expected, that is the answer to most of the questions on this page.
+The tray menu's first line, and the top of the settings window, always say which account is signed in. If it is not the one you expected, that is the answer to most of the questions on this page.
 
 **`login` says the hub refused this account.** The token is genuine; the hub's allowlist does not contain it. Either sign in as a listed account, or add this one — the hub logs the exact key to add each time it turns somebody away:
 
@@ -170,7 +170,7 @@ If it never settles, check the agent log for the disconnect reason. A token that
 
 ## Nothing here matches
 
-There is a **Send feedback** link in both clients — the tray menu, and the footer of the phone app. Both open your mail client addressed to `eran@yariv.org` with the version already in the subject, which is the fastest way to say something and the one that does not need a GitHub account.
+There is a **Send feedback** link in both clients — the agent's settings window, and the footer of the phone app. Both open your mail client addressed to `eran@yariv.org` with the version already in the subject, which is the fastest way to say something and the one that does not need a GitHub account.
 
 For anything that needs a back-and-forth, open an issue at https://github.com/eranyariv/1RemoteCLI/issues with:
 

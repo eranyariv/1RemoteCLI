@@ -3,6 +3,7 @@ using System.Text.Json;
 using MessagePack;
 using OneRemoteCli.Daemon.Agent;
 using OneRemoteCli.Daemon.Install;
+using OneRemoteCli.Daemon.Shell;
 using OneRemoteCli.Protocol.Hub;
 
 namespace OneRemoteCli.Daemon.Diagnostics;
@@ -46,6 +47,8 @@ public static class SelfCheck
             return
             [
                 Check("Start Menu shortcuts (COM)", () => Shortcuts(scratch)),
+                Check("Shortcut round trip (COM)", () => RoundTrip(scratch)),
+                Check("File dialog (COM)", FileDialog),
                 Check("Machine identity file (JSON)", () => Identity(scratch)),
                 Check("Settings file (JSON)", () => Settings(scratch)),
                 Check("Hub messages (MessagePack)", Wire),
@@ -104,6 +107,75 @@ public static class SelfCheck
         if (links.Any(link => link.Length == 0))
         {
             throw new InvalidOperationException("Wrote an empty shortcut.");
+        }
+    }
+
+    /// <summary>
+    /// Writes a shortcut with every field set and reads all of them back.
+    /// <para>
+    /// Separate from the check above, which only proves two files appeared. Shortcut
+    /// wrapping (issue #66) depends on <em>reading</em>, and every getter it uses is a
+    /// distinct vtable slot: the shell returns <c>S_OK</c> from a call that landed in
+    /// the wrong one and simply writes nothing to the buffer, so a mis-ordered
+    /// interface produces a wrapped shortcut that points at an empty string.
+    /// </para>
+    /// </summary>
+    private static void RoundTrip(string scratch)
+    {
+        string path = Path.Combine(scratch, "round trip.lnk");
+
+        var written = new ShellLinkInfo(
+            Environment.ProcessPath!,
+            "--name \"Self check\" -- \"C:\\tools\\thing.exe\" --flag",
+            scratch,
+            Environment.ProcessPath!,
+            0,
+            "Self check");
+
+        ShellLink.Write(path, written);
+
+        ShellLinkInfo read = ShellLink.Read(path);
+
+        if (!string.Equals(read.Target, written.Target, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Read back the target '{read.Target}', wrote '{written.Target}'.");
+        }
+
+        if (read.Arguments != written.Arguments)
+        {
+            throw new InvalidOperationException($"Read back the arguments '{read.Arguments}', wrote '{written.Arguments}'.");
+        }
+
+        if (!string.Equals(read.WorkingDirectory, written.WorkingDirectory, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Read back the working directory '{read.WorkingDirectory}', wrote '{written.WorkingDirectory}'.");
+        }
+
+        if (read.RunAsAdministrator)
+        {
+            // The flags come off a second interface, queried from the same object. A
+            // failed query would report every shortcut as elevated, which refuses every
+            // wrap on a machine where nothing is wrong.
+            throw new InvalidOperationException("A shortcut written without elevation read back as elevated.");
+        }
+    }
+
+    /// <summary>
+    /// Creates the shell's file-open dialog without showing it.
+    /// <para>
+    /// Activation is the part trimming breaks — the object is created by hand through
+    /// <c>CoCreateInstance</c> because built-in COM is off — and it is also the part
+    /// that cannot be tested any other way. Showing the dialog is not an option here;
+    /// creating it proves the class is registered and the interface is reachable, which
+    /// is everything the linker could have taken away.
+    /// </para>
+    /// </summary>
+    private static void FileDialog()
+    {
+        if (!FilePicker.CanActivate())
+        {
+            throw new InvalidOperationException("The shell's file-open dialog could not be created.");
         }
     }
 

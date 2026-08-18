@@ -129,7 +129,7 @@ One number for the whole product, written `x.yy`, starting at `0.01` and going u
 
 It lives in one file, `VERSION`, at the root of the repository. `Directory.Build.props` reads it and stamps every .NET assembly; `vite.config.ts` reads the same file and injects it into the PWA. Nothing else carries a version of its own, so the agent, the hub and the app cannot disagree about which build somebody is running — which is the entire point, because the first question any bug report needs answered is "which version?" and the person answering it is looking at a phone.
 
-The user sees it in two places: the tray menu's **Version** line, and the footer of the PWA. `1remote --version` prints it, the hub returns it from `/health`, and the agent reports it to the hub on every connect.
+The user sees it in two places: the settings window's **Version** line, and the footer of the PWA. `1remote --version` prints it, the hub returns it from `/health`, and the agent reports it to the hub on every connect.
 
 `x.yy` is not a version the tooling accepts — NuGet and the assembly metadata want three numeric parts, and `0.01` is not one — so the numeric form is derived: `0.01` is assembly version `0.1.0`, `0.10` is `0.10.0`. The mapping loses nothing because `yy` is always two digits, and a test asserts the two stay in step.
 

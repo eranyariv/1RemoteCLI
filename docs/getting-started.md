@@ -34,7 +34,7 @@ Open a new terminal — the `PATH` change only reaches terminals opened after it
 1remote --version
 ```
 
-It prints the product version — `0.01` — which is the same number the tray menu shows and the same one the phone app shows in its footer. There is only ever one.
+It prints the product version — `0.01` — which is the same number the agent's settings window shows and the same one the phone app shows in its footer. There is only ever one.
 
 Both clients also carry a **Send feedback** link beside it, which opens your mail client with that version already in the subject.
 
@@ -115,6 +115,57 @@ Your machine is in the list, with the sessions under it. Tap one and you are att
 
 Now go and [add it to your home screen and turn on notifications](phone-setup.md) — without that last step you have to remember to check, which defeats the point.
 
+## 6. The settings window
+
+Double-click the tray icon, or right-click it and choose **Settings…**. Everything the
+agent knows about itself is on one window:
+
+- **Who is signed in**, and whether the hub connection is up. If your phone cannot see
+  this machine, the second line says why and what it means — a machine that is
+  reconnecting keeps its sessions running, and it says so.
+- **The sessions on this machine**, live: what each one is, how long it has been there,
+  and whether it is sitting at a prompt waiting for an answer. It is the same judgement
+  that decides whether to notify your phone.
+- **Start when I sign in to Windows** — a checkbox, and it is read from Task Scheduler
+  and the registry every time the window opens rather than remembered. If somebody
+  turned the agent off in Task Manager's Startup tab, this shows it.
+- **Wrap a desktop shortcut…**, below.
+- The version, the logs and **Send feedback…**.
+
+The tray menu itself is deliberately short: the account, **Settings…**, the web app and
+**Quit**. Anything that lives in the window does not also live on the menu, so there is
+only ever one answer to "am I signed in".
+
+## 7. Wrap a desktop shortcut
+
+If you start your CLI from a shortcut on your desktop rather than by typing its name,
+nothing above helps: there is no command line to put `1remote` in front of. So make a
+copy of the shortcut that goes through 1remote.
+
+In the settings window, click **Wrap a desktop shortcut…** and pick the `.lnk`. Or from
+a terminal:
+
+```powershell
+1remote wrap-shortcut "$env:USERPROFILE\Desktop\Claude Code.lnk"
+```
+
+You get **Claude Code (1Remote).lnk** beside the original — same icon, same working
+directory, same arguments, and the session shows up on your phone named after the
+shortcut. The original is left alone; delete it or keep it as you prefer. Use
+`--output <path>` to put the copy somewhere else.
+
+Some shortcuts are refused, and each one says why:
+
+| | |
+| --- | --- |
+| Store or packaged apps | They carry an app identity rather than a program to run, so there is nothing to start. Wrap the tool's own `.exe` or `.cmd`. |
+| Shortcuts that run as administrator | The agent is per-user and unelevated, and an elevated session could not reach it. |
+| Shortcuts that are already wrapped | Otherwise you get a session inside a session, and two entries on your phone for one terminal. |
+
+Wrapping the same shortcut twice never overwrites the first result — you get
+`(1Remote) (2)` — and wrapping a windowed program is allowed but warned about, because
+its session will be an empty terminal.
+
 ## Command reference
 
 | Command | What it does |
@@ -127,11 +178,13 @@ Now go and [add it to your home screen and turn on notifications](phone-setup.md
 | `1remote status` | Show who is signed in |
 | `1remote install` | Start the agent at every logon, and put `1remote` on your `PATH` |
 | `1remote uninstall` | Undo `install` |
+| `1remote wrap-shortcut <path.lnk>` | Copy a desktop shortcut into one that shares its session |
 
 | Option | |
 | --- | --- |
 | `--name <text>` | Friendly name for the session, shown on the phone. Defaults to the program name. |
 | `--no-agent` | Run without the agent. The session is **not** shareable. |
+| `--output <path>` | Where `wrap-shortcut` writes. Defaults to beside the original. |
 | `--version`, `-h`/`--help` | As you would expect. |
 
 | Environment variable | |

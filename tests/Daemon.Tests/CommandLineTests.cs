@@ -76,11 +76,73 @@ public class CommandLineTests
     [Theory]
     [InlineData("install")]
     [InlineData("uninstall")]
+    [InlineData("wrap-shortcut")]
     public void EverySubcommandIsDocumented(string token)
     {
         // A subcommand missing from the usage text exists only for whoever read the
         // source, which for an install command is nobody who needs it.
         Assert.Contains($"1remote {token}", CommandLine.Usage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WrapShortcutTakesThePathOfTheLinkToWrap()
+    {
+        ParsedCommand parsed = CommandLine.Parse(["wrap-shortcut", @"C:\Users\ada\Desktop\Claude Code.lnk"]);
+
+        Assert.Equal(CommandKind.WrapShortcut, parsed.Kind);
+        Assert.Equal(@"C:\Users\ada\Desktop\Claude Code.lnk", parsed.ShortcutPath);
+        Assert.Null(parsed.OutputPath);
+    }
+
+    [Fact]
+    public void WrapShortcutTakesItsOptionsAfterThePath()
+    {
+        // Unlike everything else here, where a bare word ends our options and starts the
+        // child's command line. This subcommand has no child, so its own options have to
+        // keep working after the positional argument.
+        ParsedCommand parsed = CommandLine.Parse(
+            ["wrap-shortcut", @"C:\a.lnk", "--output", @"D:\b.lnk"]);
+
+        Assert.Equal(CommandKind.WrapShortcut, parsed.Kind);
+        Assert.Equal(@"C:\a.lnk", parsed.ShortcutPath);
+        Assert.Equal(@"D:\b.lnk", parsed.OutputPath);
+    }
+
+    [Fact]
+    public void WrapShortcutWithNoPathSaysWhatItNeeds()
+    {
+        ParsedCommand parsed = CommandLine.Parse(["wrap-shortcut"]);
+
+        Assert.Equal(CommandKind.Help, parsed.Kind);
+        Assert.Contains(".lnk", parsed.Error!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WrapShortcutRefusesTwoPathsRatherThanPickingOne()
+    {
+        // Two paths is nearly always one unquoted path with a space in it, and wrapping
+        // the wrong file silently is worse than saying so.
+        ParsedCommand parsed = CommandLine.Parse(["wrap-shortcut", @"C:\Claude", @"Code.lnk"]);
+
+        Assert.Equal(CommandKind.Help, parsed.Kind);
+        Assert.Contains("Quote the path", parsed.Error!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WrapShortcutRejectsAnOutputWithNoValue()
+    {
+        Assert.Equal(CommandKind.Help, CommandLine.Parse(["wrap-shortcut", @"C:\a.lnk", "--output"]).Kind);
+    }
+
+    [Fact]
+    public void AProgramCalledWrapShortcutIsStillAProgramInThePositionOfOne()
+    {
+        // Same rule as every other subcommand: it only means us in the first bare
+        // position.
+        ParsedCommand parsed = CommandLine.Parse(["pwsh", "wrap-shortcut", @"C:\a.lnk"]);
+
+        Assert.Equal(CommandKind.Wrap, parsed.Kind);
+        Assert.Equal("pwsh", parsed.Program);
     }
 
     /// <summary>A program called <c>agent</c> is still a program when it has arguments.</summary>

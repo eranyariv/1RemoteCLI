@@ -55,23 +55,9 @@ public static class Installer
         Func<StepResult> installShortcuts,
         Func<StepResult> addToPath)
     {
-        List<StepResult> steps = [];
-
-        StepResult task = Step(registerTask);
-        steps.Add(task);
-
-        if (task.Ok)
-        {
-            // Only ever one autostart. Both together would race at logon, and the loser
-            // exits with "an agent is already running" — which reads like a bug.
-            steps.Add(Step(removeRunKey));
-        }
-        else
-        {
-            // Task registration is refused outright by policy on some managed machines.
-            // A worse trigger beats no trigger.
-            steps.Add(Step(addRunKey));
-        }
+        // The autostart rule lives in Autostart, because the settings window's checkbox
+        // does the same thing and two copies of "task, else Run key" would drift.
+        List<StepResult> steps = [.. Autostart.Enable(registerTask, removeRunKey, addRunKey)];
 
         steps.Add(Step(installShortcuts));
 
@@ -110,8 +96,7 @@ public static class Installer
 
     public static IReadOnlyList<StepResult> Uninstall() =>
     [
-        Step(() => TaskRegistration.Remove()),
-        Step(() => RunKey.Remove()),
+        .. Autostart.Disable(),
         Step(() => StartMenu.Remove()),
         Step(() => PathEntry.Remove(ExecutablePath)),
     ];

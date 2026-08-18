@@ -60,26 +60,27 @@ public sealed class TrayIcon : IDisposable
 
     private volatile TrayState _current = new(AgentState.Reconnecting, 0, null);
 
+    /// <summary>
+    /// Created on this thread, on demand, and kept: reopening has to focus the window
+    /// that is already there rather than stack another one.
+    /// </summary>
+    private readonly SettingsWindow _settings;
+
     public TrayIcon(
         string machineName,
-        Action onSignIn,
-        Action onSignOut,
         Action onShowSessions,
-        Action onOpenLogs,
-        Action onSendFeedback,
-        Action onQuit)
+        Action onQuit,
+        SettingsActions settings)
     {
         _machineName = machineName ?? string.Empty;
 
         _commands = new Dictionary<TrayCommand, Action>
         {
-            [TrayCommand.SignIn] = onSignIn ?? throw new ArgumentNullException(nameof(onSignIn)),
-            [TrayCommand.SignOut] = onSignOut ?? throw new ArgumentNullException(nameof(onSignOut)),
             [TrayCommand.ShowSessions] = onShowSessions ?? throw new ArgumentNullException(nameof(onShowSessions)),
-            [TrayCommand.OpenLogs] = onOpenLogs ?? throw new ArgumentNullException(nameof(onOpenLogs)),
-            [TrayCommand.SendFeedback] = onSendFeedback ?? throw new ArgumentNullException(nameof(onSendFeedback)),
             [TrayCommand.Quit] = onQuit ?? throw new ArgumentNullException(nameof(onQuit)),
         };
+
+        _settings = new SettingsWindow(settings ?? throw new ArgumentNullException(nameof(settings)));
 
         _wndProc = HandleMessage;
 
@@ -159,6 +160,14 @@ public sealed class TrayIcon : IDisposable
 
         while (GetMessage(out MSG message, IntPtr.Zero, 0, 0) > 0)
         {
+            // First refusal to the settings window, which is what gives it Tab and
+            // Escape. Returns true when it consumed the message, and dispatching it
+            // anyway would deliver the keystroke twice.
+            if (_settings.Handles(ref message))
+            {
+                continue;
+            }
+
             TranslateMessage(ref message);
             DispatchMessage(ref message);
         }
@@ -239,7 +248,12 @@ public sealed class TrayIcon : IDisposable
                 Render();
                 return IntPtr.Zero;
 
+            case WM_TRAY_SETTINGS:
+                _settings.Show();
+                return IntPtr.Zero;
+
             case WM_TRAY_QUIT:
+                _settings.Close();
                 DestroyWindow(window);
                 return IntPtr.Zero;
 
@@ -346,9 +360,21 @@ public sealed class TrayIcon : IDisposable
     /// leaving the tray unresponsive at exactly the moment the user has asked it to do
     /// something.
     /// </para>
+    /// <para>
+    /// The settings window is the exception, and has to be: a window belongs to the
+    /// thread that created it, and one created on a thread-pool thread would have
+    /// nothing pumping its messages. It is asked for by posting back to this thread
+    /// instead.
+    /// </para>
     /// </summary>
     private void Invoke(TrayCommand command)
     {
+        if (command == TrayCommand.Settings)
+        {
+            Ask(WM_TRAY_SETTINGS);
+            return;
+        }
+
         if (!_commands.TryGetValue(command, out Action? action))
         {
             return;

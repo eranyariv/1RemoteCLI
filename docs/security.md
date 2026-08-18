@@ -4,7 +4,7 @@
 
 > **https://1remotecli.yariv.org/security.html**
 
-It is deliberately not kept here in full. The readme people are pointed at tells them to read the security document *before* deciding to install, and while this repository is private, a link into it 404s for exactly that audience. A safety document only existing collaborators can open is not a safety document. Keeping a second copy here would also mean two versions of a security document drifting apart, which is the worst thing this particular file could do.
+It is deliberately not kept here in full. The readme people are pointed at tells them to read the security document *before* deciding to install, so it has to be readable without a GitHub account at all, on the same site as the readme. Keeping a second copy here would also mean two versions of a security document drifting apart, which is the worst thing this particular file could do.
 
 Edit `src/PWA/public/security.html`. It ships with the hub, so it goes live with the next `scripts/publish-hub.ps1`.
 

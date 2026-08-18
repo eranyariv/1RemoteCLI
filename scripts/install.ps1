@@ -79,8 +79,9 @@ else {
 
 $headers = @{ 'User-Agent' = '1RemoteCLI-install' }
 
-# The repository is private while the project is. A token in the environment is the
-# ordinary way to reach it, and saying so beats a bare 404.
+# The repository is public, so this runs without a token. GITHUB_TOKEN is still
+# honoured because unauthenticated API calls are rate-limited per IP address, and
+# a shared address can exhaust that allowance without the caller doing anything.
 if ($env:GITHUB_TOKEN) {
     $headers['Authorization'] = "Bearer $env:GITHUB_TOKEN"
 }
@@ -89,7 +90,7 @@ try {
     $release = Invoke-RestMethod $api -Headers $headers
 }
 catch {
-    throw "Could not read the release from GitHub: $($_.Exception.Message). If the repository is private, set GITHUB_TOKEN to a token that can read it."
+    throw "Could not read the release from GitHub: $($_.Exception.Message). If this is a rate limit, set GITHUB_TOKEN to any GitHub token and run it again."
 }
 
 $tag = $release.tag_name
@@ -98,11 +99,10 @@ $tag = $release.tag_name
     Downloads one asset of the release.
 
     Through the API rather than `browser_download_url`: that URL is a github.com
-    page, and on a private repository it answers a token with an HTML "Page not
-    found" -- which lands on disk as a 200 and only shows up as a hash mismatch,
-    or worse, as a 60 KB "executable". The API asset URL with
-    `Accept: application/octet-stream` returns the bytes for anyone the token can
-    see the release as.
+    page, and for a caller who cannot see the release it answers with an HTML
+    "Page not found" -- which lands on disk as a 200 and only shows up as a hash
+    mismatch, or worse, as a 60 KB "executable". The API asset URL with
+    `Accept: application/octet-stream` returns the bytes.
 #>
 function Save-Asset([string] $name, [string] $destination) {
     $found = $release.assets | Where-Object { $_.name -eq $name }

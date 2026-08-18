@@ -13,12 +13,10 @@ You start `claude` on a long refactor, leave your desk, and twenty minutes later
 ## Try it
 
 ```powershell
-$env:GITHUB_TOKEN = gh auth token
-irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.ps1 `
-  -Headers @{ Authorization = "Bearer $env:GITHUB_TOKEN" } | iex
+irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.ps1 | iex
 ```
 
-The token is needed twice over while this repository is private — as a header to fetch the script, as an environment variable for the script to read the release — and both are dropped once it is public.
+No account and no token. The script picks the build for your architecture and checks it against the SHA-256 published with the release.
 
 Then, in a new terminal:
 

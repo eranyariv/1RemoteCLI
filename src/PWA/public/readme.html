@@ -104,14 +104,6 @@
           </td>
         </tr>
         <tr>
-          <th>Repo access</th>
-          <td>
-            The project is <strong>private</strong> for now, so you also need to have been given
-            read access to <code>eranyariv/1RemoteCLI</code>. The installer downloads from it, and
-            every GitHub link on this page needs it too. Ask whoever sent you here.
-          </td>
-        </tr>
-        <tr>
           <th>Something to watch from</th>
           <td>
             Anything with a reasonably current browser: a phone, a tablet, a laptop, a second
@@ -129,17 +121,11 @@
           <p>In PowerShell:</p>
           <div class="cmd">
             <button type="button" data-copy>Copy</button>
-            <pre><code>$env:GITHUB_TOKEN = gh auth token
-$headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
-irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.ps1 -Headers $headers | iex</code></pre>
+            <pre><code>irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.ps1 | iex</code></pre>
           </div>
           <p>
-            The token appears twice on purpose, and the two uses are not interchangeable: the
-            <strong>header</strong> is what fetches the script, because
-            <code>raw.githubusercontent.com</code> reads the request header and nothing else, and
-            the <strong>variable</strong> is what the script then uses to read the release. This is
-            only necessary while the project is private. <code>gh auth token</code> assumes the
-            GitHub CLI; a fine-grained token with read access to the repository does just as well.
+            No GitHub account and no token. The script and the build it downloads are both
+            public.
           </p>
           <p>
             That picks the build for your architecture, <strong>checks it against the SHA-256
@@ -292,7 +278,7 @@ Remove-Item -Recurse -Force "$env:LOCALAPPDATA\1RemoteCLI"</code></pre>
           <th>GitHub</th>
           <td>
             <a href="https://github.com/eranyariv/1RemoteCLI/issues/new">Open an issue</a>, best
-            for anything reproducible, if you have access to the repository.
+            for anything reproducible. The repository is public, so anyone can file one.
           </td>
         </tr>
       </table>
@@ -315,20 +301,17 @@ Remove-Item -Recurse -Force "$env:LOCALAPPDATA\1RemoteCLI"</code></pre>
         <a href="https://github.com/eranyariv/1RemoteCLI/blob/main/docs/troubleshooting.md"
           >Troubleshooting</a
         >
-        is the place to start. Like the rest of the GitHub links here it needs read access to the
-        repository, which you already have if the installer above worked for you.
+        is the place to start.
       </p>
 
       <footer>
         <p>
           <span id="version">1RemoteCLI</span> · <a href="/security.html">Security</a> ·
-          <a href="/">Open the app</a>
-        </p>
-        <p>
-          Needs repo access: <a href="https://github.com/eranyariv/1RemoteCLI">Source</a> ·
+          <a href="https://github.com/eranyariv/1RemoteCLI">Source</a> ·
           <a href="https://github.com/eranyariv/1RemoteCLI/blob/main/docs/getting-started.md"
             >Full guide</a
           >
+          · <a href="/">Open the app</a>
         </p>
       </footer>
     </main>

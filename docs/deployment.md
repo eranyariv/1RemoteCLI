@@ -144,7 +144,7 @@ That edits `VERSION` and nothing else. Committing and tagging are left to you, b
 
 ## Release the agent
 
-Users install with a one-liner that downloads from a GitHub Release and checks the hash — see [getting-started](getting-started.md#1-install-it) for the token the one-liner needs while the repository is private:
+Users install with a one-liner that downloads from a GitHub Release and checks the hash — see [getting-started](getting-started.md#1-install-it):
 
 ```powershell
 irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.ps1 | iex
@@ -166,13 +166,7 @@ The tag does not decide the version — `VERSION` does. The workflow refuses to 
 
 Both architectures are cross-published from the same x64 runner. There is no hosted arm64 runner, and the release does not need one — nothing about the publish is architecture-specific, and the tests that would exercise the code already run in CI.
 
-**While the repository is private**, the one-liner needs a token that can read releases:
-
-```powershell
-$env:GITHUB_TOKEN = gh auth token
-```
-
-Making the repository public would remove that step; nothing else about the flow depends on it.
+The repository is public, so the one-liner needs no token and no GitHub account. `install.ps1` still reads `GITHUB_TOKEN` if it is set, which only matters when the unauthenticated API rate limit is in play.
 
 ## Package the agent by hand
 

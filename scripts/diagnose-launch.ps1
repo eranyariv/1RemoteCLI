@@ -1,0 +1,348 @@
+<#
+.SYNOPSIS
+    Works out why Windows will not start 1remote.exe.
+
+.DESCRIPTION
+    The agent is an unsigned executable in a user-writable folder, which is a shape
+    several Windows protections dislike. When one of them refuses, the message is
+    almost always the same three words -- "Access is denied" -- regardless of which
+    one it was, and each has a different remedy: one clears itself in seconds, one
+    needs an administrator, one cannot be fixed on that machine at all.
+
+    This asks each of them in turn and prints what it finds, so the answer comes from
+    the machine rather than from guessing. It reads logs and policy; it changes
+    nothing.
+
+    Elevation is not required, but a few checks say "needs elevation" without it.
+
+.PARAMETER Path
+    The executable to ask about. Defaults to where install.ps1 puts it.
+
+.PARAMETER Minutes
+    How far back to read the event logs. Defaults to 60.
+
+.EXAMPLE
+    irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/diagnose-launch.ps1 | iex
+
+.EXAMPLE
+    .\scripts\diagnose-launch.ps1 -Minutes 240
+#>
+[CmdletBinding()]
+param(
+    [string] $Path = (Join-Path $env:LOCALAPPDATA 'Programs\1RemoteCLI\1remote.exe'),
+    [int] $Minutes = 60
+)
+
+$ErrorActionPreference = 'Continue'
+
+$findings = New-Object System.Collections.ArrayList
+$startedNow = $false
+
+function Write-Section($text) {
+    Write-Host ''
+    Write-Host "== $text" -ForegroundColor Cyan
+}
+
+function Write-Fact($label, $value) {
+    Write-Host ("   {0,-14} {1}" -f $label, $value)
+}
+
+function Add-Finding($severity, $text) {
+    [void]$findings.Add([pscustomobject]@{ Severity = $severity; Text = $text })
+}
+
+# Reading another provider's log is not always permitted, and the failure is not
+# interesting enough to interrupt the report.
+function Get-Events($logName, $ids, $since) {
+    try {
+        @(Get-WinEvent -FilterHashtable @{ LogName = $logName; Id = $ids; StartTime = $since } -ErrorAction Stop)
+    }
+    catch {
+        @()
+    }
+}
+
+function Get-EventFields($event) {
+    $fields = @{}
+
+    try {
+        ([xml]$event.ToXml()).Event.EventData.Data | ForEach-Object {
+            if ($_.Name) { $fields[$_.Name] = $_.'#text' }
+        }
+    }
+    catch {
+    }
+
+    $fields
+}
+
+$since = (Get-Date).AddMinutes(-$Minutes)
+$leaf = Split-Path $Path -Leaf
+
+Write-Host ''
+Write-Host "1RemoteCLI launch diagnosis" -ForegroundColor White
+Write-Host "$Path"
+Write-Host ("Looking back {0} minutes, to {1:HH:mm:ss}." -f $Minutes, $since)
+
+# ---------------------------------------------------------------- the file itself
+
+Write-Section 'The file'
+
+$file = Get-Item $Path -ErrorAction SilentlyContinue
+
+if (-not $file) {
+    Write-Fact 'present' 'NO -- nothing at that path'
+    Add-Finding 'blocking' "There is no file at $Path. The install did not get as far as copying it; re-run install.ps1 and read what it says."
+}
+else {
+    Write-Fact 'size' ("{0:N0} bytes" -f $file.Length)
+    Write-Fact 'written' $file.LastWriteTime
+    Write-Fact 'sha256' (Get-FileHash $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+
+    # The hash is worth printing even without the release to compare against: it is
+    # the first thing to check by hand, and a truncated download is a real failure
+    # mode that looks like everything else here.
+    $streams = @(Get-Item $Path -Stream * -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Stream)
+    Write-Fact 'streams' ($streams -join ', ')
+
+    if ($streams -contains 'Zone.Identifier') {
+        Add-Finding 'suspect' "The file still carries the mark of the web, so SmartScreen will prompt. Clear it with: Unblock-File '$Path'"
+    }
+
+    $acl = Get-Acl $Path -ErrorAction SilentlyContinue
+
+    if ($acl) {
+        Write-Fact 'owner' $acl.Owner
+
+        $denied = @($acl.Access | Where-Object { $_.AccessControlType -eq 'Deny' })
+
+        foreach ($ace in $denied) {
+            Write-Fact 'DENY' ("{0}: {1}" -f $ace.IdentityReference, $ace.FileSystemRights)
+            Add-Finding 'blocking' "There is a Deny entry on the file for $($ace.IdentityReference). That is an access control problem, not a security policy one."
+        }
+
+        if (-not $denied) { Write-Fact 'deny aces' 'none' }
+    }
+}
+
+# ------------------------------------------------------------------- can it start
+
+Write-Section 'Starting it'
+
+if ($file) {
+    try {
+        $output = (& $Path --version 2>&1 | Out-String).Trim()
+        Write-Fact 'result' "started, exit $LASTEXITCODE"
+        Write-Fact 'printed' $output
+        $startedNow = $true
+    }
+    catch {
+        Write-Fact 'result' 'REFUSED'
+        Write-Fact 'error' $_.Exception.Message
+        Add-Finding 'blocking' "Windows refused to start it just now: $($_.Exception.Message)"
+        $startedNow = $false
+    }
+}
+
+# ----------------------------------------------------------- attack surface reduction
+
+Write-Section 'Attack surface reduction'
+
+# Rules delivered by Intune do not appear in Get-MpPreference at all, which makes
+# an empty list there look like an answer when it is not. The event log is the
+# thing that actually knows.
+$asr = @(Get-Events 'Microsoft-Windows-Windows Defender/Operational' @(1121, 1122) $since)
+$mine = @()
+
+foreach ($event in $asr) {
+    $fields = Get-EventFields $event
+    if ($fields['Path'] -and ($fields['Path'] -like "*$leaf*" -or $fields['Path'] -like '*1REMOT~1*')) {
+        $mine += [pscustomobject]@{
+            When    = $event.TimeCreated
+            Blocked = ($event.Id -eq 1121)
+            Rule    = $fields['ID']
+            By      = $fields['Process Name']
+        }
+    }
+}
+
+if (-not $asr) {
+    Write-Fact 'events' 'none readable (either none happened, or this needs elevation)'
+}
+elseif (-not $mine) {
+    Write-Fact 'events' "$($asr.Count) in the window, none about this file"
+}
+else {
+    foreach ($m in $mine) {
+        $verb = 'audited'
+        if ($m.Blocked) { $verb = 'BLOCKED' }
+        Write-Fact $verb ("{0:HH:mm:ss}  rule {1}  launched by {2}" -f $m.When, $m.Rule, (Split-Path $m.By -Leaf))
+    }
+
+    $blocked = @($mine | Where-Object { $_.Blocked })
+
+    if ($blocked) {
+        $ransomware = @($blocked | Where-Object { $_.Rule -eq 'C1DB55AB-C21A-4637-BB3F-A12568109D35' })
+
+        if ($ransomware) {
+            Add-Finding 'blocking' "An attack surface reduction rule blocked the launch: 'Use advanced protection against ransomware'. It refuses executables it has no reputation for, and every release is a new file with no reputation. It usually lifts within a minute or two, once the file has been checked and comes back clean -- so wait, then try again. If it never lifts, the rule is in block mode by your organisation's policy and only an administrator can allow it."
+        }
+        else {
+            Add-Finding 'blocking' "An attack surface reduction rule blocked the launch: $($blocked[0].Rule). Look it up in Microsoft's ASR rules reference; if it is enforced by policy, an administrator has to allow it."
+        }
+    }
+}
+
+$preference = Get-MpPreference -ErrorAction SilentlyContinue
+
+if ($preference) {
+    Write-Fact 'local rules' "$($preference.AttackSurfaceReductionRules_Ids.Count) (Intune-managed rules do not appear here)"
+}
+
+$managed = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Defender'
+
+if (Test-Path $managed) {
+    $winning = (Get-ItemProperty $managed -ErrorAction SilentlyContinue).AttackSurfaceReductionRules_WinningProvider
+
+    if ($winning) {
+        Write-Fact 'managed by' "policy (provider $winning)"
+        Add-Finding 'context' 'Attack surface reduction is managed centrally on this machine, so its rules are your organisation choosing them, not local settings you can change.'
+    }
+}
+
+# ------------------------------------------------------ controlled folder access
+
+Write-Section 'Controlled folder access'
+
+$cfa = @(Get-Events 'Microsoft-Windows-Windows Defender/Operational' @(1123, 1124) $since)
+$cfaMine = @($cfa | Where-Object { (Get-EventFields $_)['Path'] -like "*$leaf*" })
+
+if ($cfaMine) {
+    Write-Fact 'events' "$($cfaMine.Count) about this file"
+    Add-Finding 'blocking' 'Controlled folder access interfered. Allow the app in Windows Security > Virus & threat protection > Ransomware protection.'
+}
+else {
+    Write-Fact 'events' 'none about this file'
+}
+
+# --------------------------------------------------------- applocker and code integrity
+
+Write-Section 'AppLocker and code integrity'
+
+$appLocker = @(Get-Events 'Microsoft-Windows-AppLocker/EXE and DLL' @(8003, 8004) $since)
+$appLockerMine = @($appLocker | Where-Object { $_.Message -like "*$leaf*" })
+
+if ($appLockerMine) {
+    foreach ($event in $appLockerMine | Select-Object -First 3) {
+        Write-Fact 'applocker' ("{0:HH:mm:ss}  id {1}  {2}" -f $event.TimeCreated, $event.Id, ($event.Message -replace '\s+', ' '))
+    }
+
+    if ($appLockerMine | Where-Object { $_.Id -eq 8004 }) {
+        Add-Finding 'blocking' 'AppLocker blocked it. The usual cause is a policy that only allows executables under Program Files and Windows -- and this one installs under your profile. An administrator has to allow the path or the publisher; nothing on the machine can be changed to work around it.'
+    }
+    else {
+        Add-Finding 'suspect' 'AppLocker audited this executable. It is not blocking yet, but the policy is watching it.'
+    }
+}
+else {
+    Write-Fact 'applocker' 'no events about this file'
+}
+
+$ci = @(Get-Events 'Microsoft-Windows-CodeIntegrity/Operational' @(3076, 3077) $since)
+$ciMine = @($ci | Where-Object { $_.Message -like "*$leaf*" })
+
+if ($ciMine) {
+    Write-Fact 'code integrity' "$($ciMine.Count) events about this file"
+    Add-Finding 'blocking' 'A code integrity (WDAC) policy blocked it. That policy only trusts signed code, so an unsigned build cannot run on this machine at all until it is signed or explicitly allowed.'
+}
+else {
+    Write-Fact 'code integrity' 'no events about this file'
+}
+
+$sacKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy'
+$sac = (Get-ItemProperty $sacKey -Name VerifiedAndReputablePolicyState -ErrorAction SilentlyContinue).VerifiedAndReputablePolicyState
+
+$sacText = switch ($sac) {
+    0 { 'off' }
+    1 { 'ON -- enforcing' }
+    2 { 'evaluation' }
+    default { 'not reported' }
+}
+
+Write-Fact 'smart app ctrl' $sacText
+
+if ($sac -eq 1) {
+    Add-Finding 'blocking' 'Smart App Control is on and enforcing. It only runs signed or well-known software, it cannot be re-enabled once turned off, and it will block every unsigned build. On a machine with it on, this tool needs a signed release.'
+}
+
+# ------------------------------------------------------------------- antivirus
+
+Write-Section 'Antivirus'
+
+try {
+    $products = @(Get-CimInstance -Namespace 'root\SecurityCenter2' -ClassName AntiVirusProduct -ErrorAction Stop)
+
+    foreach ($product in $products) {
+        Write-Fact 'installed' $product.displayName
+    }
+
+    $others = @($products | Where-Object { $_.displayName -notlike '*Defender*' })
+
+    if ($others) {
+        Add-Finding 'suspect' "There is third-party antivirus here ($($others[0].displayName)). If nothing above explains the refusal, check its quarantine and its logs -- it will not write to the Defender log this script reads."
+    }
+}
+catch {
+    Write-Fact 'installed' 'could not enumerate'
+}
+
+$detections = @(Get-MpThreatDetection -ErrorAction SilentlyContinue | Where-Object { $_.Resources -like "*$leaf*" })
+
+if ($detections) {
+    Write-Fact 'detections' "$($detections.Count) naming this file"
+    Add-Finding 'blocking' 'Defender has a threat detection naming this file. Check Windows Security > Protection history; it may have been quarantined outright.'
+}
+else {
+    Write-Fact 'detections' 'none naming this file'
+}
+
+# --------------------------------------------------------------------- verdict
+
+Write-Host ''
+Write-Host '== What this means' -ForegroundColor Cyan
+
+if (-not $findings.Count) {
+    Write-Host ''
+    Write-Host '   Nothing here refused it, and it started when this script tried.' -ForegroundColor Green
+    Write-Host '   If the failure was a minute ago, that is the answer: the block was temporary' -ForegroundColor Green
+    Write-Host '   and has already lifted. Run the install again.' -ForegroundColor Green
+}
+else {
+    # The common case after a temporary block is a report full of past refusals and
+    # an executable that runs perfectly well now. Say so before the explanations,
+    # because it is the whole answer and it is otherwise buried under them.
+    if ($startedNow) {
+        Write-Host ''
+        Write-Host '   It started when this script tried, so whatever refused it has stopped.' -ForegroundColor Green
+        Write-Host '   Finish the install by running:' -ForegroundColor Green
+        Write-Host "     & '$Path' install" -ForegroundColor Green
+        Write-Host ''
+        Write-Host '   What refused it, for the record:' -ForegroundColor Gray
+    }
+
+    foreach ($finding in ($findings | Sort-Object { switch ($_.Severity) { 'blocking' { 0 } 'suspect' { 1 } default { 2 } } })) {
+        $colour = switch ($finding.Severity) {
+            'blocking' { 'Red' }
+            'suspect' { 'Yellow' }
+            default { 'Gray' }
+        }
+
+        Write-Host ''
+        Write-Host "   $($finding.Text)" -ForegroundColor $colour
+    }
+}
+
+Write-Host ''
+Write-Host '   Windows Security > Protection history shows the same events with a button to' -ForegroundColor Gray
+Write-Host '   allow them, where allowing is permitted.' -ForegroundColor Gray
+Write-Host ''

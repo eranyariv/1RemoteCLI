@@ -107,13 +107,30 @@ $version = $item.VersionInfo.ProductVersion
 # it. Those failures reach the user with no warning of any kind -- see issue #72, where
 # a published build could not create its own Start Menu shortcuts while every test
 # passed. Self-check writes only under a temp folder it then deletes.
-Write-Host ''
-Write-Host '==> Checking the published executable' -ForegroundColor Cyan
+#
+# Skipped when cross-publishing, because the file cannot be executed here. The release
+# builds win-arm64 on an x64 runner, so that architecture ships unchecked; it is the
+# same source and the same trimming settings, and there is no hosted arm64 runner to
+# check it on.
+$native = switch ([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture) {
+    'X64' { 'win-x64' }
+    'Arm64' { 'win-arm64' }
+    default { $null }
+}
 
-& $exe self-check
+if ($Runtime -eq $native) {
+    Write-Host ''
+    Write-Host '==> Checking the published executable' -ForegroundColor Cyan
 
-if ($LASTEXITCODE -ne 0) {
-    throw "The published executable failed its own self-check, so it is broken in a way the tests cannot see. Do not ship $exe."
+    & $exe self-check
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "The published executable failed its own self-check, so it is broken in a way the tests cannot see. Do not ship $exe."
+    }
+}
+else {
+    Write-Host ''
+    Write-Host "Skipping the self-check: this machine cannot run a $Runtime build." -ForegroundColor Yellow
 }
 
 Write-Host ''

@@ -231,9 +231,14 @@ Windows would not let '$installed' start, after $attempts attempts: $($_.Excepti
 
 The download is installed and its hash matched the release, so the file is fine. This
 is Windows refusing to run a build it has no reputation for yet -- these releases are
-unsigned. Look in Windows Security > Protection history: if it names an attack surface
-reduction rule, the block came from your organisation's policy and an administrator has
-to allow it. Otherwise, wait a minute and run '$installed install' again.
+unsigned. It usually clears on its own, but it is slow: twenty minutes is normal, so
+these few seconds of retrying were never going to be enough. Wait, then run
+
+    $installed install
+
+to finish the job. If it is still refused after half an hour, look in Windows Security >
+Protection history: if it names an attack surface reduction rule, the block came from
+your organisation's policy and an administrator has to allow it.
 "@
             }
 

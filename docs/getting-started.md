@@ -214,13 +214,17 @@ with a Windows Security popup at the same moment. Nothing is wrong with the down
 
 On a machine managed by an organisation, the refusal usually comes from the attack surface reduction rule **"Use advanced protection against ransomware"**. Windows Security → **Protection history** names it, and confusingly blames `powershell.exe` rather than the executable it actually stopped.
 
-The verdict is not permanent. Once the file has been checked and comes back clean, seconds later, the same launch is allowed — so the install script retries, and on the machines seen so far the second attempt succeeds. If it still gives up:
+The verdict is not permanent, but it is slower to arrive than you would guess. The install script retries for a few seconds, which is occasionally enough. Measured on a managed machine here, it was **about twenty minutes** before the identical file was allowed to run — long enough that you would reasonably decide it was broken for good and stop.
+
+So expect to wait, and finish the install by hand afterwards:
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\1RemoteCLI\1remote.exe" install
 ```
 
-That finishes the half-done install — the executable was already in place. If *that* is blocked too, and Protection history names an attack surface reduction rule, the block is your organisation's policy and only an administrator can allow it.
+That completes the half-done install; the executable is already in place. Give it half an hour of retrying before concluding it will never work. `scripts\diagnose-launch.ps1` in the repository will tell you which protection is refusing it, and whether that protection can lift at all on your machine.
+
+If it is still blocked after that, and Protection history names an attack surface reduction rule, the block is your organisation's policy and only an administrator can allow it.
 
 Both this and the SmartScreen warning above have the same root cause: these builds are unsigned. See [deployment](deployment.md#it-is-not-signed).
 

@@ -185,7 +185,7 @@ else {
         $ransomware = @($blocked | Where-Object { $_.Rule -eq 'C1DB55AB-C21A-4637-BB3F-A12568109D35' })
 
         if ($ransomware) {
-            Add-Finding 'blocking' "An attack surface reduction rule blocked the launch: 'Use advanced protection against ransomware'. It refuses executables it has no reputation for, and every release is a new file with no reputation. It usually lifts within a minute or two, once the file has been checked and comes back clean -- so wait, then try again. If it never lifts, the rule is in block mode by your organisation's policy and only an administrator can allow it."
+            Add-Finding 'blocking' "An attack surface reduction rule blocked the launch: 'Use advanced protection against ransomware'. It refuses executables it has no reputation for, and every release is a new file with no reputation. It does lift once the file has been checked and comes back clean, but not quickly -- twenty minutes has been measured, so retrying for a few seconds proves nothing. Wait half an hour, then try again. If it still refuses, the rule is in block mode by your organisation's policy and only an administrator can allow it."
         }
         else {
             Add-Finding 'blocking' "An attack surface reduction rule blocked the launch: $($blocked[0].Rule). Look it up in Microsoft's ASR rules reference; if it is enforced by policy, an administrator has to allow it."
@@ -369,8 +369,8 @@ Write-Host '== What this means' -ForegroundColor Cyan
 if (-not $findings.Count) {
     Write-Host ''
     Write-Host '   Nothing here refused it, and it started when this script tried.' -ForegroundColor Green
-    Write-Host '   If the failure was a minute ago, that is the answer: the block was temporary' -ForegroundColor Green
-    Write-Host '   and has already lifted. Run the install again.' -ForegroundColor Green
+    Write-Host '   If the failure was earlier today, that is the answer: the block was' -ForegroundColor Green
+    Write-Host '   temporary and has already lifted. Run the install again.' -ForegroundColor Green
 }
 else {
     # The common case after a temporary block is a report full of past refusals and

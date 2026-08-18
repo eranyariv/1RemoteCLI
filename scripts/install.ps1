@@ -58,12 +58,40 @@ if ($PSVersionTable.Platform -and $PSVersionTable.Platform -ne 'Win32NT') {
     throw 'The 1RemoteCLI agent is a Windows program. Install it on the machine whose terminals you want to reach.'
 }
 
-# The process architecture is the wrong question -- 32-bit PowerShell on an x64
-# machine is a real configuration -- so ask the OS.
-$architecture = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {
-    'X64' { 'win-x64' }
-    'Arm64' { 'win-arm64' }
-    default { throw "There is no 1RemoteCLI build for $_." }
+<#
+    The process architecture is the wrong question -- 32-bit PowerShell on an x64
+    machine is a real configuration -- so ask the OS.
+
+    Through the environment rather than
+    [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture, which
+    cannot be trusted here: PSReadLine ships a public type of exactly that full
+    name carrying a single OSDescription property, and the console host loads it
+    into every interactive session before this script arrives. The type-name
+    lookup finds PSReadLine's, the missing static property evaluates to $null
+    with no error, and the switch below lands on `default` with nothing to
+    report. Since `irm | iex` runs in the caller's session, a script fetched this
+    way inherits whatever assemblies that session happens to have loaded, so any
+    bare framework type is a hazard, not just this one.
+
+    PROCESSOR_ARCHITEW6432 exists only in a 32-bit process on 64-bit Windows and
+    holds the real OS architecture; PROCESSOR_ARCHITECTURE is the process's own.
+    Preferring the first when it is set is what makes this an OS answer.
+#>
+$reported = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+
+$architecture = switch ($reported) {
+    'AMD64' { 'win-x64' }
+    'ARM64' { 'win-arm64' }
+    default {
+        throw @"
+There is no 1RemoteCLI build for this machine.
+  PROCESSOR_ARCHITECTURE = '$env:PROCESSOR_ARCHITECTURE'
+  PROCESSOR_ARCHITEW6432 = '$env:PROCESSOR_ARCHITEW6432'
+  PowerShell             = $($PSVersionTable.PSVersion)
+There are builds for x64 and Arm64 Windows. If this machine is one of those,
+please report the three lines above at https://github.com/$Repository/issues.
+"@
+    }
 }
 
 $asset = "1remote-$architecture.exe"
@@ -116,7 +144,7 @@ function Save-Asset([string] $name, [string] $destination) {
         -OutFile $destination
 }
 
-$temp = Join-Path ([System.IO.Path]::GetTempPath()) ("1remotecli-" + [guid]::NewGuid().ToString('n'))
+$temp = Join-Path $env:TEMP ("1remotecli-" + [guid]::NewGuid().ToString('n'))
 New-Item $temp -ItemType Directory -Force | Out-Null
 
 try {
@@ -155,7 +183,7 @@ try {
     # Windows will not let the file be replaced while it is running, and the message
     # it gives says nothing about why.
     Get-Process -Name '1remote' -ErrorAction SilentlyContinue |
-        Where-Object { $_.Path -and $_.Path.StartsWith($InstallDirectory, [StringComparison]::OrdinalIgnoreCase) } |
+        Where-Object { $_.Path -and $_.Path.ToLowerInvariant().StartsWith($InstallDirectory.ToLowerInvariant()) } |
         ForEach-Object {
             Write-Step "Stopping the agent that is already running"
             Stop-Process -Id $_.Id -Force

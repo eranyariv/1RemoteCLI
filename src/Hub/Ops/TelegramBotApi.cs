@@ -59,6 +59,19 @@ public sealed class TelegramBotApi : IOperatorSender, IOperatorUpdateSource
     /// <summary>Telegram rejects anything longer. Truncated rather than lost.</summary>
     private const int MaxMessage = 4096;
 
+    /// <summary>
+    /// How many times one message is offered to Telegram before it is given up on.
+    /// <para>
+    /// Two, and only for a rate limit. Honouring <c>Retry-After</c> and then not resending
+    /// is not a policy, it is a dropped message with extra steps — and the messages this
+    /// channel carries are alerts, so the one lost to a burst is disproportionately likely
+    /// to be the one that mattered. Bounded at two because the dispatcher is a single
+    /// serial queue: retrying indefinitely would let one rejected message hold up every
+    /// report behind it, which is a worse failure than losing it.
+    /// </para>
+    /// </summary>
+    private const int SendAttempts = 2;
+
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     private readonly HttpClient _client;
@@ -93,28 +106,33 @@ public sealed class TelegramBotApi : IOperatorSender, IOperatorUpdateSource
             text.Length > MaxMessage ? text[..MaxMessage] : text,
             DisableWebPagePreview: true);
 
-        using HttpResponseMessage response = await _client
-            .PostAsJsonAsync(Method("sendMessage"), request, Json, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (response.IsSuccessStatusCode)
+        for (int attempt = 1; ; attempt++)
         {
+            using HttpResponseMessage response = await _client
+                .PostAsJsonAsync(Method("sendMessage"), request, Json, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (response.IsSuccessStatusCode)
+            {
+                return;
+            }
+
+            // Honoured rather than retried blindly: the Bot API says how long to wait, and
+            // ignoring it is how a rate limit becomes a ban.
+            if (response.StatusCode == HttpStatusCode.TooManyRequests && attempt < SendAttempts)
+            {
+                TimeSpan wait = response.Headers.RetryAfter?.Delta ?? TimeSpan.FromSeconds(5);
+                _logger.LogWarning("Telegram is rate limiting; waiting {Seconds}s.", (int)wait.TotalSeconds);
+
+                await Task.Delay(wait, cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
+            // Status only. The response body of a failed Bot API call quotes the request,
+            // and the request contains the message.
+            _logger.LogWarning("Telegram refused a message ({Status}).", (int)response.StatusCode);
             return;
         }
-
-        // Honoured rather than retried blindly: the Bot API says how long to wait, and
-        // ignoring it is how a rate limit becomes a ban.
-        if (response.StatusCode == HttpStatusCode.TooManyRequests)
-        {
-            TimeSpan wait = response.Headers.RetryAfter?.Delta ?? TimeSpan.FromSeconds(5);
-            _logger.LogWarning("Telegram is rate limiting; waiting {Seconds}s.", (int)wait.TotalSeconds);
-
-            await Task.Delay(wait, cancellationToken).ConfigureAwait(false);
-        }
-
-        // Status only. The response body of a failed Bot API call quotes the request,
-        // and the request contains the message.
-        _logger.LogWarning("Telegram refused a message ({Status}).", (int)response.StatusCode);
     }
 
     public async Task<IReadOnlyList<OperatorUpdate>> PollAsync(

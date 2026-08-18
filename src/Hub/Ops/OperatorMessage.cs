@@ -24,6 +24,17 @@ public enum CommandFault
     NotFound,
     AlreadyDone,
     Unavailable,
+
+    /// <summary>
+    /// The command exists but push is not configured, so it has nothing to act through.
+    /// <para>
+    /// Its own value rather than <see cref="Unavailable"/>, because the two send the
+    /// operator to different places: one is a typo, the other is a missing VAPID keypair
+    /// and a deployment step nobody did. Telling them apart is the difference between a
+    /// minute and an afternoon.
+    /// </para>
+    /// </summary>
+    PushNotConfigured,
 }
 
 /// <summary>One account's week. Counts and a username, nothing else.</summary>
@@ -435,6 +446,9 @@ public abstract record OperatorMessage
             CommandFault.NotFound => "No account matches that. It has to be an email address or a {tid}:{oid} key.",
             CommandFault.AlreadyDone => "Already in that state; nothing changed.",
             CommandFault.Unavailable => "That is not available on this hub.",
+            CommandFault.PushNotConfigured =>
+                "Push is not configured on this hub, so there is nobody to broadcast to. " +
+                "Set Push__Vapid__PublicKey and Push__Vapid__PrivateKey.",
             _ => "Unknown command. Send /help.",
         };
     }

@@ -166,7 +166,7 @@ public sealed class HubAdministration(
 
         if (!_vapid.Configured)
         {
-            return new OperatorMessage.CommandRejected(CommandFault.Unavailable);
+            return new OperatorMessage.CommandRejected(CommandFault.PushNotConfigured);
         }
 
         return new OperatorMessage.BroadcastSent(_broadcaster.Broadcast(message), message.Length);

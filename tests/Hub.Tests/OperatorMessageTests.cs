@@ -201,6 +201,33 @@ public class OperatorMessageTests
             StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Every fault says something different, and no fault falls through to the "unknown
+    /// command" wording.
+    /// <para>
+    /// A rejection is the only message an operator receives at the moment something is
+    /// already going wrong, so one that misdescribes the cause sends them to the wrong
+    /// place entirely. This was found in use: <c>/broadcast</c> on a hub with no VAPID
+    /// keypair answered "That is not available on this hub", which reads as "that command
+    /// does not exist" rather than "you have not finished configuring push".
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void EveryRejectionSaysSomethingDifferentAndOnlyOneIsAboutATypo()
+    {
+        string[] rendered = [.. Enum.GetValues<CommandFault>()
+            .Select(fault => new OperatorMessage.CommandRejected(fault).Render())];
+
+        Assert.Equal(rendered.Length, rendered.Distinct(StringComparer.Ordinal).Count());
+
+        Assert.Single(rendered, text => text.Contains("Unknown command", StringComparison.Ordinal));
+
+        Assert.Contains(
+            "Push is not configured",
+            new OperatorMessage.CommandRejected(CommandFault.PushNotConfigured).Render(),
+            StringComparison.Ordinal);
+    }
+
     /// <summary>An expired secret is a different sentence from one about to expire.</summary>
     [Fact]
     public void AnExpiredSecretIsReportedInThePastTense()

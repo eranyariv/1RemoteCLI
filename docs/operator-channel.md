@@ -95,7 +95,7 @@ Only when `Telegram__Commands` is `true`, and **only from the configured chat** 
 | `/allow <account>` | Adds an account to the allowlist at runtime. |
 | `/deny <account>` | Denies an account at runtime. Overrides configuration. |
 | `/kick <account>` | Closes that account's live sessions. Does not change the allowlist. |
-| `/broadcast <text>` | Pushes a notice to every subscribed phone. |
+| `/broadcast <text>` | Pushes a notice to every subscribed phone. Needs the VAPID keypair configured; without it you get told so. |
 | `/help` | The command list. |
 
 Anything else beginning with `/` gets a `CommandRejected`. Anything not beginning with `/` is ignored entirely — the channel is not a chatbot.

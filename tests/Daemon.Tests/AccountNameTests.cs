@@ -21,8 +21,8 @@ public sealed class AccountNameTests
         // A UPN alone does not say whose account it is, which is the entire question
         // the tray's first line exists to answer.
         Assert.Equal(
-            "Eran Yariv (owner@example.com)",
-            AccountName.Describe("Eran Yariv", "owner@example.com"));
+            "Ada Lovelace (ada@example.com)",
+            AccountName.Describe("Ada Lovelace", "ada@example.com"));
     }
 
     [Theory]

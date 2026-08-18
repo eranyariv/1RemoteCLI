@@ -422,7 +422,7 @@ ASP.NET Core 8 with self-hosted SignalR on a **single instance** of App Service 
 
 **Single instance is a load-bearing assumption.** The routing registry is in memory, so scaling out to two instances would break routing — an agent connected to instance A is invisible to a phone connected to instance B. The deployment is therefore pinned to one instance, and §9 records what changes if that ever needs to lift.
 
-**Deployment target.** All Azure resources — the hub, its App Service or Container Apps environment, and the Entra app registration of §3.1 — live in the **Azure subscription owned by `owner@example.com`** (Azure Enterprise account). No secrets, subscription identifiers, or tenant identifiers are stored in the repository; runtime configuration comes from App Service settings or Key Vault, and local development uses .NET user-secrets.
+**Deployment target.** All Azure resources — the hub, its App Service or Container Apps environment, and the Entra app registration of §3.1 — live in a single Azure subscription owned by the project owner. No secrets, subscription identifiers, tenant identifiers, or owner account names are stored in the repository; the concrete target is recorded in an untracked `azure-target.local.md`, runtime configuration comes from App Service settings or Key Vault, and local development uses .NET user-secrets.
 
 **Registry.**
 

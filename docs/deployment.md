@@ -8,7 +8,7 @@ The one-time work — creating the Entra app registration and provisioning the r
 
 | | |
 | --- | --- |
-| Subscription | `bbbbbbbb-cccc-dddd-eeee-ffffffffffff` (`owner@example.com`) |
+| Subscription | see the untracked `azure-target.local.md` |
 | Resource group | `1remotecli-rg` |
 | App Service plan | `1remotecli-plan` — **B1, one instance**, Israel Central |
 | Web app | `1remotecli-hub` → https://1remotecli-hub.azurewebsites.net |

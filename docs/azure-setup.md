@@ -1,16 +1,16 @@
 # Azure setup
 
-Everything below lives in the Azure subscription owned by `owner@example.com`. Before running any of it, scope the CLI to this project — the machine-wide `az` profile is signed in to a different account:
+Everything below lives in the project's Azure subscription. Before running any of it, scope the CLI to this project — the machine-wide `az` profile is signed in to a different account:
 
 ```powershell
 . .\scripts\az-env.ps1
-az account show --query "user.name" -o tsv   # must print owner@example.com
+az account show --query "{account:user.name, tenant:tenantId, subscription:id}" -o yaml
 ```
+
+The account, tenant, and subscription identifiers are not kept in this repository; they live in the untracked `azure-target.local.md` at the repo root. Compare the output above against it before you provision anything.
 
 | | |
 | --- | --- |
-| Tenant | `Default Directory` (`aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`) |
-| Subscription | `Visual Studio Enterprise Subscription` (`bbbbbbbb-cccc-dddd-eeee-ffffffffffff`) |
 | Region | `israelcentral` |
 
 Azure requires MFA for resource management. If a command fails with `RequestDisallowedByAzure` and mentions MFA, re-authenticate with the challenge `az` prints:
@@ -250,8 +250,12 @@ The **subject** must be a `mailto:` or `https:` URL that identifies you. Push se
 ```powershell
 . .\scripts\az-env.ps1
 
+# A contact address for the push services, not a credential. Use the one in
+# azure-target.local.md so it matches what is already deployed.
+$subject = "mailto:you@example.com"
+
 az webapp config appsettings set -g 1remotecli-rg -n 1remotecli-hub --settings `
-  "Push__Vapid__Subject=mailto:owner@example.com" `
+  "Push__Vapid__Subject=$subject" `
   "Push__Vapid__PublicKey=<public key>" `
   "Push__Vapid__PrivateKey=<private key>"
 ```

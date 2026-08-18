@@ -26,21 +26,17 @@ Functional and technical specifications live in `specs/`.
 
 ## Deployment
 
-All Azure resources for this project deploy to the **Azure subscription owned by `owner@example.com`** (Azure Enterprise account). This is the target for the relay hub and any supporting resources — do not provision into any other subscription or tenant.
+All Azure resources for this project deploy to **one** subscription: the one owned by the project owner's personal Microsoft account. This is the target for the relay hub and any supporting resources — do not provision into any other subscription or tenant.
 
-The concrete target, confirmed at sign-in:
+The account, tenant, and subscription identifiers are deliberately **not** in this repository (see the rule at the end of this section). They are recorded in `azure-target.local.md`, which is untracked and sits next to this file.
 
-| | |
-| --- | --- |
-| Account | `owner@example.com` |
-| Tenant | `Default Directory` (`aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`) |
-| Subscription | `Visual Studio Enterprise Subscription` (`bbbbbbbb-cccc-dddd-eeee-ffffffffffff`) |
-
-Before provisioning anything, assert the identity — the machine-wide profile is a different account and silently deploying there would be hard to unwind:
+Before provisioning anything, assert the identity — the machine-wide profile is a different account and silently deploying there would be hard to unwind. Print what the project-scoped profile is signed in to and compare it against `azure-target.local.md`; if any of the three differs, stop:
 
 ```powershell
-az account show --query "user.name" -o tsv   # must print owner@example.com
+az account show --query "{account:user.name, tenant:tenantId, subscription:id}" -o yaml
 ```
+
+If `azure-target.local.md` is missing (a fresh clone, or a new worktree), recreate it from that same command once you have confirmed with the owner that the signed-in profile is the right one.
 
 The same account is also the identity used for the Entra app registration that the agent and PWA authenticate against.
 
@@ -52,7 +48,7 @@ Every new shell must opt in; the variable does not persist between processes:
 
 ```powershell
 . .\scripts\az-env.ps1     # dot-source, do not run
-az account show            # verify: user.name must be owner@example.com
+az account show            # verify: user.name must match azure-target.local.md
 ```
 
 One-time sign-in (interactive, needs a browser):

@@ -47,6 +47,8 @@ Desktop.ini
 
 # --- Secrets and local config ---
 # Never commit real endpoints, client secrets, or VAPID keys.
+# Nor the deployment target itself: account name, tenant id, subscription id.
+azure-target.local.md
 *.env
 .env.*
 !.env.example

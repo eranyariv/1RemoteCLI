@@ -23,7 +23,7 @@
     Program Files would need elevation to achieve nothing.
 
 .PARAMETER Version
-    A specific release, like `0.2.0`. Defaults to the latest.
+    A specific release, like `0.02`. Defaults to the latest.
 
 .PARAMETER InstallDirectory
     Defaults to %LOCALAPPDATA%\Programs\1RemoteCLI.

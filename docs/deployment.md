@@ -216,15 +216,17 @@ Only re-run `1remote install` if you moved the executable.
 
 ## Icons
 
-Every icon — six PNGs for the phone app and browser, and the `.ico` compiled into the executable — is generated from one tracked source, `assets/logo.png`:
+Every icon — six PNGs for the phone app and browser, the `.ico` compiled into the executable, and the eleven tray containers — is generated from tracked sources:
 
 ```powershell
 .\scripts\make-icons.ps1
 ```
 
-Then rebuild the agent and redeploy the hub to ship them. Change the artwork and re-run the script; do not hand-edit the outputs, because there are eight of them and the usual failure is that four get updated and the rest quietly stay a year behind.
+Then rebuild the agent and redeploy the hub to ship them. Change the artwork and re-run the script; do not hand-edit the outputs, because there are nineteen of them and the usual failure is that four get updated and the rest quietly stay a year behind.
 
-The tray icon is deliberately not generated from the logo. It is a status indicator, not a brand mark: it shows connected, connecting and disconnected as distinct *shapes* so it stays readable at 16px and without relying on colour. See `src/Daemon/Tray/TrayIcon.cs`.
+There are two sources, because the two jobs are different. `assets/logo.png` is the brand mark and drives the app icon, the favicons and the phone icons. `assets/tray/` is the tray family: a drawn 512px variant for the plain mark, one for each live-session count from one to nine, and one for `>9`. The tray needs its own artwork because it is a status indicator rather than a brand mark — it has to carry the session count and the connection state as distinct *shapes* at 16px, without relying on colour. See `src/Daemon/Tray/TrayArtwork.cs`.
+
+Each tray variant becomes its own `.ico` at 16, 20, 24, 32, 40 and 48 — every size the shell asks for across display scalings — so the daemon looks a frame up rather than stretching one. The counted variants are all framed identically, so the mark holds still as the number ticks over.
 
 ## Rolling back
 

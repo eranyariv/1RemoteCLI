@@ -59,10 +59,33 @@ export function SignInScreen({ busy }: { busy: boolean }) {
         {busy ? 'Signing in…' : 'Sign in with Microsoft'}
       </button>
 
-      <p className="max-w-xs text-xs leading-relaxed text-slate-600">
-        Use the same Microsoft account you signed in with on the machine. Your sessions are only
-        ever visible to that account.
-      </p>
+      <div className="flex max-w-xs flex-col gap-3">
+        <p className="text-xs leading-relaxed text-slate-600">
+          Use the same Microsoft account you signed in with on the machine. Your sessions are only
+          ever visible to that account.
+        </p>
+
+        {/*
+          Deliberately reachable before signing in. The button above is a dead end for
+          exactly the people this link is for: an account that is not on the allowlist
+          signs in successfully and is then refused, so "what is this and how do I set
+          up the Windows side" has to be answerable without handing over an identity
+          first. A plain anchor, not a route: the page is a static document the service
+          worker and the router both leave alone. It opens in a new tab because a
+          standalone install has no back button, and navigating away in place would
+          strand somebody in a document with no way back to the app.
+        */}
+        <p className="text-xs text-slate-500">
+          <a
+            href="/readme.html"
+            target="_blank"
+            rel="noopener"
+            className="underline decoration-slate-700 underline-offset-2 transition hover:text-slate-300"
+          >
+            New here? Read what this is and how to install it
+          </a>
+        </p>
+      </div>
 
       <VersionLine />
     </div>

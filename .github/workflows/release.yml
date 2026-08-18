@@ -167,18 +167,26 @@ jobs:
           {
             echo '## Install'
             echo
-            echo 'In PowerShell:'
+            echo 'Run this **from inside GitHub Copilot CLI or Claude Code**, as a shell command --'
+            echo 'in Copilot CLI, prefix it with `!`:'
             echo
             echo '```powershell'
             echo 'irm https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.ps1 | iex'
             echo '```'
             echo
+            echo 'Not from a plain PowerShell window. These builds are unsigned, and Windows refuses'
+            echo 'to run an executable it has no reputation for -- on a managed machine, sometimes'
+            echo 'permanently. It decides that per file, by **which process wrote the file**, so a'
+            echo 'build downloaded by a CLI your organisation already trusts runs straight away.'
+            echo 'The same goes for upgrading: run those from the CLI too.'
+            echo
             echo "That downloads the build for this machine's architecture, checks it against the"
             echo 'hash below, puts it in `%LOCALAPPDATA%\Programs\1RemoteCLI`, registers the logon'
             echo 'task and adds it to your `PATH`. Then open a new terminal and run `1remote login`.'
             echo
-            echo 'To install by hand instead, download the executable for your architecture and run'
-            echo '`1remote install` from wherever you put it.'
+            echo 'On a personal machine with no such protections, a plain PowerShell window works'
+            echo 'too. To install by hand instead, download the executable for your architecture and'
+            echo 'run `1remote install` from wherever you put it.'
             echo
             echo '## Checksums'
             echo

@@ -22,6 +22,8 @@ public sealed class WindowsLocalTerminal : ILocalTerminal
     private readonly IntPtr _outputHandle;
     private readonly int? _originalInputMode;
     private readonly int? _originalOutputMode;
+    private readonly uint? _originalOutputCodePage;
+    private readonly uint? _originalInputCodePage;
 
     private int _restored;
 
@@ -30,6 +32,8 @@ public sealed class WindowsLocalTerminal : ILocalTerminal
         IntPtr outputHandle,
         int? originalInputMode,
         int? originalOutputMode,
+        uint? originalOutputCodePage,
+        uint? originalInputCodePage,
         int cols,
         int rows)
     {
@@ -37,6 +41,8 @@ public sealed class WindowsLocalTerminal : ILocalTerminal
         _outputHandle = outputHandle;
         _originalInputMode = originalInputMode;
         _originalOutputMode = originalOutputMode;
+        _originalOutputCodePage = originalOutputCodePage;
+        _originalInputCodePage = originalInputCodePage;
         Cols = cols;
         Rows = rows;
 
@@ -99,13 +105,78 @@ public sealed class WindowsLocalTerminal : ILocalTerminal
 
         (int cols, int rows) = MeasureWindow(output);
 
-        var terminal = new WindowsLocalTerminal(input, output, originalInput, originalOutput, cols, rows);
+        (uint? originalOutputCodePage, uint? originalInputCodePage) = EnterUtf8();
+
+        var terminal = new WindowsLocalTerminal(
+            input,
+            output,
+            originalInput,
+            originalOutput,
+            originalOutputCodePage,
+            originalInputCodePage,
+            cols,
+            rows);
 
         AppDomain.CurrentDomain.ProcessExit += (_, _) => terminal.Restore();
         Console.CancelKeyPress += (_, _) => terminal.Restore();
 
         return terminal;
     }
+
+    /// <summary>
+    /// Puts the console on UTF-8, and reports what it was so it can be put back.
+    /// <para>
+    /// The wrapper hands the child's bytes to conhost untouched, and every CLI worth
+    /// wrapping speaks UTF-8. What those bytes look like on screen is decided by the
+    /// console's code page, which this process did not choose and cannot assume: a
+    /// terminal the user configured is usually already on 65001, but a console spawned
+    /// fresh from a desktop shortcut gets the system OEM page — 437 or 850 — and every
+    /// multi-byte character arrives as one glyph per byte. That is why <c>│</c> shows
+    /// up as <c>Γöé</c>, and why the bug appeared only once shortcuts could be wrapped
+    /// (issue #66): until then every session started in a console somebody had already
+    /// set up.
+    /// </para>
+    /// <para>
+    /// Set before the standard streams are opened, because .NET caches the encoding
+    /// when it first opens them.
+    /// </para>
+    /// </summary>
+    private static (uint? Output, uint? Input) EnterUtf8()
+    {
+        uint? previousOutput = CodePageToRestore(ConsoleNativeMethods.GetConsoleOutputCP());
+
+        if (previousOutput is not null
+            && !ConsoleNativeMethods.SetConsoleOutputCP(ConsoleNativeMethods.CP_UTF8))
+        {
+            previousOutput = null;
+        }
+
+        // Input too, and separately: they are two settings, and a console left with a
+        // UTF-8 screen but an OEM keyboard mangles anything typed that is not ASCII.
+        uint? previousInput = CodePageToRestore(ConsoleNativeMethods.GetConsoleCP());
+
+        if (previousInput is not null
+            && !ConsoleNativeMethods.SetConsoleCP(ConsoleNativeMethods.CP_UTF8))
+        {
+            previousInput = null;
+        }
+
+        return (previousOutput, previousInput);
+    }
+
+    /// <summary>
+    /// Given the code page a console is on, what would have to be put back afterwards —
+    /// and so, by being null, whether to touch it at all.
+    /// <para>
+    /// Zero means there is no console: output is redirected to a file or a pipe, where
+    /// the code page is meaningless and setting it would fail anyway. 65001 means the
+    /// user, or their terminal, already chose UTF-8; changing nothing means restoring
+    /// nothing, which matters because a wrapper that "restores" a console it never
+    /// altered is a wrapper that can leave one worse than it found it.
+    /// </para>
+    /// </summary>
+    internal static uint? CodePageToRestore(uint current) =>
+        current is 0 or ConsoleNativeMethods.CP_UTF8 ? null : current;
 
     /// <summary>
     /// Reads the visible window, not the buffer. The buffer is usually far taller
@@ -140,6 +211,20 @@ public sealed class WindowsLocalTerminal : ILocalTerminal
         if (_originalOutputMode is int outMode)
         {
             ConsoleNativeMethods.SetConsoleMode(_outputHandle, outMode);
+        }
+
+        // Only ever set when it was changed, so this cannot put a console the user had
+        // deliberately on UTF-8 back onto something else. Leaving a terminal altered
+        // after the wrapper exits is the same failure as leaving the modes altered:
+        // everything typed afterwards is wrong, and nothing says why.
+        if (_originalOutputCodePage is uint outCodePage)
+        {
+            ConsoleNativeMethods.SetConsoleOutputCP(outCodePage);
+        }
+
+        if (_originalInputCodePage is uint inCodePage)
+        {
+            ConsoleNativeMethods.SetConsoleCP(inCodePage);
         }
     }
 

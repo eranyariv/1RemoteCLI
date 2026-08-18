@@ -23,6 +23,13 @@ internal static partial class ConsoleNativeMethods
     internal const int ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
     internal const int DISABLE_NEWLINE_AUTO_RETURN = 0x0008;
 
+    /// <summary>
+    /// UTF-8. Every CLI worth wrapping emits it, and a console left on the OEM code
+    /// page renders those bytes one-per-glyph — which is why a box-drawing character
+    /// arrives as three letters rather than a line.
+    /// </summary>
+    internal const int CP_UTF8 = 65001;
+
     [StructLayout(LayoutKind.Sequential)]
     internal struct COORD
     {
@@ -65,4 +72,18 @@ internal static partial class ConsoleNativeMethods
     internal static partial bool GetConsoleScreenBufferInfo(
         IntPtr hConsoleOutput,
         out CONSOLE_SCREEN_BUFFER_INFO lpConsoleScreenBufferInfo);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    internal static partial uint GetConsoleOutputCP();
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    internal static partial uint GetConsoleCP();
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SetConsoleOutputCP(uint wCodePageID);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SetConsoleCP(uint wCodePageID);
 }

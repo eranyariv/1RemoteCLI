@@ -339,6 +339,71 @@ public sealed class TrayArtworkTests
         }
     }
 
+    [Fact]
+    public void CarriesTheWordmarkOnlyWhereThereArePixelsToReadIt()
+    {
+        // The masters are the full lockup, numeral over "CLI", but fitting the wordmark
+        // in roughly doubles the height of the artwork and so costs the count digit
+        // about half its pixels. The small frames are therefore cropped to the numeral
+        // and the count plate, and only 32 and up carry the wordmark.
+        //
+        // Aspect is what tells them apart without reading the artwork: adding the
+        // wordmark under the numeral squares the lockup up, so every large frame lands
+        // near 1:1, while a frame cropped to the numeral and the plate is plainly wider
+        // than it is tall. Measuring the ink rather than the canvas is the point - both
+        // are square bitmaps.
+        foreach (AgentState state in Enum.GetValues<AgentState>())
+        {
+            double cropped = InkAspect(state, 5, 24);
+            double full = InkAspect(state, 5, 48);
+
+            Assert.True(
+                full is > 0.85 and < 1.10,
+                $"{state} at 48px should be about square, because the wordmark sits under "
+                    + $"the numeral. Got {full:F2}.");
+
+            Assert.True(
+                cropped > 1.12,
+                $"{state} at 24px should be wider than it is tall, because the wordmark is "
+                    + $"cropped away. Got {cropped:F2}.");
+        }
+    }
+
+    /// <summary>
+    /// Width over height of the artwork's opaque extent, ignoring the transparent margin
+    /// the square canvas pads it with.
+    /// </summary>
+    private static double InkAspect(AgentState state, int sessions, int size)
+    {
+        using Icon icon = TrayArtwork.Create(state, size, sessions);
+        using Bitmap bitmap = icon.ToBitmap();
+
+        int left = bitmap.Width;
+        int right = -1;
+        int top = bitmap.Height;
+        int bottom = -1;
+
+        for (int y = 0; y < bitmap.Height; y++)
+        {
+            for (int x = 0; x < bitmap.Width; x++)
+            {
+                if (bitmap.GetPixel(x, y).A <= 16)
+                {
+                    continue;
+                }
+
+                left = Math.Min(left, x);
+                right = Math.Max(right, x);
+                top = Math.Min(top, y);
+                bottom = Math.Max(bottom, y);
+            }
+        }
+
+        Assert.True(right >= 0, $"{state} at {size}px drew nothing at all.");
+
+        return (right - left + 1) / (double)(bottom - top + 1);
+    }
+
     private static int Opaque(Bitmap bitmap)
     {
         int count = 0;

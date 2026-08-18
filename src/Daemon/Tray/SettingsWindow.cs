@@ -178,6 +178,33 @@ internal sealed class SettingsWindow
         }
     }
 
+    /// <summary>
+    /// Pulls the application icon out of this executable at the size Windows asks for.
+    /// <para>
+    /// The binary already carries every frame from 16 up to 256, so there is nothing to
+    /// ship alongside it and nothing to scale by hand — passing the wanted size lets the
+    /// loader pick the frame drawn for it rather than resampling the largest one.
+    /// </para>
+    /// <para>
+    /// A missing or unreadable icon is not worth failing the dialog over. Returning
+    /// <see cref="IntPtr.Zero"/> puts us back exactly where we were before, with Windows
+    /// falling back to the stock icon, which is a cosmetic loss and nothing more.
+    /// </para>
+    /// </summary>
+    private static IntPtr AppIcon(IntPtr instance, int widthMetric, int heightMetric)
+    {
+        return LoadImage(
+            instance,
+            (IntPtr)ApplicationIconResourceId,
+            IMAGE_ICON,
+            GetSystemMetrics(widthMetric),
+            GetSystemMetrics(heightMetric),
+
+            // Shared, so the system owns the handle. The class outlives the process's
+            // interest in it and is never unregistered, so there is nothing to free.
+            LR_SHARED);
+    }
+
     private void Create()
     {
         IntPtr instance = GetModuleHandle(null);
@@ -194,6 +221,12 @@ internal sealed class SettingsWindow
                 // The dialog grey every other Windows dialog uses. Owned by the system,
                 // so it is never deleted.
                 hbrBackground = GetSysColorBrush(COLOR_BTNFACE),
+
+                // Both sizes, because Windows uses them for different things: the small
+                // one is the caption bar and the Alt+Tab thumbnail, the large one is the
+                // task switcher. Setting only one leaves the shell to stretch the other.
+                hIcon = AppIcon(instance, SM_CXICON, SM_CYICON),
+                hIconSm = AppIcon(instance, SM_CXSMICON, SM_CYSMICON),
             };
 
             if (RegisterClassEx(ref windowClass) == 0)

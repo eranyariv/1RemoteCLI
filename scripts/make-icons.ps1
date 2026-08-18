@@ -388,12 +388,16 @@ foreach ($state in $trayStates) {
 }
 
 # The artwork is the full lockup: the numeral, a count plate beside it, and "CLI"
-# underneath. "CLI" is grey mush below 48 pixels and the tray never gets that big, so
-# the same cut make-icons applies to the app icon applies here -- everything above the
-# widest band of empty rows in the plain variant. On the counted variants that band is
-# where the plate sits, and on the reconnecting ones the state badge fills the corner,
-# so the cut is measured once, on the plain connected mark, and reused everywhere. The
-# variants are drawn in register, so one measurement is the right one for all of them.
+# underneath. How much of it survives depends on how many pixels the shell gives us, so
+# two crops are measured and the size decides which one is used -- the same way Windows'
+# own icons carry detail at 48 that they drop at 16.
+#
+# The compact crop is everything above the widest band of empty rows in the plain
+# variant, which drops "CLI" and leaves the numeral and the count plate. On the counted
+# variants that band is where the plate sits, and on the reconnecting ones the state
+# badge fills the corner, so the cut is measured once, on the plain connected mark, and
+# reused everywhere. The variants are drawn in register, so one measurement is the right
+# one for all of them.
 $scan = $trayBitmaps["connected-base"]
 $baseBounds = Get-Bounds -Bitmap $scan
 
@@ -420,9 +424,18 @@ for ($y = $baseBounds.Top; $y -le $baseBounds.Bottom; $y++) {
 $markMaxY = if ($bestStart -gt 0) { $bestStart + $bestLength - 1 } else { $baseBounds.Bottom }
 Write-Host ("    lockup cut above y {0}" -f $markMaxY)
 
+# Below this the compact crop is used, at it and above the whole lockup. 32 is where the
+# count digit stops surviving the extra shrink: fitting "CLI" in makes the artwork twice
+# as tall, which costs the numeral and the plate about 45% of their pixels, and at 16, 20
+# and 24 that turns the digit into a grey blob. The count has to read at every size the
+# shell asks for, so it wins the small end and the wordmark wins the large one.
+$trayFullDetailFrom = 32
+
 $trayBounds = [ordered]@{}
+$trayBoundsFull = [ordered]@{}
 foreach ($key in $trayBitmaps.Keys) {
     $trayBounds[$key] = Get-Bounds -Bitmap $trayBitmaps[$key] -MaxY $markMaxY
+    $trayBoundsFull[$key] = Get-Bounds -Bitmap $trayBitmaps[$key]
 }
 
 # Within a state, every counted variant is framed by the union of all of them, so the
@@ -432,18 +445,27 @@ foreach ($key in $trayBitmaps.Keys) {
 # it is. Framing is per state rather than across all of them because a state badge is
 # drawn where the plain mark has nothing, and letting that shrink every other icon
 # would spend the count's pixels on a corner it does not use.
-$trayFrames = [ordered]@{}
-foreach ($state in $trayStates) {
-    $counted = Get-Union -Rectangles (
-        $trayCounts | Where-Object { $_ -ne "base" } | ForEach-Object { $trayBounds["$state-$_"] })
+function Get-TrayFrames {
+    param([System.Collections.Specialized.OrderedDictionary]$Bounds, [string]$Label)
 
-    $trayFrames["$state-base"] = $trayBounds["$state-base"]
-    foreach ($count in $trayCounts | Where-Object { $_ -ne "base" }) {
-        $trayFrames["$state-$count"] = $counted
+    $frames = [ordered]@{}
+    foreach ($state in $trayStates) {
+        $counted = Get-Union -Rectangles (
+            $trayCounts | Where-Object { $_ -ne "base" } | ForEach-Object { $Bounds["$state-$_"] })
+
+        $frames["$state-base"] = $Bounds["$state-base"]
+        foreach ($count in $trayCounts | Where-Object { $_ -ne "base" }) {
+            $frames["$state-$count"] = $counted
+        }
+
+        Write-Host ("    {0,-8} {1,-13} plain {2}  counted {3}" -f $Label, $state, $Bounds["$state-base"], $counted)
     }
 
-    Write-Host ("    {0,-13} plain {1}  counted {2}" -f $state, $trayBounds["$state-base"], $counted)
+    return $frames
 }
+
+$trayFrames = Get-TrayFrames -Bounds $trayBounds -Label "compact"
+$trayFramesFull = Get-TrayFrames -Bounds $trayBoundsFull -Label "full"
 
 function New-TrayFrame {
     param([System.Drawing.Bitmap]$Source, [System.Drawing.Rectangle]$Crop, [int]$Size)
@@ -485,7 +507,8 @@ foreach ($state in $trayStates) {
 
         $frames = @()
         foreach ($size in $traySizes) {
-            $bitmap = New-TrayFrame -Source $trayBitmaps[$key] -Crop $trayFrames[$key] -Size $size
+            $crop = if ($size -ge $trayFullDetailFrom) { $trayFramesFull[$key] } else { $trayFrames[$key] }
+            $bitmap = New-TrayFrame -Source $trayBitmaps[$key] -Crop $crop -Size $size
 
             $stream = New-Object System.IO.MemoryStream
             $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)

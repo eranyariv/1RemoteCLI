@@ -248,6 +248,46 @@ internal static partial class NativeMethods
     [LibraryImport("user32.dll")]
     internal static partial int GetSystemMetrics(int index);
 
+    /// <summary>
+    /// Loads an image out of a module's resources, at a given size.
+    /// <para>
+    /// Used to pull the application icon out of this executable rather than shipping a
+    /// second copy of it: the .NET SDK stamps <c>ApplicationIcon</c> into the binary as
+    /// a group icon, so the frames are already there.
+    /// </para>
+    /// </summary>
+    [DllImport("user32.dll", EntryPoint = "LoadImageW", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern IntPtr LoadImage(
+        IntPtr instance,
+        IntPtr name,
+        uint type,
+        int cx,
+        int cy,
+        uint load);
+
+    internal const uint IMAGE_ICON = 1;
+
+    /// <summary>
+    /// Hands back a cached handle the system owns, so the caller must not destroy it.
+    /// Right for an icon that lives as long as the process does.
+    /// </summary>
+    internal const uint LR_SHARED = 0x00008000;
+
+    /// <summary>
+    /// The resource id the .NET SDK gives the icon named by <c>ApplicationIcon</c>.
+    /// <para>
+    /// It collides numerically with <c>IDI_APPLICATION</c>, which is deliberate on the
+    /// SDK's part and harmless here: passing this module's handle rather than
+    /// <see cref="IntPtr.Zero"/> is what decides whether Windows returns our icon or the
+    /// stock one, and a window class left without an icon gets the stock one anyway.
+    /// </para>
+    /// </summary>
+    internal const int ApplicationIconResourceId = 32512;
+
+    internal const int SM_CXICON = 11;
+    internal const int SM_CYICON = 12;
+    internal const int SM_CYSMICON = 50;
+
     [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool DestroyIcon(IntPtr icon);

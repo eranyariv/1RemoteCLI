@@ -203,9 +203,36 @@ try {
 
     Write-Step "Installed to $installed"
 
-    & $installed install
+    # Defender opens a newly written executable to scan it before letting anything run
+    # it, and a 14 MB single-file binary takes long enough that CreateProcess can land
+    # inside that window and come back "Access is denied". It is a race, not a
+    # permission: the same call succeeds moments later. Left unhandled it fails the
+    # install at the last step, after the download and the hash check have both passed,
+    # with a message that names no cause -- and alongside a Windows Security popup that
+    # makes it look like the tool is the problem.
+    $attempts = 6
+    $ran = $false
 
-    if ($LASTEXITCODE -ne 0) {
+    for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+        try {
+            & $installed install
+            $ran = $true
+            break
+        }
+        catch {
+            if ($attempt -eq $attempts) {
+                throw "Could not start '$installed' after $attempts attempts: $($_.Exception.Message)"
+            }
+
+            if ($attempt -eq 1) {
+                Write-Step 'Waiting for Windows to finish scanning the download'
+            }
+
+            Start-Sleep -Milliseconds 500
+        }
+    }
+
+    if ($ran -and $LASTEXITCODE -ne 0) {
         throw "1remote install failed. The executable is in place; run '$installed install' to see why."
     }
 

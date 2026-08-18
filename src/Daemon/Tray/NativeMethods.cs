@@ -347,10 +347,10 @@ internal static partial class NativeMethods
     /// <para>
     /// The first <c>ShowWindow</c> call a process makes ignores the command it is
     /// given and uses whatever the launcher put in <c>STARTUPINFO</c> instead. The
-    /// agent is launched deliberately hidden — that is the whole point of the
-    /// scheduled task's <c>Hidden</c> setting — so that inherited command is
-    /// <c>SW_HIDE</c>, and the first window the agent ever opens would be created,
-    /// laid out, and then quietly hidden. <c>SetWindowPos</c> has no such rule.
+    /// agent does not choose its launcher — a scheduled task at logon, Explorer, a
+    /// shell — so it cannot know what that will be, and a window it opens could be
+    /// created, laid out, and then quietly hidden. <c>SetWindowPos</c> has no such
+    /// rule.
     /// </para>
     /// </summary>
     internal const int SWP_NOSIZE = 0x0001;

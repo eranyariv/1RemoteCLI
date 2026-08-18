@@ -367,6 +367,10 @@ public static class Program
 
     private static async Task<int> RunAgentAsync()
     {
+        // Before anything is printed, so a console the scheduled task created for us
+        // goes away rather than lingering on the desktop all session.
+        ConsoleWindow.HideIfOurs();
+
         using ILoggerFactory loggers = AgentLogging.Create();
         ILogger logger = loggers.CreateLogger("Agent");
 

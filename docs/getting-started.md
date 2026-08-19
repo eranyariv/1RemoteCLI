@@ -219,21 +219,33 @@ Different problem, and up to version 0.08 it was ours rather than yours. The ins
 Program '1remote.exe' failed to run: Access is denied
 ```
 
-with a Windows Security popup at the same moment. Nothing is wrong with the download. On a machine managed by an organisation this is the attack surface reduction rule **"Use advanced protection against ransomware"**. Windows Security → **Protection history** names it, and confusingly blames `powershell.exe` rather than the executable it actually stopped.
+with a Windows Security popup at the same moment. Nothing is wrong with the download. On a machine managed by an organisation this is the attack surface reduction rule **"Use advanced protection against ransomware"**. Windows Security → **Protection history** is where to confirm it: the entry blames `powershell.exe` under *App or process blocked*, and names the executable it actually stopped further down, under *Affected items*.
 
-**If you are on 0.09 or later, this should not happen, and the fix was on our side.** Those builds were published as a *compressed* single-file bundle, which is a self-extracting high-entropy blob — structurally what a packer looks like, which is exactly what a rule aimed at ransomware is watching for. Compression is off from 0.09, and the machine that had refused every previous build installed the next one from an ordinary PowerShell window at the first attempt. The details, and everything that was wrongly blamed first, are in [#101](https://github.com/eranyariv/1RemoteCLI/issues/101).
+**The installer now works around this on its own,** so you may never see it. When it cannot start the file, it hands the launch to Task Scheduler instead and carries on. That works because of what the rule is really judging — see below.
 
-If it happens anyway, the executable is already in place and this finishes the half-done install:
+Two things were blamed for this before, and both were wrong in instructive ways.
+
+Up to 0.08 the builds were published as a *compressed* single-file bundle, a self-extracting high-entropy blob and structurally what a packer looks like — exactly what a rule aimed at ransomware watches for. Turning compression off in 0.09 helped a great deal, and for a while it looked like the whole answer ([#101](https://github.com/eranyariv/1RemoteCLI/issues/101)). It was not. It took the block from near-certain down to intermittent.
+
+What remains is **reputation**. The rule allows an executable that is signed by a trusted publisher, or that enough machines have already seen. Every new release of an unsigned program is neither, which is why this can return with each release even though nothing about the program changed. Measured on one machine: a build refused at 12:12 ran, untouched and with no exclusion applied, at 13:44. It is also why re-downloading does not help — a byte-identical copy of an installed, happily running agent is refused the moment it is written under a new name.
+
+The other half of it is the **launcher**, not just the file. Measured on the same machine, on one file, ten seconds apart: PowerShell was refused, and Task Scheduler ran the same file to a clean exit with nothing logged against it. That is what the installer's workaround relies on, and it is why the agent itself — which starts from a logon task — runs perfectly well on machines that refuse to install it.
+
+If you are stuck anyway, the executable is already in place and this finishes the half-done install:
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\1RemoteCLI\1remote.exe" install
 ```
 
-`scripts\diagnose-launch.ps1` in the repository will tell you which protection is refusing it and how long it has been refusing. Two things are worth trying, in this order: wait — some machines relent after twenty minutes or so, others never do — and run the same install from inside Copilot CLI or Claude Code as a shell command, since Windows partly judges a file by the process that wrote it and a trusted writer improves the odds. Measured carefully, that helped but was not reliable on its own: eight identical files, four written by a trusted process and four not, and one of the four untrusted ones ran anyway.
+If the machine is yours, the remedy that actually applies is to allow the one file, from an **elevated** PowerShell:
 
-If it is still blocked after that, an administrator has to allow it — or the build has to be signed, which is [#93](https://github.com/eranyariv/1RemoteCLI/issues/93).
+```powershell
+Add-MpPreference -AttackSurfaceReductionOnlyExclusions "$env:LOCALAPPDATA\Programs\1RemoteCLI\1remote.exe"
+```
 
-Both this and the SmartScreen warning above come of the same thing: these builds are unsigned. They are not the same problem, though, and for a while we assumed they were — the block above was ours, and signing would not have fixed it. See [deployment](deployment.md#it-is-not-signed).
+Otherwise, waiting works often enough, though "twenty minutes" was too optimistic — plan for an hour or two, and some machines never relent. `scripts\diagnose-launch.ps1` will tell you which protection is refusing it and how long it has been doing so. If none of that helps, an administrator has to allow it.
+
+The real fix is to sign the builds, which is [#93](https://github.com/eranyariv/1RemoteCLI/issues/93). That is the same unsignedness behind the SmartScreen warning above, though the two are different problems and reach you by different routes. For a while we said signing would not have fixed this one; that was wrong, and the reputation measurements above are why. See [deployment](deployment.md#it-is-not-signed).
 
 ## Uninstalling
 

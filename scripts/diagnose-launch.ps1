@@ -19,7 +19,10 @@
     The executable to ask about. Defaults to where install.ps1 puts it.
 
 .PARAMETER Minutes
-    How far back to read the event logs. Defaults to 60.
+    How far back to read the event logs. Defaults to 180 -- long enough to see the
+    whole of a block that lifts on its own, one of which was measured at 92 minutes.
+    A shorter window cannot tell "it has been refusing for ages" from "this report
+    did not look far enough back".
 
 .EXAMPLE
     irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/diagnose-launch.ps1 | iex
@@ -30,7 +33,7 @@
 [CmdletBinding()]
 param(
     [string] $Path = (Join-Path $env:LOCALAPPDATA 'Programs\1RemoteCLI\1remote.exe'),
-    [int] $Minutes = 60
+    [int] $Minutes = 180
 )
 
 $ErrorActionPreference = 'Continue'
@@ -189,8 +192,9 @@ else {
         # machine paired them with every block and allowed the file twenty minutes
         # later -- but another asks occasionally and has still refused the same file
         # for the best part of an hour. So use the thing actually being asked about:
-        # how long this machine has been saying no. Past the point where waiting works
-        # elsewhere, waiting has been tried here, and it has failed.
+        # how long this machine has been saying no. The threshold is two hours rather
+        # than the half hour first used here: one machine was measured refusing a file
+        # at 12:12 and running it, untouched, at 13:44.
         $lookups = Get-Events 'Microsoft-Windows-Windows Defender/Operational' 2010 $since
         $asked = @($blocked | Where-Object {
                 $block = $_.When
@@ -222,8 +226,14 @@ else {
                 $rule += " This build is $($file.VersionInfo.ProductVersion), and releases up to 0.08 were compressed single-file bundles -- a self-extracting high-entropy blob, which is the shape of a packer and is what this rule objects to. That is almost certainly what is happening here. Upgrading to 0.09 or later fixes it: those are published uncompressed, and both machines that used to refuse then accepted them."
             }
             else {
-                $rule += ' Compression was the usual cause of this and was removed in 0.09, so on this build something else is refusing it.'
+                $rule += ' Compression was the most reliable cause of this and was removed in 0.09, so on this build what is left is reputation: the rule allows an executable that is signed, or that enough machines have already seen, and a new release of an unsigned program is neither.'
             }
+
+            # Whichever branch is taken, the launcher is the actionable part, so it is
+            # said every time rather than only where waiting looks hopeless. Measured
+            # on one file ten seconds apart: refused from PowerShell, clean exit from
+            # Task Scheduler, nothing logged against the second.
+            $launcher = " The rule is judging the launcher as much as the file, so the same executable will often run when Task Scheduler starts it rather than a shell. That is what the agent's logon task does, and what install.ps1 falls back to; re-running the installer is the easy way to take that path."
 
             if ($startedNow) {
                 Add-Finding 'blocking' "$rule It has stopped: the file ran when this report tried it."
@@ -231,11 +241,11 @@ else {
             elseif ($old) {
                 Add-Finding 'blocking' $rule
             }
-            elseif ($spanMinutes -ge 30) {
-                Add-Finding 'blocking' "$rule Where it lifts on its own it takes about twenty minutes, and this machine has been refusing the same file for $span. Waiting has already been tried here and has not worked, so rescanning, reinstalling or downloading it again will not help either. It needs an administrator to allow it, or a signed build."
+            elseif ($spanMinutes -ge 120) {
+                Add-Finding 'blocking' "$rule This machine has been refusing the same file for $span. Waiting has been tried here and has not worked, so rescanning, reinstalling or downloading it again will not help either.$launcher Failing that, it needs an administrator to allow it, or a signed build."
             }
             else {
-                Add-Finding 'blocking' "$rule It can still come back clean and be allowed, but not quickly: twenty minutes has been measured, so a few seconds of retrying proves nothing. Wait half an hour, then run this report again -- if it is still refusing by then, waiting is not going to fix it."
+                Add-Finding 'blocking' "$rule It can still come back clean and be allowed, but not quickly: an hour and a half has been measured on one machine, so a few seconds of retrying proves nothing.$launcher If you would rather wait it out, give it a couple of hours and run this report again."
             }
         }
         else {

@@ -183,7 +183,7 @@ Produces one self-contained `1remote.exe` in `artifacts/win-x64/` — no .NET in
 
 It is roughly 20 MB. It was 70 until [#46](https://github.com/eranyariv/1RemoteCLI/issues/46) removed the Windows Forms reference held for a single tray icon — which brought the entire Windows Desktop runtime with it — and turned on trimming. Both settings live in `src/Daemon/1RemoteCLI.Daemon.csproj`, not in this script, so a release built by the workflow is the same size as one built by hand.
 
-It would be 13 MB with single-file compression on, which is how it shipped up to 0.08. Compression is off now because that is what the "Use advanced protection against ransomware" attack surface reduction rule was refusing to launch: a compressed bundle is a self-extracting high-entropy blob, and that is the shape of a packer. Measured with the rule active, same source, seconds apart, compressed was refused 0 of 3 and uncompressed ran 3 of 3 — see [#101](https://github.com/eranyariv/1RemoteCLI/issues/101), which also lists everything that was ruled out first. Start-up got slightly faster too, since there is nothing to decompress.
+It would be 13 MB with single-file compression on, which is how it shipped up to 0.08. Compression is off now because it was what the "Use advanced protection against ransomware" attack surface reduction rule refused most reliably: a compressed bundle is a self-extracting high-entropy blob, and that is the shape of a packer. Measured with the rule active, same source, seconds apart, compressed was refused 0 of 3 and uncompressed ran 3 of 3 — see [#101](https://github.com/eranyariv/1RemoteCLI/issues/101), which also lists everything that was ruled out first. It was not the whole story, though; see [it is not signed](#it-is-not-signed) below. Start-up got slightly faster too, since there is nothing to decompress.
 
 ### It is not signed
 
@@ -197,9 +197,13 @@ Get-FileHash .\1remote-win-x64.exe -Algorithm SHA256
 
 That is still a genuinely weaker guarantee than a signature: it only proves the file matches the one the workflow built, not who built it. If this ever leaves a small trusted group, buy a certificate.
 
-Being unsigned also costs something at install time, not just at first run. On a machine managed by an organisation the attack surface reduction rule **"Use advanced protection against ransomware"** can refuse the first launch — reported as `Access is denied`, with a Windows Security popup that blames `powershell.exe` rather than the file it stopped.
+Being unsigned also costs something at install time, not just at first run. On a machine managed by an organisation the attack surface reduction rule **"Use advanced protection against ransomware"** can refuse the first launch — reported as `Access is denied`, with a Windows Security popup that blames `powershell.exe` under *App or process blocked* and names the file lower down, under *Affected items*.
 
-Through 0.08 that was near-certain on such a machine, and the cause was the packaging rather than the missing signature: see [#101](https://github.com/eranyariv/1RemoteCLI/issues/101) and the note above. `install.ps1` retries the launch, which is enough where the verdict lifts on its own; see [getting started](getting-started.md#windows-blocked-the-install) for what to do when it does not. A certificate would still be worth having — reputation accrues to the publisher rather than to each individual build, so it ends this class of problem rather than one instance of it.
+Through 0.08 that was near-certain on such a machine, and the packaging was to blame rather than the missing signature: see [#101](https://github.com/eranyariv/1RemoteCLI/issues/101) and the note above. That turned out to be one cause rather than the cause. What is left is **reputation**: the rule allows an executable that is signed by a trusted publisher, or that enough machines have already seen, so every new release of an unsigned program starts out as neither. It lifts as a build ages — one measured at an hour and a half — and it is bound to the write rather than to the contents, so a byte-identical copy of a running agent is refused when written under a new name.
+
+It is also bound to the **launcher**. Measured on one file ten seconds apart: refused when PowerShell started it, clean exit when Task Scheduler did, with nothing logged for the second. `install.ps1` uses that — a few direct attempts, since the verdict is not always stable, and then the launch is handed to Task Scheduler, which is how the agent starts at every logon anyway. See [getting started](getting-started.md#windows-blocked-the-install) for what to do if even that is refused.
+
+So a certificate is not a nicety here. Reputation accrues to the publisher rather than to each individual build, which ends this class of problem instead of one instance of it, and spares every user the first-run tax on every release.
 
 ### Install path and upgrades
 

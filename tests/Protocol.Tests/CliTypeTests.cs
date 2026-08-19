@@ -70,6 +70,80 @@ public class CliTypeTests
             CliTypes.Detect("\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\""));
     }
 
+    /// <summary>
+    /// The shape every wrapped desktop shortcut has. A shortcut cannot start a `.cmd`
+    /// shim on its own and stay open, so there is a shell in front of the tool, and
+    /// the arguments arrive as the single string the original shortcut stored.
+    /// </summary>
+    [Theory]
+    [InlineData(@"C:\Windows\System32\cmd.exe", "/k", "copilot --allow-all-tools --allow-all-paths --remote", CliType.CopilotCli)]
+    [InlineData("cmd.exe", "/C", "claude", CliType.ClaudeCode)]
+    [InlineData("powershell.exe", "-Command", "copilot", CliType.CopilotCli)]
+    [InlineData("pwsh", "-c", "claude --dangerously-skip-permissions", CliType.ClaudeCode)]
+    [InlineData("pwsh", "-File", @"C:\tools\claude.ps1", CliType.ClaudeCode)]
+    [InlineData("powershell", "-Command", "& 'C:\\Users\\eran\\AppData\\Roaming\\npm\\copilot.cmd'", CliType.CopilotCli)]
+    public void LooksThroughTheShellAShortcutPutsInFront(
+        string program,
+        string flag,
+        string command,
+        CliType expected)
+    {
+        Assert.Equal(expected, CliTypes.Detect(program, [flag, command]));
+    }
+
+    /// <summary>
+    /// The same command line, already split into arguments, which is what a hand-typed
+    /// <c>1remote -- cmd /k copilot --resume</c> produces.
+    /// </summary>
+    [Fact]
+    public void DoesNotCareHowTheArgumentsWereSplit()
+    {
+        Assert.Equal(CliType.CopilotCli, CliTypes.Detect("cmd", ["/k", "copilot", "--resume"]));
+        Assert.Equal(CliType.CopilotCli, CliTypes.Detect("powershell", ["-NoExit", "-Command", "copilot"]));
+        Assert.Equal(CliType.CopilotCli, CliTypes.Detect("cmd", ["/k", "gh copilot"]));
+    }
+
+    /// <summary>
+    /// One shell can start another, and the tool is still what is on screen.
+    /// </summary>
+    [Fact]
+    public void FollowsAShellThroughAnotherShell()
+    {
+        Assert.Equal(CliType.ClaudeCode, CliTypes.Detect("cmd", ["/k", "pwsh -c claude"]));
+    }
+
+    /// <summary>
+    /// The fallback matters as much as the match: a shell that was not asked to run
+    /// anything, or was asked to run something unrecognised, is a shell. Answering
+    /// Generic there would take away the PowerShell commands from a PowerShell prompt.
+    /// </summary>
+    [Fact]
+    public void StaysAShellWhenItIsOnlyAShell()
+    {
+        Assert.Equal(CliType.Cmd, CliTypes.Detect("cmd"));
+        Assert.Equal(CliType.Cmd, CliTypes.Detect("cmd", ["/k"]));
+        Assert.Equal(CliType.Cmd, CliTypes.Detect("cmd", ["/k", "npm run dev"]));
+        Assert.Equal(CliType.PowerShell, CliTypes.Detect("pwsh", ["-NoLogo", "-NoExit"]));
+        Assert.Equal(CliType.PowerShell, CliTypes.Detect("pwsh", ["-Command", "Get-ChildItem"]));
+    }
+
+    /// <summary>
+    /// A switch that only looks like one. <c>-EncodedCommand</c> carries base64 that
+    /// this deliberately does not decode, and reading its payload as a program name
+    /// would be a guess about a guess.
+    /// </summary>
+    [Fact]
+    public void IgnoresSwitchesThatAreNotTheOneThatSaysWhatToRun()
+    {
+        Assert.Equal(
+            CliType.PowerShell,
+            CliTypes.Detect("powershell", ["-EncodedCommand", "Y29waWxvdA=="]));
+
+        Assert.Equal(
+            CliType.PowerShell,
+            CliTypes.Detect("powershell", ["-ExecutionPolicy", "Bypass"]));
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]

@@ -323,6 +323,18 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
     [client, session.sessionId],
   )
 
+  /**
+   * Opens the picker from the header.
+   *
+   * The sheet comes with it. The picker sits inside the sheet because what it
+   * changes is the sheet's contents, and showing somebody the buttons they just
+   * chose is the whole confirmation this needs.
+   */
+  const editType = useCallback(() => {
+    setShowActions(true)
+    setShowPicker(true)
+  }, [])
+
   const catalog = catalogFor(session.cliType)
 
   const saveTrace = useCallback(() => {    attached.stopRecording()
@@ -354,8 +366,29 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
 
         <div className="min-w-0 flex-1">
           <p className="truncate text-[15px] font-semibold text-slate-100">{session.displayName}</p>
-          <p className="truncate text-xs text-slate-500">
-            {machine.displayName} · {geometry.cols}×{geometry.rows}
+          <p className="flex items-baseline gap-1 text-xs text-slate-500">
+            <span className="min-w-0 truncate">
+              {machine.displayName} · {geometry.cols}×{geometry.rows}
+            </span>
+            <span aria-hidden="true">·</span>
+            {/*
+              The guess, where you are standing when you find out it is wrong. It is
+              also the way to correct it: opening the sheet rather than a picker of
+              its own, so there is one picker in the app and it is always in the same
+              place, next to the buttons the answer decides.
+            */}
+            <button
+              type="button"
+              onClick={editType}
+              aria-label={
+                session.cliType === 'Generic'
+                  ? 'Set what this session is running'
+                  : `Running ${labelFor(session.cliType)} — change`
+              }
+              className="shrink-0 underline decoration-dotted underline-offset-2 transition active:text-slate-300"
+            >
+              {session.cliType === 'Generic' ? 'Set type' : labelFor(session.cliType)}
+            </button>
           </p>
         </div>
 

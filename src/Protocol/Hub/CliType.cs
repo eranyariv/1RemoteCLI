@@ -66,10 +66,23 @@ public static class CliTypes
     };
 
     /// <summary>
+    /// How many shells deep to look before taking the outermost one at its word.
+    /// <para>
+    /// Two covers <c>cmd /k "pwsh -c claude"</c>, which is as far as anybody's
+    /// shortcut goes. A bound rather than plain recursion because the argument list
+    /// comes from a file on disk that anyone can write.
+    /// </para>
+    /// </summary>
+    private const int Shells = 2;
+
+    /// <summary>
     /// The type of a session running <paramref name="program"/> with
     /// <paramref name="args"/>, or <see cref="CliType.Generic"/> when nothing matches.
     /// </summary>
-    public static CliType Detect(string? program, IReadOnlyList<string>? args = null)
+    public static CliType Detect(string? program, IReadOnlyList<string>? args = null) =>
+        Detect(program, args, Shells);
+
+    private static CliType Detect(string? program, IReadOnlyList<string>? args, int depth)
     {
         string name = FileName(program);
 
@@ -80,6 +93,23 @@ public static class CliTypes
 
         if (ByName.TryGetValue(name, out CliType known))
         {
+            // A shell is usually a doorway rather than a destination. Desktop shortcuts
+            // for these tools are written as `cmd /k "copilot ..."` because a shortcut
+            // that starts a `.cmd` shim directly closes the window the moment the tool
+            // exits, so the shell is there to keep it open. Answering "cmd" is true
+            // about what was launched and useless about what is running, which is the
+            // question the badge exists to answer.
+            if (known is CliType.Cmd or CliType.PowerShell && depth > 0 &&
+                Hosted(known, args) is { Length: > 0 } hosted)
+            {
+                CliType inner = Detect(hosted[0], hosted[1..], depth - 1);
+
+                if (inner != CliType.Generic)
+                {
+                    return inner;
+                }
+            }
+
             return known;
         }
 
@@ -154,5 +184,137 @@ public static class CliTypes
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The command a shell was told to run, as a program followed by its arguments,
+    /// or null when it was not told to run one.
+    /// <para>
+    /// Everything after the switch is the command, however the argument list happens
+    /// to be split. A wrapped shortcut hands over one string — <c>/k</c> then
+    /// <c>copilot --allow-all-tools</c> entire — because it copies the original's
+    /// command line rather than re-quoting it, while a hand-typed invocation arrives
+    /// already split. Joining and re-splitting treats both the same.
+    /// </para>
+    /// </summary>
+    private static string[] Hosted(CliType shell, IReadOnlyList<string>? args)
+    {
+        if (args is null)
+        {
+            return [];
+        }
+
+        for (int i = 0; i < args.Count; i++)
+        {
+            if (!IsRunSwitch(shell, args[i]))
+            {
+                continue;
+            }
+
+            List<string> command = [];
+
+            for (int j = i + 1; j < args.Count; j++)
+            {
+                command.AddRange(Tokenise(args[j]));
+            }
+
+            // PowerShell's call operator, a leading dot-source, or a stray separator
+            // sit where the program does without being one.
+            while (command.Count > 0 && Noise.Contains(command[0]))
+            {
+                command.RemoveAt(0);
+            }
+
+            return [.. command];
+        }
+
+        return [];
+    }
+
+    /// <summary>Tokens that can precede a program without being one.</summary>
+    private static readonly HashSet<string> Noise = new(StringComparer.Ordinal)
+    {
+        "&", ".", ";", "(", "{", "&&",
+    };
+
+    /// <summary>
+    /// Whether an argument is the one that says "and here is what to run".
+    /// <para>
+    /// PowerShell's parameters can be abbreviated to any unambiguous prefix, and
+    /// people do: <c>-c</c>, <c>-Command</c> and <c>-comm</c> are the same switch and
+    /// all three turn up in shortcuts.
+    /// </para>
+    /// </summary>
+    private static bool IsRunSwitch(CliType shell, string? arg)
+    {
+        string flag = (arg ?? string.Empty).Trim().Trim('"');
+
+        if (flag.Length < 2 || (flag[0] != '-' && flag[0] != '/'))
+        {
+            return false;
+        }
+
+        string name = flag[1..];
+
+        return shell == CliType.Cmd
+            ? name.Equals("c", StringComparison.OrdinalIgnoreCase) ||
+              name.Equals("k", StringComparison.OrdinalIgnoreCase)
+            : IsPrefixOf(name, "command") || IsPrefixOf(name, "file");
+    }
+
+    private static bool IsPrefixOf(string candidate, string whole) =>
+        candidate.Length <= whole.Length &&
+        whole.AsSpan(0, candidate.Length).Equals(candidate, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Splits a command line on whitespace, keeping quoted runs together and dropping
+    /// the quotes. Deliberately not a faithful implementation of anybody's quoting
+    /// rules: this reads a command line to recognise a name in it, and never to run it.
+    /// </summary>
+    private static IEnumerable<string> Tokenise(string? line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            yield break;
+        }
+
+        var token = new System.Text.StringBuilder();
+        char quote = '\0';
+
+        foreach (char c in line)
+        {
+            if (quote != '\0')
+            {
+                if (c == quote)
+                {
+                    quote = '\0';
+                }
+                else
+                {
+                    token.Append(c);
+                }
+            }
+            else if (c is '"' or '\'')
+            {
+                quote = c;
+            }
+            else if (char.IsWhiteSpace(c))
+            {
+                if (token.Length > 0)
+                {
+                    yield return token.ToString();
+                    token.Clear();
+                }
+            }
+            else
+            {
+                token.Append(c);
+            }
+        }
+
+        if (token.Length > 0)
+        {
+            yield return token.ToString();
+        }
     }
 }

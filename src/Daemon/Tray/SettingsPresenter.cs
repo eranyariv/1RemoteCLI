@@ -13,9 +13,10 @@ namespace OneRemoteCli.Daemon.Tray;
 /// "waiting" for a session the user already answered.
 /// </param>
 /// <param name="CliType">
-/// Which CLI it is hosting. Shown even when it is <see cref="Protocol.Hub.CliType.Generic"/>,
-/// because "we could not tell" is the state that explains why the phone is offering
-/// no shortcuts, and a user who cannot see it has no reason to go and set one.
+/// Which CLI it is hosting, as the agent guessed it. Read-only here, like every other
+/// line in this window: it decides which buttons a phone offers, and the phone is
+/// where it is corrected. <see cref="Protocol.Hub.CliType.Generic"/> is written as
+/// nothing at all — see <see cref="SettingsPresenter.Describe(SessionSummary, DateTimeOffset)"/>.
 /// </param>
 public readonly record struct SessionSummary(
     string DisplayName,

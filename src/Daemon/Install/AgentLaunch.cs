@@ -83,6 +83,11 @@ public static class AgentLaunch
     /// <summary>
     /// Starts <c>1remote agent</c> as a process of its own, for a machine where policy
     /// refused the task and the <c>Run</c> key fallback is what will start it at logon.
+    /// <para>
+    /// Says which of the two happened, because it cannot be told afterwards: a machine
+    /// that quietly took this path looks exactly like one that took the task, right up
+    /// until the agent does not come back at the next logon.
+    /// </para>
     /// </summary>
     private static StepResult LaunchDetached(string exePath)
     {
@@ -106,7 +111,7 @@ public static class AgentLaunch
 
             return process is null
                 ? StepResult.Failure("Windows did not start the agent and gave no reason.")
-                : StepResult.Success("Started the agent.");
+                : StepResult.Success("Started the agent directly, because its logon task would not run it.");
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException)
         {

@@ -1,10 +1,13 @@
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text.Json;
 using MessagePack;
 using OneRemoteCli.Daemon.Agent;
 using OneRemoteCli.Daemon.Install;
 using OneRemoteCli.Daemon.Shell;
+using OneRemoteCli.Daemon.Tray;
 using OneRemoteCli.Protocol.Hub;
+using static OneRemoteCli.Daemon.Tray.NativeMethods;
 
 namespace OneRemoteCli.Daemon.Diagnostics;
 
@@ -36,6 +39,12 @@ namespace OneRemoteCli.Daemon.Diagnostics;
 [SupportedOSPlatform("windows")]
 public static class SelfCheck
 {
+    /// <summary>
+    /// The name of the manifest check, shared with the test suite because it is the one
+    /// check whose answer depends on which executable is asking. See <see cref="Chrome"/>.
+    /// </summary>
+    internal const string ChromeCheckName = "Window chrome (manifest)";
+
     public static IReadOnlyList<StepResult> Run()
     {
         string scratch = Path.Combine(Path.GetTempPath(), "1remote-selfcheck-" + Guid.NewGuid().ToString("n"));
@@ -52,6 +61,7 @@ public static class SelfCheck
                 Check("Machine identity file (JSON)", () => Identity(scratch)),
                 Check("Settings file (JSON)", () => Settings(scratch)),
                 Check("Hub messages (MessagePack)", Wire),
+                Check(ChromeCheckName, Chrome),
             ];
         }
         finally
@@ -266,6 +276,60 @@ public static class SelfCheck
         if (session.SessionId != "s1" || session.Program != "pwsh" || session.Cols != 120 || session.Args is not ["-NoLogo"])
         {
             throw new InvalidOperationException("A session did not survive the round trip.");
+        }
+    }
+
+    /// <summary>
+    /// Proves the application manifest reached the published executable.
+    /// <para>
+    /// The manifest is the whole reason the settings window stopped looking like a 2005
+    /// dialog (issue #105), and it belongs to the same class of failure as everything
+    /// else here: it is not code, so nothing compiles it and no test loads it. It is a
+    /// native resource attached at publish time, and if <c>ApplicationManifest</c> is
+    /// ever dropped from the project the build stays green, the tests stay green, and
+    /// the shipped window silently reverts to grey comctl32 v5 controls at the wrong
+    /// size on a scaled display.
+    /// </para>
+    /// <para>
+    /// Both questions are asked of the running process rather than of the file, because
+    /// a manifest that is present but malformed is loaded by nothing: Windows reports it
+    /// as a side-by-side configuration error and the answers below come back as though
+    /// there were no manifest at all.
+    /// </para>
+    /// </summary>
+    private static void Chrome()
+    {
+        DLLVERSIONINFO comctl = default;
+        comctl.cbSize = (uint)Marshal.SizeOf<DLLVERSIONINFO>();
+
+        int hr = ComCtlGetVersion(ref comctl);
+
+        if (hr != 0)
+        {
+            throw new InvalidOperationException($"comctl32!DllGetVersion returned 0x{hr:x8}.");
+        }
+
+        if (comctl.dwMajorVersion < 6)
+        {
+            throw new InvalidOperationException(
+                $"comctl32 {comctl.dwMajorVersion}.{comctl.dwMinorVersion} is bound, so visual styles are off. "
+                + "The application manifest is missing or malformed.");
+        }
+
+        if (!AreDpiAwarenessContextsEqual(GetThreadDpiAwarenessContext(), DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2))
+        {
+            throw new InvalidOperationException(
+                "The process is not per-monitor-v2 DPI aware, so windows will be bitmap-scaled and blurry. "
+                + "The application manifest is missing or malformed.");
+        }
+
+        // Reading the user's light/dark choice goes through the registry, which trimming
+        // can reach, unlike the two answers above.
+        using var theme = Theme.Current();
+
+        if (theme.SurfaceBrush == IntPtr.Zero || theme.LayerBrush == IntPtr.Zero || theme.BorderBrush == IntPtr.Zero)
+        {
+            throw new InvalidOperationException("The theme produced no brushes.");
         }
     }
 

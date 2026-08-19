@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The agent's Win32 identity. Without a manifest the .NET apphost gives us one that
+  asks only for asInvoker, and the two things it leaves out are exactly the two that
+  made the settings window look like a Windows 2000 dialog (issue #105):
+
+  * No dependency on Common-Controls 6.0, so every button, checkbox and list box was
+    drawn by comctl32 version 5, the grey 3D chrome from before visual styles. No
+    amount of colour or font work fixes that; the controls have to be told which
+    library draws them, and this is the only place it can be said.
+
+  * No DPI awareness, so Windows bitmap-stretched the window on every scaled display.
+    That is most laptops. GetDpiForWindow answers 96 for an unaware process, so the
+    window was laid out at 96 and then blurred by the compositor.
+
+  It is a manifest rather than csproj properties because ApplicationHighDpiMode and
+  friends are Windows Forms settings and this project deliberately has no Windows
+  Forms reference (issue #46).
+
+  Careful with the comments here: the side-by-side parser rejects a double hyphen
+  inside one, and what it says when it does is "the application has failed to start
+  because its side-by-side configuration is incorrect", at launch, with the reason
+  only in the Application event log.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+
+  <assemblyIdentity type="win32" name="OneRemoteCli.Agent" version="1.0.0.0" />
+
+  <!-- Kept from the apphost's default manifest. A wrapper you drop on your PATH must
+       never ask for elevation: it is started by the shell, by shortcuts and by the
+       scheduled task, and a consent prompt in any of those places is a broken tool. -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*" />
+    </dependentAssembly>
+  </dependency>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <!-- Per-monitor v2: the settings window is laid out in real pixels and re-lays
+           itself out on WM_DPICHANGED, so it stays sharp when it is dragged between a
+           laptop panel and an external monitor. Both elements are given because they
+           are read by different Windows versions and the older one is the fallback. -->
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">permonitorv2,permonitor</dpiAwareness>
+    </windowsSettings>
+  </application>
+
+  <!-- Declares that this build was tested on Windows 10 and 11, which is what stops
+       Windows reporting a lied-about version to anything that asks. Only the Windows 10
+       GUID is listed because the agent's floor is build 19041, where ConPTY became
+       reliable. See docs/getting-started.md. -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+
+</assembly>

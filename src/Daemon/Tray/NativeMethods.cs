@@ -19,10 +19,31 @@ internal static partial class NativeMethods
     internal const int WM_NULL = 0x0000;
     internal const int WM_DESTROY = 0x0002;
     internal const int WM_CLOSE = 0x0010;
+    internal const int WM_ERASEBKGND = 0x0014;
+    internal const int WM_PAINT = 0x000F;
     internal const int WM_SETFONT = 0x0030;
+
+    /// <summary>
+    /// Broadcast when a system-wide setting changes. The one that matters here arrives
+    /// with "ImmersiveColorSet" in <c>lParam</c>, and is how a window hears that the
+    /// user moved the light/dark switch while it was open.
+    /// </summary>
+    internal const int WM_SETTINGCHANGE = 0x001A;
+
+    internal const int WM_THEMECHANGED = 0x031A;
     internal const int WM_COMMAND = 0x0111;
     internal const int WM_TIMER = 0x0113;
     internal const int WM_CTLCOLORSTATIC = 0x0138;
+    internal const int WM_CTLCOLORLISTBOX = 0x0134;
+
+    /// <summary>
+    /// Sent when the window is dragged onto a monitor with a different scale factor.
+    /// Only ever received by a per-monitor-v2 process, which this became in
+    /// <c>app.manifest</c>; ignoring it there would leave the window at the old size,
+    /// which is worse than the blur it replaced.
+    /// </summary>
+    internal const int WM_DPICHANGED = 0x02E0;
+
     internal const int WM_LBUTTONDBLCLK = 0x0203;
     internal const int WM_CONTEXTMENU = 0x007B;
     internal const int WM_APP = 0x8000;
@@ -375,6 +396,155 @@ internal static partial class NativeMethods
 
     internal const int DEFAULT_CHARSET = 1;
     internal const int FW_NORMAL = 400;
+
+    /// <summary>
+    /// The weight Fluent calls "Body Strong". Windows 11 uses it for the line that says
+    /// what a group of controls is, and it is the only emphasis in this window.
+    /// </summary>
+    internal const int FW_SEMIBOLD = 600;
+
+    /// <summary>
+    /// Asks GDI for the same subpixel antialiasing the shell uses. The default quality
+    /// is whatever the font suggests, which for text this small is visibly rougher than
+    /// every other window on the desktop.
+    /// </summary>
+    internal const int CLEARTYPE_QUALITY = 5;
+
+    /// <summary>
+    /// Dark mode for the caption bar. The attribute number changed once, at Windows 10
+    /// 20H1; only the later one is used because the agent's floor is build 19041.
+    /// </summary>
+    internal const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+
+    internal const int DWMWA_BORDER_COLOR = 34;
+    internal const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+
+    /// <summary>Windows 11's rounded corners, as opposed to letting DWM decide.</summary>
+    internal const int DWMWCP_ROUND = 2;
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct PAINTSTRUCT
+    {
+        public IntPtr hdc;
+
+        [MarshalAs(UnmanagedType.Bool)]
+        public bool fErase;
+
+        public RECT rcPaint;
+
+        [MarshalAs(UnmanagedType.Bool)]
+        public bool fRestore;
+
+        [MarshalAs(UnmanagedType.Bool)]
+        public bool fIncUpdate;
+
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
+        public byte[] rgbReserved;
+    }
+
+    [DllImport("dwmapi.dll")]
+    internal static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
+
+    /// <summary>
+    /// What <c>comctl32!DllGetVersion</c> fills in. Version 6 only ever arrives through
+    /// a side-by-side binding, so the number reported here is really an answer about the
+    /// application manifest rather than about the library.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct DLLVERSIONINFO
+    {
+        public uint cbSize;
+
+        public uint dwMajorVersion;
+
+        public uint dwMinorVersion;
+
+        public uint dwBuildNumber;
+
+        public uint dwPlatformID;
+    }
+
+    /// <summary>
+    /// Resolved through the activation context like any other import of it, so this
+    /// reports the comctl32 the process actually got: 6.x when the manifest is present,
+    /// 5.82 when it is not.
+    /// </summary>
+    [DllImport("comctl32.dll", EntryPoint = "DllGetVersion")]
+    internal static extern int ComCtlGetVersion(ref DLLVERSIONINFO version);
+
+    /// <summary>
+    /// <c>DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2</c>. A pseudo-handle rather than a
+    /// pointer, which is why it is a negative constant.
+    /// </summary>
+    internal static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4;
+
+    [LibraryImport("user32.dll")]
+    internal static partial IntPtr GetThreadDpiAwarenessContext();
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool AreDpiAwarenessContextsEqual(IntPtr left, IntPtr right);
+
+    [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
+    internal static extern int SetWindowTheme(IntPtr window, string? subAppName, string? subIdList);
+
+    [DllImport("kernel32.dll", EntryPoint = "LoadLibraryW", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern IntPtr LoadLibrary(string fileName);
+
+    /// <summary>
+    /// The ordinal form. uxtheme's dark-mode entry points have no names, so there is no
+    /// string overload that would reach them.
+    /// </summary>
+    [DllImport("kernel32.dll", EntryPoint = "GetProcAddress", SetLastError = true)]
+    internal static extern IntPtr GetProcAddress(IntPtr module, IntPtr ordinal);
+
+    internal static IntPtr GetProcAddress(IntPtr module, int ordinal) =>
+        GetProcAddress(module, (IntPtr)ordinal);
+
+    [LibraryImport("gdi32.dll")]
+    internal static partial IntPtr CreateSolidBrush(uint color);
+
+    [LibraryImport("gdi32.dll")]
+    internal static partial uint SetTextColor(IntPtr deviceContext, uint color);
+
+    [LibraryImport("gdi32.dll")]
+    internal static partial uint SetBkColor(IntPtr deviceContext, uint color);
+
+    [LibraryImport("user32.dll")]
+    internal static partial int FillRect(IntPtr deviceContext, ref RECT rect, IntPtr brush);
+
+    [LibraryImport("user32.dll")]
+    internal static partial int FrameRect(IntPtr deviceContext, ref RECT rect, IntPtr brush);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool GetClientRect(IntPtr window, out RECT rect);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr BeginPaint(IntPtr window, out PAINTSTRUCT paint);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool EndPaint(IntPtr window, ref PAINTSTRUCT paint);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool InvalidateRect(IntPtr window, IntPtr rect, [MarshalAs(UnmanagedType.Bool)] bool erase);
+
+    /// <summary>
+    /// Repaints a window and everything inside it. Needed when the theme changes: the
+    /// children have each been re-themed, and each of them is still showing what it drew
+    /// under the old one.
+    /// </summary>
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool RedrawWindow(IntPtr window, IntPtr rect, IntPtr region, int flags);
+
+    internal const int RDW_INVALIDATE = 0x0001;
+    internal const int RDW_ERASE = 0x0004;
+    internal const int RDW_ALLCHILDREN = 0x0080;
+    internal const int RDW_UPDATENOW = 0x0100;
+    internal const int RDW_FRAME = 0x0400;
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct RECT

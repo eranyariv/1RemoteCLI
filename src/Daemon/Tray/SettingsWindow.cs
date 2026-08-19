@@ -75,28 +75,82 @@ internal sealed class SettingsWindow
     private const int RefreshTimer = 1;
     private const uint RefreshMilliseconds = 1000;
 
-    /// <summary>Layout at 96 DPI, scaled up from there. Widths first, then the rows.</summary>
-    private const int Margin = 14;
-    private const int ClientWidth = 474;
-    private const int ClientHeight = 364;
-    private const int RowHeight = 18;
-    private const int ButtonHeight = 26;
+    /// <summary>
+    /// Layout at 96 DPI, scaled from there, on Fluent's four-pixel grid.
+    /// <para>
+    /// The numbers are the Windows 11 ones rather than the Win32 ones they replaced:
+    /// a 20px window margin instead of 14, 32px-high buttons instead of 26, and 20px
+    /// between groups against 8 inside one. What made the old window read as old was
+    /// not the controls, it was that everything was 6 or 8 pixels from everything else,
+    /// so nothing looked grouped with anything.
+    /// </para>
+    /// </summary>
+    private const int Margin = 20;
+
+    private const int ClientWidth = 480;
+
+    /// <summary>Between two groups. Inside one, things sit <see cref="Tight"/> apart.</summary>
+    private const int Gap = 20;
+
+    private const int Tight = 8;
+
+    /// <summary>One line of body text at 14px, with room for descenders.</summary>
+    private const int RowHeight = 20;
+
+    private const int ButtonHeight = 32;
+
+    private const int SessionsHeight = 140;
+
+    /// <summary>
+    /// Fluent's Body size, in pixels at 96 DPI. The Win32 shell dialog font is 9pt,
+    /// which is 12px; Windows 11 sets its own UI two pixels larger, and matching it is
+    /// most of what makes a window look current.
+    /// </summary>
+    private const int BodySize = 14;
+
+    /// <summary>Fluent's Caption size, for the version line.</summary>
+    private const int CaptionSize = 12;
 
     private readonly SettingsActions _actions;
     private readonly WndProc _wndProc;
     private readonly string _className = $"1RemoteCLI.Settings.{Environment.ProcessId}";
+
+    /// <summary>
+    /// Every child, with the rectangle it was laid out at in 96-DPI units.
+    /// <para>
+    /// Kept so the window can be laid out again at a different scale. Under
+    /// per-monitor-v2 awareness — which <c>app.manifest</c> asks for — dragging the
+    /// window to a monitor at another scale sends <c>WM_DPICHANGED</c> and the window
+    /// is expected to resize itself; without this list the only thing it could do is
+    /// stretch, which is the blur that awareness was turned on to remove.
+    /// </para>
+    /// </summary>
+    private readonly List<(IntPtr Control, int X, int Y, int Width, int Height)> _controls = [];
 
     private bool _classRegistered;
     private int _dpi = 96;
 
     private IntPtr _window;
     private IntPtr _font;
+    private IntPtr _strongFont;
+    private IntPtr _captionFont;
+    private Theme _theme = Theme.Current();
     private IntPtr _accountLabel;
     private IntPtr _connectionLabel;
+    private IntPtr _sessionsLabel;
     private IntPtr _signInOut;
     private IntPtr _sessions;
     private IntPtr _startAtLogon;
     private IntPtr _versionLabel;
+
+    /// <summary>Where the list box sits, in 96-DPI units, so its hairline can be drawn.</summary>
+    private (int X, int Y, int Width, int Height) _sessionsBounds;
+
+    /// <summary>
+    /// The height the layout came out at, so the frame can be sized to fit it rather
+    /// than to a constant somebody has to remember to update.
+    /// </summary>
+    private int _clientHeight = 432;
 
     /// <summary>
     /// What the list currently shows. Kept so the refresh can leave the box alone when
@@ -218,9 +272,11 @@ internal sealed class SettingsWindow
                 hInstance = instance,
                 lpszClassName = _className,
 
-                // The dialog grey every other Windows dialog uses. Owned by the system,
-                // so it is never deleted.
-                hbrBackground = GetSysColorBrush(COLOR_BTNFACE),
+                // No class brush. The background is painted in WM_ERASEBKGND from the
+                // current theme's surface colour, because the class brush is fixed at
+                // registration and the theme is not: the user can move the light/dark
+                // switch while this window is open.
+                hbrBackground = IntPtr.Zero,
 
                 // Both sizes, because Windows uses them for different things: the small
                 // one is the caption bar and the Alt+Tab thumbnail, the large one is the
@@ -276,31 +332,51 @@ internal sealed class SettingsWindow
         uint dpi = GetDpiForWindow(_window);
         _dpi = dpi == 0 ? 96 : (int)dpi;
 
-        _font = CreateFont(
+        // Before anything is drawn: the caption bar cannot be repainted by us, and a
+        // window that flashes white and then goes dark is worse than one that was never
+        // themed at all.
+        _theme.ApplyToWindow(_window);
+
+        CreateFonts();
+        CreateControls(instance);
+        Size(Style);
+
+        SetTimer(_window, RefreshTimer, RefreshMilliseconds, IntPtr.Zero);
+    }
+
+    /// <summary>
+    /// The three weights this window is set in: Body, Body Strong for the two lines
+    /// that name things, and Caption for the version.
+    /// </summary>
+    private void CreateFonts()
+    {
+        DeleteFonts();
+
+        _font = Font(BodySize, FW_NORMAL);
+        _strongFont = Font(BodySize, FW_SEMIBOLD);
+        _captionFont = Font(CaptionSize, FW_NORMAL);
+    }
+
+    private IntPtr Font(int size, int weight) =>
+        CreateFont(
             // Negative means "this many pixels of character height" rather than cell
-            // height, which is how a point size is requested. 9pt Segoe UI is the shell
-            // dialog font; asking the system for NONCLIENTMETRICS would be more correct
-            // and costs a 500-byte struct whose layout changes between Windows versions.
-            -(9 * _dpi / 72),
+            // height. The size is already in pixels at 96 DPI, so it scales with the
+            // rest of the layout rather than through a point conversion.
+            -Scale(size),
             0,
             0,
             0,
-            FW_NORMAL,
+            weight,
             0,
             0,
             0,
             DEFAULT_CHARSET,
             0,
             0,
+            CLEARTYPE_QUALITY,
             0,
-            0,
-            "Segoe UI");
+            Theme.BodyFace);
 
-        Size(Style);
-        CreateControls(instance);
-
-        SetTimer(_window, RefreshTimer, RefreshMilliseconds, IntPtr.Zero);
-    }
 
     /// <summary>Sizes to the client area we want, then centres on the screen.</summary>
     private void Size(int style)
@@ -308,7 +384,7 @@ internal sealed class SettingsWindow
         var bounds = new RECT
         {
             right = Scale(ClientWidth),
-            bottom = Scale(ClientHeight),
+            bottom = Scale(_clientHeight),
         };
 
         // The caption and borders are not part of what we laid out, and they differ by
@@ -330,35 +406,50 @@ internal sealed class SettingsWindow
     private void CreateControls(IntPtr instance)
     {
         int content = ClientWidth - (Margin * 2);
-        const int buttonWidth = 104;
+        const int signInWidth = 112;
         int y = Margin;
 
         // Row one: who, and the button that changes it. The button is on the same line
-        // because signing in or out is the one thing this line ever leads to.
-        _accountLabel = Static(instance, Margin, y + 4, content - buttonWidth - 10, RowHeight);
-        _signInOut = Button(instance, IdSignInOut, ClientWidth - Margin - buttonWidth, y, buttonWidth, ButtonHeight);
-        y += ButtonHeight + 6;
+        // because signing in or out is the one thing this line ever leads to, and it is
+        // set in Body Strong because it is the answer to the question the window was
+        // opened to ask.
+        int textWidth = content - signInWidth - Gap;
 
-        // Row two: whether the phone can see this machine. Directly under the account
-        // because signed out is one of the reasons it cannot. Two rows tall and without
+        _accountLabel = Static(instance, Margin, y, textWidth, RowHeight, font: _strongFont);
+        _signInOut = Button(instance, IdSignInOut, ClientWidth - Margin - signInWidth, y, signInWidth, ButtonHeight);
+
+        // Directly under the account, inside the same group, because signed out is one
+        // of the reasons the phone cannot see this machine. Two rows tall and without
         // the ellipsis style, so the longest of these sentences wraps rather than losing
         // its ending — which in one case is the part that says sessions still work.
-        _connectionLabel = Static(instance, Margin, y, content, RowHeight * 2, style: SS_LEFT);
-        y += (RowHeight * 2) + 12;
+        y += RowHeight + Tight;
+        _connectionLabel = Static(instance, Margin, y, textWidth, RowHeight * 2, style: SS_LEFT);
+        y += (RowHeight * 2) + Gap;
 
-        Static(instance, Margin, y, content, RowHeight, SettingsPresenter.SessionsLabel);
-        y += RowHeight + 4;
-
-        _sessions = Create(
+        _sessionsLabel = Static(
             instance,
-            "LISTBOX",
-            WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | WS_TABSTOP | LBS_NOSEL | LBS_NOINTEGRALHEIGHT,
             Margin,
             y,
             content,
-            116,
+            RowHeight,
+            SettingsPresenter.SessionsLabel,
+            font: _strongFont);
+        y += RowHeight + Tight;
+
+        // No WS_BORDER. That border is drawn by Windows in a system colour that stays
+        // light in dark mode; the hairline is drawn in WM_PAINT instead, in the theme's
+        // own stroke colour.
+        _sessionsBounds = (Margin, y, content, SessionsHeight);
+        _sessions = Create(
+            instance,
+            "LISTBOX",
+            WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_TABSTOP | LBS_NOSEL | LBS_NOINTEGRALHEIGHT,
+            Margin,
+            y,
+            content,
+            SessionsHeight,
             IntPtr.Zero);
-        y += 116 + 14;
+        y += SessionsHeight + Gap;
 
         _startAtLogon = Create(
             instance,
@@ -367,38 +458,54 @@ internal sealed class SettingsWindow
             Margin,
             y,
             content,
-            22,
+            RowHeight + 4,
             IdStartAtLogon,
             SettingsPresenter.StartAtLogonLabel);
-        y += 22 + 14;
+        y += RowHeight + 4 + Gap;
 
         // The one row of actions. Wrapping a shortcut lives here rather than in the
         // tray menu (issue #66): it is a rare, deliberate act, and the tray menu is for
         // the things that are needed in a hurry.
-        const int wrapWidth = 176;        Button(instance, IdWrapShortcut, Margin, y, wrapWidth, ButtonHeight, SettingsPresenter.WrapShortcutLabel);
-        Button(instance, IdOpenLogs, Margin + wrapWidth + 8, y, 96, ButtonHeight, SettingsPresenter.OpenLogsLabel);
+        const int wrapWidth = 188;
+        const int logsWidth = 104;
+        int feedbackX = Margin + wrapWidth + Tight + logsWidth + Tight;
+
+        Button(instance, IdWrapShortcut, Margin, y, wrapWidth, ButtonHeight, SettingsPresenter.WrapShortcutLabel);
+        Button(instance, IdOpenLogs, Margin + wrapWidth + Tight, y, logsWidth, ButtonHeight, SettingsPresenter.OpenLogsLabel);
         Button(
             instance,
             IdSendFeedback,
-            Margin + wrapWidth + 8 + 96 + 8,
+            feedbackX,
             y,
-            ClientWidth - Margin - (Margin + wrapWidth + 8 + 96 + 8),
+            ClientWidth - Margin - feedbackX,
             ButtonHeight,
             SettingsPresenter.SendFeedbackLabel);
-        y += ButtonHeight + 16;
+        y += ButtonHeight + Gap;
 
         // The version is the first thing any bug report needs, so it sits next to the
-        // button that sends one.
-        _versionLabel = Static(instance, Margin, y + 5, 200, RowHeight);
+        // button that sends one. Caption weight and the secondary colour: it is true,
+        // but it is not why anybody opened this.
+        const int closeWidth = 104;
+
+        _versionLabel = Static(
+            instance,
+            Margin,
+            y + ((ButtonHeight - RowHeight) / 2),
+            content - closeWidth - Gap,
+            RowHeight,
+            font: _captionFont);
+
         Button(
             instance,
             IdClose,
-            ClientWidth - Margin - 92,
+            ClientWidth - Margin - closeWidth,
             y,
-            92,
+            closeWidth,
             ButtonHeight,
             SettingsPresenter.CloseLabel,
             BS_DEFPUSHBUTTON);
+
+        _clientHeight = y + ButtonHeight + Margin;
     }
 
     private IntPtr Static(
@@ -408,7 +515,8 @@ internal sealed class SettingsWindow
         int width,
         int height,
         string text = "",
-        int style = SS_LEFT | SS_ENDELLIPSIS) =>
+        int style = SS_LEFT | SS_ENDELLIPSIS,
+        IntPtr font = default) =>
         Create(
             instance,
             "STATIC",
@@ -418,7 +526,8 @@ internal sealed class SettingsWindow
             width,
             height,
             IntPtr.Zero,
-            text);
+            text,
+            font);
 
     private IntPtr Button(
         IntPtr instance,
@@ -449,7 +558,8 @@ internal sealed class SettingsWindow
         int width,
         int height,
         IntPtr id,
-        string text = "")
+        string text = "",
+        IntPtr font = default)
     {
         IntPtr control = CreateWindowEx(
             0,
@@ -465,14 +575,33 @@ internal sealed class SettingsWindow
             instance,
             IntPtr.Zero);
 
-        if (control != IntPtr.Zero && _font != IntPtr.Zero)
+        if (control == IntPtr.Zero)
+        {
+            return control;
+        }
+
+        _controls.Add((control, x, y, width, height));
+
+        SetFont(control, font);
+
+        // Buttons, checkboxes and the list box draw themselves, so their colours cannot
+        // be set with a brush the way a label's can. Handing them the dark Explorer
+        // theme is how comctl32 is told to use the artwork it already has.
+        _theme.ApplyToControl(control);
+
+        return control;
+    }
+
+    private void SetFont(IntPtr control, IntPtr font = default)
+    {
+        IntPtr wanted = font == default ? _font : font;
+
+        if (control != IntPtr.Zero && wanted != IntPtr.Zero)
         {
             // Without this every control draws in the 1990s bitmap system font, which
             // is the single most obvious way a hand-built window looks broken.
-            SendMessage(control, WM_SETFONT, _font, 1);
+            SendMessage(control, WM_SETFONT, wanted, 1);
         }
-
-        return control;
     }
 
     private int Scale(int value) => value * _dpi / 96;
@@ -537,11 +666,53 @@ internal sealed class SettingsWindow
                 Refresh(reread: false);
                 return IntPtr.Zero;
 
+            case WM_ERASEBKGND:
+                // Painted here rather than by a class brush, because the class brush is
+                // fixed when the class is registered and the theme is not.
+                if (GetClientRect(window, out RECT client))
+                {
+                    FillRect(wParam, ref client, _theme.SurfaceBrush);
+                }
+
+                return 1;
+
+            case WM_PAINT:
+                OnPaint(window);
+                return IntPtr.Zero;
+
             case WM_CTLCOLORSTATIC:
                 // Labels and the checkbox paint their own background otherwise, leaving
-                // white rectangles on the dialog grey.
+                // light rectangles on a dark surface. The version line is the one thing
+                // here that is deliberately quieter than the rest.
                 SetBkMode(wParam, TRANSPARENT);
-                return GetSysColorBrush(COLOR_BTNFACE);
+                SetTextColor(wParam, lParam == _versionLabel ? _theme.SecondaryText : _theme.Text);
+                SetBkColor(wParam, _theme.Surface);
+                return _theme.SurfaceBrush;
+
+            case WM_CTLCOLORLISTBOX:
+                // One step off the surface, which is how Fluent separates a list from
+                // the window it sits in now that the border is a hairline.
+                SetTextColor(wParam, _theme.Text);
+                SetBkColor(wParam, _theme.Layer);
+                return _theme.LayerBrush;
+
+            case WM_SETTINGCHANGE:
+                // Broadcast for every system setting there is, so the payload has to be
+                // read. Anything else would rebuild the theme on unrelated changes.
+                if (IsColorSetChange(lParam))
+                {
+                    OnThemeChanged();
+                }
+
+                return DefWindowProc(window, message, wParam, lParam);
+
+            case WM_THEMECHANGED:
+                OnThemeChanged();
+                return IntPtr.Zero;
+
+            case WM_DPICHANGED:
+                OnDpiChanged((int)((long)wParam & 0xFFFF), lParam);
+                return IntPtr.Zero;
 
             case WM_CLOSE:
                 DestroyWindow(window);
@@ -554,6 +725,132 @@ internal sealed class SettingsWindow
             default:
                 return DefWindowProc(window, message, wParam, lParam);
         }
+    }
+
+    /// <summary>
+    /// Draws the hairline around the session list.
+    /// <para>
+    /// A <c>WS_BORDER</c> would be one call instead of this, and would stay light in
+    /// dark mode: that border is drawn by Windows in a system colour, and there is no
+    /// message asking us what colour it should be.
+    /// </para>
+    /// </summary>
+    private void OnPaint(IntPtr window)
+    {
+        IntPtr context = BeginPaint(window, out PAINTSTRUCT paint);
+
+        if (context != IntPtr.Zero)
+        {
+            (int x, int y, int width, int height) = _sessionsBounds;
+
+            var frame = new RECT
+            {
+                left = Scale(x) - 1,
+                top = Scale(y) - 1,
+                right = Scale(x + width) + 1,
+                bottom = Scale(y + height) + 1,
+            };
+
+            FrameRect(context, ref frame, _theme.BorderBrush);
+        }
+
+        EndPaint(window, ref paint);
+    }
+
+    /// <summary>
+    /// Whether a <c>WM_SETTINGCHANGE</c> is the one that says the colours moved.
+    /// <para>
+    /// <c>lParam</c> is a native string and may be null, which is why it is read by
+    /// hand rather than by the window procedure's signature — every message this window
+    /// receives arrives through that same one.
+    /// </para>
+    /// </summary>
+    private static bool IsColorSetChange(IntPtr lParam) =>
+        lParam != IntPtr.Zero &&
+        string.Equals(Marshal.PtrToStringUni(lParam), "ImmersiveColorSet", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Re-reads the light/dark preference and puts the whole window into it, without
+    /// closing anything. Somebody who changes the system theme while this is open sees
+    /// it follow, which is what every other Windows 11 window does.
+    /// </summary>
+    private void OnThemeChanged()
+    {
+        Theme previous = _theme;
+
+        _theme = Theme.Current();
+
+        _theme.ApplyToWindow(_window);
+        Theme.AllowSystemThemedMenus();
+
+        foreach ((IntPtr control, _, _, _, _) in _controls)
+        {
+            _theme.ApplyToControl(control);
+        }
+
+        // Everything is repainted before the old brushes are destroyed: a brush that is
+        // still selected into a device context must not be deleted underneath it.
+        RedrawWindow(
+            _window,
+            IntPtr.Zero,
+            IntPtr.Zero,
+            RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
+
+        previous.Dispose();
+    }
+
+    /// <summary>
+    /// Follows the window onto a monitor at another scale.
+    /// <para>
+    /// Windows supplies the rectangle it wants the window at, and a per-monitor-v2
+    /// process is expected to take it: ignoring it leaves the window at its old
+    /// physical size, which on a 150% monitor is two thirds of what it should be. The
+    /// children are then laid out again from the 96-DPI rectangles they were created
+    /// with, and the fonts remade, because a font is sized in pixels and those have
+    /// just changed.
+    /// </para>
+    /// </summary>
+    private void OnDpiChanged(int dpi, IntPtr suggested)
+    {
+        _dpi = dpi == 0 ? 96 : dpi;
+
+        CreateFonts();
+
+        if (suggested != IntPtr.Zero)
+        {
+            RECT bounds = Marshal.PtrToStructure<RECT>(suggested);
+
+            SetWindowPos(
+                _window,
+                IntPtr.Zero,
+                bounds.left,
+                bounds.top,
+                bounds.right - bounds.left,
+                bounds.bottom - bounds.top,
+                SWP_NOZORDER);
+        }
+
+        foreach ((IntPtr control, int x, int y, int width, int height) in _controls)
+        {
+            MoveWindow(control, Scale(x), Scale(y), Scale(width), Scale(height), false);
+            SetFont(control, FontFor(control));
+        }
+
+        RedrawWindow(_window, IntPtr.Zero, IntPtr.Zero, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+    }
+
+    /// <summary>
+    /// Which of the three weights a control was created with. Asked again rather than
+    /// remembered per control: there are two exceptions and they are both named here.
+    /// </summary>
+    private IntPtr FontFor(IntPtr control)
+    {
+        if (control == _accountLabel || control == _sessionsLabel)
+        {
+            return _strongFont;
+        }
+
+        return control == _versionLabel ? _captionFont : _font;
     }
 
     private void OnCommand(int id)
@@ -693,19 +990,38 @@ internal sealed class SettingsWindow
             KillTimer(_window, RefreshTimer);
         }
 
-        if (_font != IntPtr.Zero)
-        {
-            DeleteObject(_font);
-            _font = IntPtr.Zero;
-        }
+        DeleteFonts();
 
         _window = IntPtr.Zero;
+        _controls.Clear();
         _accountLabel = IntPtr.Zero;
         _connectionLabel = IntPtr.Zero;
+        _sessionsLabel = IntPtr.Zero;
         _signInOut = IntPtr.Zero;
         _sessions = IntPtr.Zero;
         _startAtLogon = IntPtr.Zero;
         _versionLabel = IntPtr.Zero;
         _shown = [];
+    }
+
+    /// <summary>
+    /// Frees the three fonts. Called on close and again on every DPI change, because a
+    /// font is created at a pixel size and the ones for the old scale are dead the
+    /// moment the new ones exist.
+    /// </summary>
+    private void DeleteFonts()
+    {
+        Delete(ref _font);
+        Delete(ref _strongFont);
+        Delete(ref _captionFont);
+
+        static void Delete(ref IntPtr font)
+        {
+            if (font != IntPtr.Zero)
+            {
+                DeleteObject(font);
+                font = IntPtr.Zero;
+            }
+        }
     }
 }

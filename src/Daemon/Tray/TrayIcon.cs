@@ -152,6 +152,12 @@ public sealed class TrayIcon : IDisposable
         try
         {
             _taskbarCreated = RegisterWindowMessage("TaskbarCreated");
+
+            // Before any window or menu exists. This is what lets the tray menu follow
+            // the user's light/dark preference: Windows draws that menu, not us, and it
+            // decides at creation which theme to draw it in (issue #105).
+            Theme.AllowSystemThemedMenus();
+
             _window = CreateHiddenWindow();
 
             AddIcon();

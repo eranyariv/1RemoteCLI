@@ -135,6 +135,9 @@ The tray menu itself is deliberately short: the account, **Settings…**, the we
 **Quit**. Anything that lives in the window does not also live on the menu, so there is
 only ever one answer to "am I signed in".
 
+Both follow the light or dark theme you chose in Windows Settings, and switch the moment
+you change it — no restart.
+
 ## 7. Wrap a desktop shortcut
 
 If you start your CLI from a shortcut on your desktop rather than by typing its name,

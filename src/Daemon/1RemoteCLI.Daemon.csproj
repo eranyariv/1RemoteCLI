@@ -53,6 +53,10 @@
          The tray uses the same artwork, with a status badge composited on top -
          see TrayArtwork. -->
     <ApplicationIcon>..\..\assets\1remote.ico</ApplicationIcon>
+    <!-- Turns on visual styles and per-monitor DPI for the tray's windows. The default
+         apphost manifest asks for neither, which is what made a hand-built Win32 dialog
+         look like one from 2005 (issue #105). See app.manifest. -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <RootNamespace>OneRemoteCli.Daemon</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>

@@ -190,6 +190,53 @@ public sealed class TrayArtworkTests
         }
     }
 
+    [Fact]
+    public void DrawsABadgeADarkTaskbarCanShow()
+    {
+        // The test above passes for a badge drawn in solid black, because hiding part
+        // of the green mark changes the icon just as much as adding something to it
+        // does. That is how issue #78 shipped: the signed-out badge was a black barred
+        // circle, and on the dark taskbar Windows 11 defaults to it put no light on the
+        // screen at all. What the user saw was a smaller green mark, which reads as
+        // "something changed", not as "you are signed out" -- and signed out is the one
+        // state that needs them to do anything.
+        //
+        // So this asks the stricter question the other test cannot: flattened onto
+        // black, does the badge put ink of its own on the taskbar? Green is excluded
+        // because the mark is green and the badge is not, which leaves only what the
+        // badge itself contributes. Measured on the count-free mark: the counted
+        // artwork also carries the white plate the digit sits in, and that is light ink
+        // which is not the badge.
+        foreach (AgentState state in new[] { AgentState.Reconnecting, AgentState.SignedOut })
+        {
+            using Bitmap bitmap = Flatten(state, 0, Color.Black);
+
+            int lit = 0;
+
+            for (int y = 0; y < bitmap.Height; y++)
+            {
+                for (int x = 0; x < bitmap.Width; x++)
+                {
+                    Color pixel = bitmap.GetPixel(x, y);
+
+                    if (pixel.G > pixel.R + 24 && pixel.G > pixel.B + 24)
+                    {
+                        continue;
+                    }
+
+                    if (Luminance(pixel) > 96)
+                    {
+                        lit++;
+                    }
+                }
+            }
+
+            Assert.True(
+                lit > 16,
+                $"The {state} badge is invisible on a dark taskbar ({lit} pixels of its own carry any light).");
+        }
+    }
+
     private static Bitmap Flatten(AgentState state, int sessions, Color background)
     {
         using Icon icon = TrayArtwork.Create(state, 16, sessions);

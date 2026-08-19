@@ -422,15 +422,20 @@ also clears it, since the agent starts from a logon task.
         submitted and come back clean.
 
         The verdict attaches to the write, not to the contents: four launches of one
-        unchanged file during issue #92 gave three refusals and one success. That is
-        why the copy above is skipped when the installed file is already this build,
-        and why a machine that has just refused the file may well accept it on the
-        next attempt without anything having changed.
+        unchanged file during issue #92 gave three refusals and one success, and a
+        byte-identical copy of an installed, happily running agent is refused when
+        written under a new name. That is why the copy above is skipped when the
+        installed file is already this build.
 
-        Each blocked attempt costs a couple of seconds inside Windows, so this is
-        bounded by attempts rather than by a deadline.
+        Retrying is kept because the verdict can lift within seconds, once the file
+        has been submitted and come back clean, and because a direct launch shows its
+        output where a scheduled one cannot. But it is no longer what the install
+        depends on: what follows the retries is a launcher the rule does not object
+        to, and that is measured rather than hoped for. Three attempts, since each
+        blocked one costs a couple of seconds inside Windows and the fallback behind
+        them works.
     #>
-    $attempts = 6
+    $attempts = 3
     $ran = $false
     $viaTask = $false
 
@@ -445,15 +450,21 @@ also clears it, since the agent starts from a logon task.
                 $refusal = $_.Exception.Message
 
                 <#
-                    Last resort: let Task Scheduler perform the launch instead.
+                    What the rule is actually judging is the launcher, so hand the
+                    launch to one it does not object to.
 
-                    The block names powershell.exe as the process it stopped, so it is
-                    at least possible that what is refused is this shell starting an
-                    unknown program rather than the program itself -- and the agent is
-                    normally started by the scheduler, which is a launcher Windows
-                    treats quite differently. That has never been observed at a moment
-                    when the file was actually blocked, so this is a question as much
-                    as a remedy, and it is asked only once everything else has failed.
+                    Measured on a blocked machine, on one file, ten seconds apart: a
+                    fresh unknown copy of the agent was refused when this shell started
+                    it -- two ASR events, both naming powershell.exe as the process
+                    stopped and neither naming a launcher other than it -- and ran to a
+                    clean exit when Task Scheduler started it, with nothing logged at
+                    all. Which is consistent with the agent itself: it is scheduler-
+                    started at every logon, on the very machines that refuse the
+                    install.
+
+                    So this is a remedy rather than a guess. It is still placed after
+                    the direct attempts, because when the direct launch works its
+                    output is visible and a task's is not.
 
                     A task of its own rather than the agent's, because the agent's does
                     not exist yet: registering it is what `install` is being run to do.
@@ -513,13 +524,18 @@ also clears it, since the agent starts from a logon task.
                 }
 
                 throw @"
-Windows would not let '$installed' start, after $attempts attempts: $refusal
+Windows would not let '$installed' start: $refusal
+
+It was tried $attempts times directly, and once through Task Scheduler, which is a
+launcher the usual culprit does not normally object to. Neither was allowed, so this
+is not the ordinary case.
 
 The download is installed and its hash matched the release, so the file is fine.
 Something on this machine is refusing to run it -- on a managed machine, usually the
 attack surface reduction rule "Use advanced protection against ransomware". Windows
-Security > Protection history is where to confirm it: the entry blames powershell.exe
-under "App or process blocked", and names this file under "Affected items".
+Security > Protection history is where to confirm it: the entry blames the process
+that tried to start it under "App or process blocked", and names this file under
+"Affected items".
 
 That rule allows an executable that is signed by a trusted publisher, or that enough
 machines have already seen. A new release of an unsigned program is neither, so the
@@ -531,12 +547,6 @@ Worth trying, in this order:
   Again, now. The verdict is not always stable, and this rewrites nothing, so a copy
   that is already working cannot be lost by trying:
       & "$installed" install
-
-  Start it through Task Scheduler, which is how it starts at every logon and is a
-  launcher Windows judges separately from this shell. The install above already
-  tried this and it did not take; running the whole installer again retries it,
-  and rewrites nothing:
-      irm https://raw.githubusercontent.com/$Repository/main/scripts/install.ps1 | iex
 
   Allow this one file. Needs an elevated PowerShell, and is the remedy that actually
   applies if the machine is yours:

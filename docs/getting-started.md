@@ -180,6 +180,7 @@ its session will be an empty terminal.
 | `1remote status` | Show who is signed in |
 | `1remote install` | Start the agent now and at every logon, and put `1remote` on your `PATH` |
 | `1remote uninstall` | Undo `install` |
+| `1remote update` | Install the latest release over this one |
 | `1remote wrap-shortcut <path.lnk>` | Copy a desktop shortcut into one that shares its session |
 
 | Option | |
@@ -194,6 +195,7 @@ its session will be an empty terminal.
 | `ONEREMOTE_HUB` | Point the agent at a different hub. Mainly for developers running one locally. |
 | `ONEREMOTE_LOG_LEVEL` | `trace`, `debug`, `info`, `warn`, `error`. |
 | `ONEREMOTE_LOG_DIR` | Where log files go. Defaults to `%LOCALAPPDATA%\1RemoteCLI\logs`. |
+| `ONEREMOTE_UPDATE_CHECK` | Set to `0` to stop the agent looking for new releases. |
 
 ## Windows blocked the download
 
@@ -246,6 +248,38 @@ Add-MpPreference -AttackSurfaceReductionOnlyExclusions "$env:LOCALAPPDATA\Progra
 Otherwise, waiting works often enough, though "twenty minutes" was too optimistic — plan for an hour or two, and some machines never relent. `scripts\diagnose-launch.ps1` will tell you which protection is refusing it and how long it has been doing so. If none of that helps, an administrator has to allow it.
 
 The real fix is to sign the builds, which is [#93](https://github.com/eranyariv/1RemoteCLI/issues/93). That is the same unsignedness behind the SmartScreen warning above, though the two are different problems and reach you by different routes. For a while we said signing would not have fixed this one; that was wrong, and the reputation measurements above are why. See [deployment](deployment.md#it-is-not-signed).
+
+## Keeping it up to date
+
+The agent checks for a new release a couple of minutes after it starts and once a day
+after that, and again whenever you open the settings window. When it finds one, the
+tray menu gains **Update to 0.13** and the settings window says the same thing with an
+**Update now** button next to it. Nothing is downloaded until you click.
+
+What happens when you do: the release's checksums are fetched first, the download is
+checked against them, and the new build is then **run once with `--version`** before
+anything is replaced. If it will not start on your machine, or reports a version it
+should not, nothing is installed and the copy you have is untouched. Every release from
+0.09 to 0.12 fixed something that stopped the agent starting, and an update that leaves
+you with an agent that will not start is worse than no update at all.
+
+If sessions are running, the new build is installed but **not started**. Your sessions
+are not interrupted — a session whose agent went away would keep running at your desk
+but would never be visible from your phone again — so the agent keeps running the old
+build until those sessions end, and says so.
+
+To turn checking off, either set `ONEREMOTE_UPDATE_CHECK=0`, or put this in
+`%LOCALAPPDATA%\1RemoteCLI\settings.json`:
+
+```json
+{
+  "update": { "check": false }
+}
+```
+
+`"intervalHours"` in the same block changes how often it looks. `1remote update` does
+the whole thing from a command line without a tray, and never restarts anything. What
+the agent found, and what it did about it, is in `%LOCALAPPDATA%\1RemoteCLI\logs`.
 
 ## Uninstalling
 

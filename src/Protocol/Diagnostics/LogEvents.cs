@@ -177,6 +177,20 @@ public static partial class LogEvents
         Message = "A wrapper disconnected ({Reason}).")]
     public static partial void WrapperDisconnected(this ILogger logger, string reason);
 
+    // 1500s: keeping the agent up to date.
+
+    /// <remarks>
+    /// Everything the update service has to say goes through here, at Information,
+    /// because the file log is the only record on a machine whose agent runs hidden from
+    /// a scheduled task — there is no console for it to write to, and a machine that
+    /// silently never updates is exactly the thing this needs to be diagnosable.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1500,
+        Level = LogLevel.Information,
+        Message = "{Detail}")]
+    public static partial void Update(this ILogger logger, string detail);
+
     // 1900s: things that went wrong.
 
     /// <remarks>

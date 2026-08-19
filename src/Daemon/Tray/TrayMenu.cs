@@ -7,6 +7,9 @@ public enum TrayCommand
     None,
     Settings,
     ShowSessions,
+
+    /// <summary>Install the release the agent has found. Only offered when there is one.</summary>
+    Update,
     Quit,
 }
 
@@ -63,21 +66,50 @@ public static class TrayMenu
     /// </summary>
     public const TrayCommand DefaultCommand = TrayCommand.Settings;
 
-    public static IReadOnlyList<TrayMenuItem> Build(TrayPresentation view) =>
-    [
-        // Who, before what. The account is first because it is the one fact the icon
-        // cannot show and the one people get wrong. Still a label, not a command —
-        // changing it is now the first thing in the window below.
-        TrayMenuItem.Label(view.Account),
-        TrayMenuItem.Separator,
+    /// <summary>
+    /// What the update item says, given the release that is waiting.
+    /// <para>
+    /// It names the version rather than saying "Update available", because the number
+    /// is what tells somebody whether this is the release they have been waiting for,
+    /// and because a menu item that says only "update" is one people click to find out
+    /// what it means.
+    /// </para>
+    /// </summary>
+    public static string UpdateLabel(string version) => $"Update to {version}";
 
-        // Bold, because this is what double-clicking the icon does. It is the settings
-        // window rather than the web app: this menu is opened when something looks
-        // wrong, and the window is the only place that says what.
-        new(TrayCommand.Settings, "Settings\u2026", true, IsDefault: DefaultCommand == TrayCommand.Settings),
-        new(TrayCommand.ShowSessions, "Open the web app", true),
-        TrayMenuItem.Separator,
+    public static IReadOnlyList<TrayMenuItem> Build(TrayPresentation view)
+    {
+        List<TrayMenuItem> items =
+        [
+            // Who, before what. The account is first because it is the one fact the icon
+            // cannot show and the one people get wrong. Still a label, not a command —
+            // changing it is now the first thing in the window below.
+            TrayMenuItem.Label(view.Account),
+            TrayMenuItem.Separator,
 
-        new(TrayCommand.Quit, "Quit", true),
-    ];
+            // Bold, because this is what double-clicking the icon does. It is the settings
+            // window rather than the web app: this menu is opened when something looks
+            // wrong, and the window is the only place that says what.
+            new(TrayCommand.Settings, "Settings\u2026", true, IsDefault: DefaultCommand == TrayCommand.Settings),
+            new(TrayCommand.ShowSessions, "Open the web app", true),
+        ];
+
+        // Only when there is one, and above Quit rather than below it: an item that is
+        // present but disabled for most of the product's life is an item people stop
+        // reading, and this is the one thing in the menu that is ever urgent.
+        //
+        // Under the same separator as Quit, because those two are the only items that
+        // change the program rather than show something about it — and Quit stays last,
+        // where anybody who has used the tray already expects to find it.
+        items.Add(TrayMenuItem.Separator);
+
+        if (view.UpdateVersion is { Length: > 0 } version)
+        {
+            items.Add(new(TrayCommand.Update, UpdateLabel(version), true));
+        }
+
+        items.Add(new(TrayCommand.Quit, "Quit", true));
+
+        return items;
+    }
 }

@@ -275,13 +275,15 @@ The count is independent of the connection state and is shown in all three: sess
 
 The tooltip is the whole diagnostic surface for someone whose phone has stopped seeing a machine, so it leads with the state and the machine name and is truncated to the 127 characters Windows will show — beyond that Windows drops the tooltip entirely rather than truncating it.
 
-Menu: the account line, *Settings…* (the default action, so a double-click opens it), *Open the web app*, *Quit*. Deliberately short — everything else lives in the settings window, so there is only ever one place that answers "am I signed in".
+Menu: the account line, *Settings…* (the default action, so a double-click opens it), *Open the web app*, *Update to x.yy* when there is one, *Quit*. Deliberately short — everything else lives in the settings window, so there is only ever one place that answers "am I signed in".
 
 The icon runs its own STA thread with its own message pump. The agent's main thread is busy awaiting the pipe server, and the tray is optional decoration: a machine with no interactive desktop, a policy that blocks shell integration or a broken shell must not stop the agent relaying. Failure to create it is logged and ignored.
 
 **Settings window.** A raw Win32 dialog created on the tray thread — no Windows Forms and no WPF, because the Windows Desktop runtime pack was removed from the build and adding it back doubles the download for one dialog. Controls are `CreateWindowExW` children of a registered window class, laid out at fixed offsets scaled by `GetDpiForWindow`, and given a `CreateFontW` "Segoe UI" via `WM_SETFONT` — without which every control draws in the 1990s bitmap system font.
 
-It shows, in order: the signed-in account and the hub connection in words; the live sessions with their program, age and whether each is waiting for input; a *Start when I sign in to Windows* checkbox; *Wrap a desktop shortcut…*; and the version with *Open logs* and *Send feedback…*.
+It shows, in order: the signed-in account and the hub connection in words; the live sessions with their program, age and whether each is waiting for input; a *Start when I sign in to Windows* checkbox; *Wrap a desktop shortcut…*; the version with *Open logs* and *Send feedback…*; and, only when there is something to say about it, a line about updates with an *Update now* button.
+
+The update row is laid out **below** the version line and hidden by default, so appearing and disappearing costs a window resize rather than a `MoveWindow` on every control beneath it. The window is silent about updates until there is something to say: a permanent "no updates available" is one more line to read in a window somebody opened because something else was wrong.
 
 Three decisions are load-bearing:
 
@@ -336,6 +338,34 @@ An `HKCU\...\Run` value is the fallback when task registration is refused, which
 Its last step **starts the agent**, because a logon trigger on its own means the install produces nothing the user can see until the next logon — no tray icon, no relay, and a phone that lists no machines. It goes through the registered task rather than launching the executable, so what runs now is exactly what will run at every logon; it falls back to starting the process directly where policy registered only the `Run` key, and does nothing at all when an agent is already serving this user. That last case is the common one on an upgrade, and the check is the agent's named pipe rather than the process list, because every wrapped session is also a process called `1remote`.
 
 **Responsibilities.** Session registry, one headless VT emulator per session, hub connection and authentication, output framing and flow control, idle/prompt detection, and routing input from the hub to the correct wrapper pipe.
+
+#### 4.2.1 Self-update
+
+Until this existed, nothing on a machine knew a release had happened. Every fix in 0.09 through 0.12 was for something that stopped the agent working, and each reached a user only if that user happened to re-run the install script — which is to say, only if they were already suffering the problem the fix was for.
+
+**Checking is automatic; installing is a click.** Two minutes after start and then every 24 hours, the agent asks which release is current. Not at second zero: logon is the busiest moment a machine has and the network is frequently not up yet, so a check at start mostly measures how long wifi took, and its failure would be the first thing the settings window said about a machine that is working perfectly. Opening the settings window also cuts the current wait short, so someone who has come to look at the agent gets an answer that is current rather than one from yesterday. `settings.json` carries `"update": { "check": bool, "intervalHours": number }`, and `ONEREMOTE_UPDATE_CHECK=0` turns checking off for one run.
+
+**The website, not the API.** `https://github.com/{repo}/releases/latest` is fetched with redirects disabled and the tag read out of the `Location` header. The API is limited to sixty anonymous calls an hour *per address, counted across everyone behind it* — issue #102 is that allowance being exhausted by strangers on an office network — and every agent on that network checking daily would make it routine. Following a redirect needs no API and has no allowance. A repository with no releases redirects nowhere, leaving a last segment of `latest`, which is not a tag and is read as "no release".
+
+**Versions are compared numerically.** The display form is `x.yy` and the minor part is a number: as strings `0.9` sorts *after* `0.10`, so a machine on 0.9 would consider itself ahead of every release for the next ninety. Anything that will not parse is never offered — treating "could not read it" as "probably newer" would have the agent install whatever a mangled tag pointed at. Strictly newer only, so anyone running a build from source ahead of the tag is not quietly moved backwards.
+
+**The install sequence** is the one `scripts/install.ps1` performs, in the same order and for the same reasons, with one step added. Each refusal below is a case where doing nothing is the better answer, because unlike the installer this runs unattended, and a bad outcome is not "try again" but "the tray icon is gone and the phone cannot see this machine":
+
+| Step | Refusal |
+| --- | --- |
+| Fetch `SHA256SUMS.txt` — a few hundred bytes, before the 30 MB, so an unverifiable release costs nothing on a tethered connection | No entry for this asset, or a first field that is not 64 hex characters. A download URL GitHub cannot resolve is answered with an HTML page and a **200**, which lands on disk looking like a file; refusing anything that is not a hash is what stops that page being treated as an answer |
+| Compare the installed file's hash to the published one | Equal → **nothing is written at all**. Windows judges an executable as it is written and its verdict is not stable between two writes of identical bytes (issue #108), so a pointless copy is a real risk of breaking a working install |
+| Download the asset and hash it | Mismatch → nothing is installed |
+| **Run the staged build with `--version`** | Will not start, exits non-zero, or reports a version that is not the tag → the old build stays. This is the step the installer does not have, and it is what makes an unattended update defensible: issues #92, #93 and #101 are all "the executable arrived and then would not start", which is precisely what a machine nobody is sitting at cannot recover from |
+| Swap it in | Failure → the previous file goes straight back |
+
+**Replacing a running image.** Windows refuses to delete or overwrite a running executable but will happily *rename* one, and a process keeps running from the file it started from whatever that file is now called. So the installed executable is renamed to `1remote.exe.old` and the new one copied into its place; the retired copy is deleted afterwards on a best-effort basis and swept up by a later update. When `.old` is itself still held — an agent that updated while sessions were open goes on running from it — a numbered name is used instead, so a second update succeeds rather than failing on the leavings of the first. This rename is also the whole of the rollback, which is why it is a rename and not a delete.
+
+**The agent will not restart itself under live sessions.** This is the rule the design turns on. Wrappers do not reconnect: a session whose agent goes away keeps running at the desk but is never shareable again, and nothing tells the person holding the phone. So the session count is read **after** the install rather than before — downloading and verifying takes long enough for someone to have started one meanwhile — and when it is not zero the window says the update is installed and will start running when those sessions have finished. A restart also happens only after the pipe server is disposed, because the replacement process would otherwise exit with "an agent is already running".
+
+`1remote update` is the same sequence from a command line, for a machine with no interactive desktop. It never restarts anything.
+
+**Everything the update path says goes to the file log** (`Update`, event 1500), not the console. The agent normally runs hidden from a scheduled task, where nothing is reading stderr — and "why has this machine never updated" is a question that can only be answered afterwards, from `%LOCALAPPDATA%\1RemoteCLI\logs`.
 
 ### 4.3 Headless VT emulator
 

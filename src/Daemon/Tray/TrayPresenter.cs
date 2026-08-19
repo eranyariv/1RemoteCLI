@@ -1,3 +1,5 @@
+using OneRemoteCli.Daemon.Update;
+
 namespace OneRemoteCli.Daemon.Tray;
 
 /// <summary>
@@ -33,12 +35,19 @@ public enum AgentState
 /// </param>
 /// <param name="SignInEnabled">Whether <em>Sign in</em> does anything useful right now.</param>
 /// <param name="SignOutEnabled">Whether there is an account to sign out of, or switch away from.</param>
+/// <param name="UpdateVersion">
+/// The release waiting to be installed, or null when there is none. Null for every
+/// stage but <see cref="Update.UpdateStage.Available"/>: a check in progress, a failed
+/// one and an update already installed are all things the menu should stay silent
+/// about, because none of them is something clicking would advance.
+/// </param>
 public readonly record struct TrayPresentation(
     string Tooltip,
     AgentState Badge,
     string Account,
     bool SignInEnabled,
-    bool SignOutEnabled);
+    bool SignOutEnabled,
+    string? UpdateVersion = null);
 
 /// <summary>
 /// Turning agent state into what the tray shows.
@@ -60,7 +69,8 @@ public static class TrayPresenter
         AgentState state,
         int sessionCount,
         string machineName,
-        string? account = null)
+        string? account = null,
+        UpdateStatus update = default)
     {
         string headline = state switch
         {
@@ -95,7 +105,8 @@ public static class TrayPresenter
             // already signed in would send the user round a loop that changes nothing.
             Account: signedIn ? $"Signed in as {account}" : "Not signed in",
             SignInEnabled: !signedIn,
-            SignOutEnabled: signedIn);
+            SignOutEnabled: signedIn,
+            UpdateVersion: update.CanInstall ? update.Version : null);
     }
 
     /// <summary>

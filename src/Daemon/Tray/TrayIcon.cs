@@ -1,6 +1,7 @@
 using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using OneRemoteCli.Daemon.Update;
 using static OneRemoteCli.Daemon.Tray.NativeMethods;
 
 namespace OneRemoteCli.Daemon.Tray;
@@ -89,9 +90,14 @@ public sealed class TrayIcon : IDisposable
         {
             [TrayCommand.ShowSessions] = onShowSessions ?? throw new ArgumentNullException(nameof(onShowSessions)),
             [TrayCommand.Quit] = onQuit ?? throw new ArgumentNullException(nameof(onQuit)),
+
+            // The same action the settings window's button runs. Two ways in, one thing
+            // done: the menu is where somebody who has just seen the icon looks, and the
+            // window is where somebody who was already reading the version is.
+            [TrayCommand.Update] = (settings ?? throw new ArgumentNullException(nameof(settings))).Update,
         };
 
-        _settings = new SettingsWindow(settings ?? throw new ArgumentNullException(nameof(settings)));
+        _settings = new SettingsWindow(settings);
 
         _wndProc = HandleMessage;
 
@@ -122,9 +128,9 @@ public sealed class TrayIcon : IDisposable
     /// because touching a window from another thread is how tray icons come to be wedged.
     /// </para>
     /// </summary>
-    public void Update(AgentState state, int sessions, string? account = null)
+    public void Update(AgentState state, int sessions, string? account = null, UpdateStatus update = default)
     {
-        _current = new TrayState(state, sessions, account);
+        _current = new TrayState(state, sessions, account, update);
 
         Ask(WM_TRAY_UPDATE);
     }
@@ -430,7 +436,7 @@ public sealed class TrayIcon : IDisposable
     {
         TrayState state = _current;
 
-        return TrayPresenter.Present(state.State, state.Sessions, _machineName, state.Account);
+        return TrayPresenter.Present(state.State, state.Sessions, _machineName, state.Account, state.Update);
     }
 
     private void Render()
@@ -550,5 +556,5 @@ public sealed class TrayIcon : IDisposable
     /// looking for a fault that never existed.
     /// </para>
     /// </summary>
-    private sealed record TrayState(AgentState State, int Sessions, string? Account);
+    private sealed record TrayState(AgentState State, int Sessions, string? Account, UpdateStatus Update = default);
 }

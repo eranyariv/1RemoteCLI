@@ -34,6 +34,18 @@ public readonly record struct SettingsNotice(string Text, NoticeKind Kind);
 /// Prompts for a shortcut and wraps it, given the window to parent the file dialog on.
 /// Returns null when the user cancelled, so nothing is said.
 /// </param>
+/// <param name="Update">
+/// Installs the release the agent has found. Only ever invoked when
+/// <see cref="SettingsView.CanUpdate"/> was true, and it says nothing back: what
+/// happened arrives through <see cref="Read"/> like everything else in this window,
+/// because the update outlives the click by a minute or two.
+/// </param>
+/// <param name="CheckForUpdate">
+/// Asks for the periodic check to happen now, once, as the window opens. Someone who
+/// has come here to look at the agent is the one person who wants an answer that is
+/// current, and without this the first check is two minutes after logon and the next
+/// one a day later — so the window would spend most of its life reporting yesterday.
+/// </param>
 public sealed record SettingsActions(
     Func<SettingsView> Read,
     Func<bool> ReadStartAtLogon,
@@ -42,7 +54,9 @@ public sealed record SettingsActions(
     Action SignOut,
     Action OpenLogs,
     Action SendFeedback,
-    Func<IntPtr, SettingsNotice?> WrapShortcut);
+    Func<IntPtr, SettingsNotice?> WrapShortcut,
+    Action Update,
+    Action? CheckForUpdate = null);
 
 /// <summary>
 /// The agent's settings window.
@@ -71,6 +85,15 @@ internal sealed class SettingsWindow
     private const int IdWrapShortcut = 103;
     private const int IdOpenLogs = 104;
     private const int IdSendFeedback = 105;
+    private const int IdUpdate = 106;
+
+    /// <summary>
+    /// No resize border and no maximise box: the layout is fixed arithmetic, so a
+    /// window the user could stretch would only ever show more grey. Named here rather
+    /// than where the window is created because the height changes when the update row
+    /// appears, and re-measuring the frame needs the same style back.
+    /// </summary>
+    private const int Style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
 
     private const int RefreshTimer = 1;
     private const uint RefreshMilliseconds = 1000;
@@ -142,6 +165,8 @@ internal sealed class SettingsWindow
     private IntPtr _sessions;
     private IntPtr _startAtLogon;
     private IntPtr _versionLabel;
+    private IntPtr _updateLabel;
+    private IntPtr _update;
 
     /// <summary>Where the list box sits, in 96-DPI units, so its hairline can be drawn.</summary>
     private (int X, int Y, int Width, int Height) _sessionsBounds;
@@ -151,6 +176,14 @@ internal sealed class SettingsWindow
     /// than to a constant somebody has to remember to update.
     /// </summary>
     private int _clientHeight = 432;
+
+    /// <summary>Heights with and without the update row. See <see cref="ShowUpdate"/>.</summary>
+    private int _collapsedHeight;
+
+    private int _expandedHeight;
+
+    /// <summary>Whether the update row is on screen, so an unchanged state costs nothing.</summary>
+    private bool _updateShown;
 
     /// <summary>
     /// What the list currently shows. Kept so the refresh can leave the box alone when
@@ -176,6 +209,12 @@ internal sealed class SettingsWindow
     /// </summary>
     internal void Show()
     {
+        // Before anything is drawn, and on every open rather than only the first: the
+        // answer arrives through the same once-a-second refresh as everything else, so
+        // by the time someone has read the account line the update row is either there
+        // or the machine really is current.
+        _actions.CheckForUpdate?.Invoke();
+
         if (_window != IntPtr.Zero)
         {
             if (IsIconic(_window))
@@ -296,8 +335,6 @@ internal sealed class SettingsWindow
 
         // No resize border and no maximise box: the layout is fixed arithmetic, so a
         // window the user can stretch would only ever show more grey.
-        const int Style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-
         _window = CreateWindowEx(
             WS_EX_APPWINDOW,
             _className,
@@ -379,7 +416,9 @@ internal sealed class SettingsWindow
 
 
     /// <summary>Sizes to the client area we want, then centres on the screen.</summary>
-    private void Size(int style)
+    private void Size(int style) => Size(style, centre: true);
+
+    private void Size(int style, bool centre)
     {
         var bounds = new RECT
         {
@@ -394,10 +433,23 @@ internal sealed class SettingsWindow
         int width = bounds.right - bounds.left;
         int height = bounds.bottom - bounds.top;
 
+        int x = Math.Max(0, (GetSystemMetrics(SM_CXSCREEN) - width) / 2);
+        int y = Math.Max(0, (GetSystemMetrics(SM_CYSCREEN) - height) / 2);
+
+        // Growing an open window keeps its top-left where the user put it. The update
+        // row appears minutes after the window opened, and a dialog that jumps back to
+        // the middle of the screen while somebody is reading it is worse than the row
+        // it made space for.
+        if (!centre && GetWindowRect(_window, out RECT current))
+        {
+            x = current.left;
+            y = current.top;
+        }
+
         MoveWindow(
             _window,
-            Math.Max(0, (GetSystemMetrics(SM_CXSCREEN) - width) / 2),
-            Math.Max(0, (GetSystemMetrics(SM_CYSCREEN) - height) / 2),
+            x,
+            y,
             width,
             height,
             false);
@@ -505,7 +557,46 @@ internal sealed class SettingsWindow
             SettingsPresenter.CloseLabel,
             BS_DEFPUSHBUTTON);
 
-        _clientHeight = y + ButtonHeight + Margin;
+        y += ButtonHeight;
+        _collapsedHeight = y + Margin;
+
+        // Last, and hidden until there is something to say — which is almost never.
+        //
+        // Last specifically so that appearing and disappearing costs one call to resize
+        // the window and nothing else. Anywhere further up, every control below it would
+        // have to be moved each time the agent finished a check, and a window whose
+        // buttons shift under the pointer while it is open is worse than one that is a
+        // row taller than it needs to be.
+        //
+        // Below the version rather than above it because the two say the same kind of
+        // thing, and "Version 0.12" reading directly above "Version 0.13 is available"
+        // is what makes the second sentence mean anything.
+        const int updateWidth = 112;
+
+        y += Gap;
+
+        _updateLabel = Static(
+            instance,
+            Margin,
+            y + ((ButtonHeight - RowHeight) / 2),
+            content - updateWidth - Gap,
+            RowHeight,
+            style: SS_LEFT);
+
+        _update = Button(
+            instance,
+            IdUpdate,
+            ClientWidth - Margin - updateWidth,
+            y,
+            updateWidth,
+            ButtonHeight,
+            SettingsPresenter.UpdateLabel);
+
+        ShowWindow(_updateLabel, SW_HIDE);
+        ShowWindow(_update, SW_HIDE);
+
+        _expandedHeight = y + ButtonHeight + Margin;
+        _clientHeight = _collapsedHeight;
     }
 
     private IntPtr Static(
@@ -621,9 +712,11 @@ internal sealed class SettingsWindow
         SetWindowText(_accountLabel, view.Account);
         SetWindowText(_connectionLabel, view.Connection);
         SetWindowText(_versionLabel, view.Version);
-        SetWindowText(
-            _signInOut,
-            view.SignedIn ? SettingsPresenter.SignOutLabel : SettingsPresenter.SignInLabel);
+        SetWindowText(_signInOut, view.SignedIn ? SettingsPresenter.SignOutLabel : SettingsPresenter.SignInLabel);
+
+        SetWindowText(_updateLabel, view.Update);
+        EnableWindow(_update, view.CanUpdate);
+        ShowUpdate(view.Update.Length > 0);
 
         if (!_shown.SequenceEqual(view.Sessions))
         {
@@ -636,9 +729,35 @@ internal sealed class SettingsWindow
         }
     }
 
-    private void FillSessions(IReadOnlyList<string> lines)
+    /// <summary>
+    /// Puts the update row on screen, or takes it away, growing the window to match.
+    /// <para>
+    /// Only on a change. This is called once a second from the refresh, and resizing a
+    /// window that is already the right size makes it flicker for as long as it is open.
+    /// </para>
+    /// </summary>
+    private void ShowUpdate(bool show)
     {
-        // Preserved across the rebuild, so a session ending three rows up does not yank
+        if (show == _updateShown)
+        {
+            return;
+        }
+
+        _updateShown = show;
+
+        ShowWindow(_updateLabel, show ? SW_SHOW : SW_HIDE);
+        ShowWindow(_update, show ? SW_SHOW : SW_HIDE);
+
+        _clientHeight = show ? _expandedHeight : _collapsedHeight;
+
+        if (_window != IntPtr.Zero)
+        {
+            Size(Style, centre: false);
+        }
+    }
+
+    private void FillSessions(IReadOnlyList<string> lines)
+    {        // Preserved across the rebuild, so a session ending three rows up does not yank
         // the list out from under someone reading the bottom of it.
         IntPtr top = SendMessage(_sessions, LB_GETTOPINDEX, IntPtr.Zero, IntPtr.Zero);
 
@@ -883,6 +1002,14 @@ internal sealed class SettingsWindow
 
             case IdWrapShortcut:
                 OnWrapShortcut();
+                break;
+
+            // Off the message thread, like every other action here: this downloads
+            // thirty megabytes and then runs a program, and doing it on the thread that
+            // pumps the tray's messages would freeze the icon and the window with it.
+            // The refresh timer picks the progress up a second later.
+            case IdUpdate:
+                OffThread(_actions.Update);
                 break;
         }
     }

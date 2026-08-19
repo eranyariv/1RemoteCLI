@@ -15,6 +15,7 @@ using OneRemoteCli.Daemon.Install;
 using OneRemoteCli.Daemon.Pty;
 using OneRemoteCli.Daemon.Shell;
 using OneRemoteCli.Daemon.Tray;
+using OneRemoteCli.Daemon.Update;
 using OneRemoteCli.Daemon.Wrapper;
 using OneRemoteCli.Protocol;
 using OneRemoteCli.Protocol.Diagnostics;
@@ -100,6 +101,9 @@ public static class Program
 
             case CommandKind.Uninstall:
                 return RunUninstall();
+
+            case CommandKind.Update:
+                return await RunUpdateAsync().ConfigureAwait(false);
 
             case CommandKind.SelfCheck:
                 return RunSelfCheck();
@@ -244,6 +248,79 @@ public static class Program
 
     private static int RunUninstall() => Report(Installer.Uninstall(), installing: false);
 
+    /// <summary>
+    /// <c>1remote update</c>: fetch the latest release and install it over this
+    /// executable.
+    /// <para>
+    /// The agent does this by itself when somebody clicks the tray, and this is the same
+    /// code reached from a command line. It exists for the machine with no interactive
+    /// desktop, and for the person who would rather see what happened than trust an icon
+    /// — which, given that every release since 0.09 has fixed something that stopped the
+    /// agent starting, is a reasonable preference.
+    /// </para>
+    /// <para>
+    /// It does not restart anything. An agent that is running keeps running from the
+    /// file it started with, and takes the new build at its next start; killing it here
+    /// would silently unshare every session on the machine, because wrappers do not
+    /// reconnect.
+    /// </para>
+    /// </summary>
+    private static async Task<int> RunUpdateAsync()
+    {
+        using HttpClient checks = ReleaseLookup.CreateClient();
+
+        string? tag;
+
+        try
+        {
+            tag = await ReleaseLookup.LatestTagAsync(checks).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            Console.Error.WriteLine($"1remote: could not ask github.com which release is current ({ex.Message}).");
+            return ExitCannotRun;
+        }
+
+        if (tag is null)
+        {
+            Console.Error.WriteLine("1remote: github.com did not point at a release.");
+            return ExitCannotRun;
+        }
+
+        if (!ReleaseVersion.IsUpgrade(tag, ProductVersion.Current))
+        {
+            Console.WriteLine($"1remote {ProductVersion.Current} is the current release.");
+            return 0;
+        }
+
+        Console.WriteLine($"Updating from {ProductVersion.Current} to {tag}.");
+
+        using HttpClient downloads = ReleaseLookup.CreateDownloadClient();
+
+        UpdateResult result = await AgentUpdate.ApplyAsync(
+            tag,
+            ReleaseSource.AssetName,
+            Installer.ExecutablePath,
+            Path.Combine(Path.GetTempPath(), "1remotecli-update"),
+            AgentUpdate.StepsFor(downloads, tag)).ConfigureAwait(false);
+
+        if (!result.Ok)
+        {
+            Console.Error.WriteLine($"1remote: {result.Message}");
+            return ExitCannotRun;
+        }
+
+        Console.WriteLine(result.Message);
+
+        if (result.Replaced && AgentLaunch.IsRunning())
+        {
+            Console.WriteLine(
+                "The agent that is running is still the old build. It takes the new one when it next starts, which is the next time you log on.");
+        }
+
+        return 0;
+    }
+
     private static int RunSelfCheck()
     {
         IReadOnlyList<StepResult> checks = SelfCheck.Run();
@@ -375,6 +452,24 @@ public static class Program
 
     private static async Task<int> RunAgentAsync()
     {
+        // Restarting has to happen after this method has returned, not inside it: the
+        // pipe is released when the host is disposed, and a replacement agent started
+        // before that would find the name taken and exit with "already running".
+        bool restart = false;
+
+        int code = await RunAgentOnceAsync(() => restart = true).ConfigureAwait(false);
+
+        if (restart)
+        {
+            Console.WriteLine("1remote agent: restarting into the new version.");
+            AgentLaunch.Start(Installer.ExecutablePath);
+        }
+
+        return code;
+    }
+
+    private static async Task<int> RunAgentOnceAsync(Action requestRestart)
+    {
         using ILoggerFactory loggers = AgentLogging.Create();
         ILogger logger = loggers.CreateLogger("Agent");
 
@@ -445,16 +540,51 @@ public static class Program
         host.Sessions.Changed += () =>
             Console.WriteLine($"1remote agent: {host.Sessions.Count} session(s) attached.");
 
-        using TrayIcon? tray = StartTray(identity, hub, host, accounts, stopping);
+        // Its own clients: the check must not follow redirects, because the redirect is
+        // the answer, and the download must, because an asset URL redirects to the host
+        // the bytes live on.
+        using HttpClient checks = ReleaseLookup.CreateClient();
+        using HttpClient downloads = ReleaseLookup.CreateDownloadClient();
+
+        // To the file log, and not the console: the agent normally runs hidden from a
+        // scheduled task, where nothing is reading stderr, and "why has this machine
+        // never updated" is a question that can only be answered afterwards.
+        ILogger updateLogger = loggers.CreateLogger("Update");
+
+        var updates = new UpdateService(
+            cancellationToken => ReleaseLookup.LatestTagAsync(checks, cancellationToken),
+            (tag, cancellationToken) => AgentUpdate.ApplyAsync(
+                tag,
+                ReleaseSource.AssetName,
+                Installer.ExecutablePath,
+                Path.Combine(Path.GetTempPath(), "1remotecli-update"),
+                AgentUpdate.StepsFor(downloads, tag),
+                cancellationToken),
+            () => host.Sessions.Count,
+            () =>
+            {
+                requestRestart();
+                stopping.Cancel();
+            },
+            UpdateOptions.Load(log: updateLogger.Update),
+            log: updateLogger.Update);
+
+        using TrayIcon? tray = StartTray(identity, hub, host, accounts, updates, stopping);
 
         // The hub loop runs alongside the pipe server rather than gating it: a machine
         // with no internet must still be able to run local sessions.
         Task relay = hub.RunAsync(stopping.Token);
 
+        // Detached, and never awaited for its result: an agent that stopped relaying
+        // because a version check failed would be a far worse bug than the one this
+        // exists to fix.
+        Task checking = updates.RunAsync(stopping.Token);
+
         try
         {
             await host.RunAsync(stopping.Token).ConfigureAwait(false);
             await relay.ConfigureAwait(false);
+            await checking.ConfigureAwait(false);
             return 0;
         }
         catch (AgentAlreadyRunningException ex)
@@ -478,6 +608,7 @@ public static class Program
         AgentHubClient hub,
         AgentHost host,
         SignedInAccountWatcher accounts,
+        UpdateService updates,
         CancellationTokenSource stopping)
     {
         if (!Environment.UserInteractive)
@@ -507,7 +638,8 @@ public static class Program
                 State(),
                 accounts.Account?.Description,
                 Sessions(),
-                DateTimeOffset.UtcNow),
+                DateTimeOffset.UtcNow,
+                updates.Status),
 
             // Asked of Task Scheduler and the registry, never remembered. The user can
             // have turned this off in Task Manager's Startup tab since the agent
@@ -525,7 +657,16 @@ public static class Program
             // A mailto: goes to the shell exactly like a URL does, so the user's own
             // mail client opens with the version already in the subject.
             SendFeedback: () => Launch(Feedback.MailTo),
-            WrapShortcut: PickAndWrap);
+            WrapShortcut: PickAndWrap,
+
+            // In this process, unlike sign-in: the update has to know how many sessions
+            // are live before it restarts anything, and that is a question only this
+            // process can answer.
+            Update: () => updates.InstallAsync().GetAwaiter().GetResult(),
+
+            // Cheap — it only cuts short the wait the check loop is already in — so the
+            // window can afford to ask every time it opens.
+            CheckForUpdate: updates.CheckSoon);
 
         TrayIcon tray;
 
@@ -545,11 +686,12 @@ public static class Program
             return null;
         }
 
-        void Refresh() => tray.Update(State(), host.Sessions.Count, accounts.Account?.Description);
+        void Refresh() => tray.Update(State(), host.Sessions.Count, accounts.Account?.Description, updates.Status);
 
         hub.StateChanged += Refresh;
         host.Sessions.Changed += Refresh;
         accounts.Changed += Refresh;
+        updates.Changed += Refresh;
 
         Refresh();
 

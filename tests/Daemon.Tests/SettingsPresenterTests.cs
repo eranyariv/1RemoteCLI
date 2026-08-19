@@ -1,4 +1,5 @@
 using OneRemoteCli.Daemon.Tray;
+using OneRemoteCli.Daemon.Update;
 using OneRemoteCli.Protocol;
 using OneRemoteCli.Protocol.Hub;
 
@@ -167,4 +168,79 @@ public sealed class SettingsPresenterTests
     {
         Assert.Equal($"Version {ProductVersion.Current}", View().Version);
     }
+
+    private static SettingsView WithUpdate(UpdateStatus update) =>
+        SettingsPresenter.Present(AgentState.Connected, "ada@example.com", [], Now, update);
+
+    /// <summary>
+    /// The window is silent about updates until there is something to say. A permanent
+    /// "no updates available" line is one more thing to read in a window somebody opened
+    /// because something else was wrong.
+    /// </summary>
+    [Fact]
+    public void SaysNothingAboutUpdatesWhenThereIsNothingToSay()
+    {
+        SettingsView view = View();
+
+        Assert.Equal(string.Empty, view.Update);
+        Assert.False(view.CanUpdate);
+    }
+
+    [Fact]
+    public void NamesTheVersionThatIsWaiting()
+    {
+        // The number, not "an update": it is what tells somebody whether this is the
+        // release with the fix they have been waiting for.
+        SettingsView view = WithUpdate(new UpdateStatus(UpdateStage.Available, "0.13"));
+
+        Assert.Equal("Version 0.13 is available.", view.Update);
+        Assert.True(view.CanUpdate);
+    }
+
+    /// <summary>
+    /// The button is live only when a click would do something. Everything else here is
+    /// a report on work already under way.
+    /// </summary>
+    [Theory]
+    [InlineData(UpdateStage.Checking)]
+    [InlineData(UpdateStage.Installing)]
+    [InlineData(UpdateStage.Restart)]
+    [InlineData(UpdateStage.Failed)]
+    public void TheButtonIsDeadWhileThereIsNothingToClick(UpdateStage stage) =>
+        Assert.False(WithUpdate(new UpdateStatus(stage, "0.13", "something")).CanUpdate);
+
+    [Fact]
+    public void SaysWhatItIsDoing()
+    {
+        Assert.Equal("Checking for updates\u2026", WithUpdate(new UpdateStatus(UpdateStage.Checking)).Update);
+        Assert.Equal(
+            "Installing version 0.13\u2026",
+            WithUpdate(new UpdateStatus(UpdateStage.Installing, "0.13")).Update);
+    }
+
+    /// <summary>
+    /// When sessions are in the way the reason is the whole content of the line —
+    /// without it this reads as the update having half-worked, and the reader's next
+    /// move is to go looking for a fault that is not there.
+    /// </summary>
+    [Fact]
+    public void PassesOnWhyItIsWaiting()
+    {
+        const string waiting = "Installed. It starts running when the session on this machine has finished.";
+
+        Assert.Equal(waiting, WithUpdate(new UpdateStatus(UpdateStage.Restart, "0.13", waiting)).Update);
+    }
+
+    [Fact]
+    public void SaysWhyAFailedUpdateFailed()
+    {
+        SettingsView view = WithUpdate(
+            new UpdateStatus(UpdateStage.Failed, "0.13", "The download does not match its checksum."));
+
+        Assert.Equal("The download does not match its checksum.", view.Update);
+    }
+
+    [Fact]
+    public void HasSomethingToSayAboutAFailureThatCameWithNoReason() =>
+        Assert.NotEqual(string.Empty, WithUpdate(new UpdateStatus(UpdateStage.Failed)).Update);
 }

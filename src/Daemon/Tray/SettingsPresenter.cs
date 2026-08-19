@@ -1,3 +1,4 @@
+using OneRemoteCli.Daemon.Update;
 using OneRemoteCli.Protocol;
 using OneRemoteCli.Protocol.Hub;
 
@@ -34,13 +35,20 @@ public readonly record struct SessionSummary(
 /// </param>
 /// <param name="Sessions">One line per session, oldest first.</param>
 /// <param name="Version">The build, which is the first thing any report needs.</param>
+/// <param name="Update">
+/// What the agent knows about newer releases, as a sentence. Empty when there is
+/// nothing to say, so the window can leave the line out rather than print "no update".
+/// </param>
+/// <param name="CanUpdate">Whether the update button does anything right now.</param>
 public readonly record struct SettingsView(
     string Account,
     string Connection,
     bool SignedIn,
     bool HasSessions,
     IReadOnlyList<string> Sessions,
-    string Version);
+    string Version,
+    string Update = "",
+    bool CanUpdate = false);
 
 /// <summary>
 /// What the settings window says.
@@ -81,11 +89,18 @@ public static class SettingsPresenter
     /// </summary>
     public const string NoSessions = "No sessions. Run '1remote pwsh' to share one.";
 
+    /// <summary>
+    /// The update button. It says what will happen rather than what state the machine
+    /// is in, because the line above it already says the state.
+    /// </summary>
+    public const string UpdateLabel = "Update now";
+
     public static SettingsView Present(
         AgentState state,
         string? account,
         IReadOnlyList<SessionSummary> sessions,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        UpdateStatus update = default)
     {
         ArgumentNullException.ThrowIfNull(sessions);
 
@@ -109,8 +124,43 @@ public static class SettingsPresenter
             signedIn,
             lines.Length > 0,
             lines.Length > 0 ? lines : [NoSessions],
-            $"Version {ProductVersion.Current}");
+            $"Version {ProductVersion.Current}",
+            Describe(update),
+            update.CanInstall);
     }
+
+    /// <summary>
+    /// What the window says about newer releases.
+    /// <para>
+    /// Empty for the state the machine is in almost all the time. A permanent "you are
+    /// up to date" is a line that is read once and then never again, and its cost is
+    /// that the one time it says something else, it is in a place the reader's eye has
+    /// learned to skip.
+    /// </para>
+    /// <para>
+    /// A failed check does say so. It is the difference between an agent that has
+    /// looked and found nothing and one that has not been able to look for a month,
+    /// and only the second is worth acting on.
+    /// </para>
+    /// </summary>
+    public static string Describe(UpdateStatus update) => update.Stage switch
+    {
+        UpdateStage.Checking => "Checking for updates\u2026",
+
+        // The version, not "an update": it is what tells somebody whether this is the
+        // release with the fix they have been waiting for.
+        UpdateStage.Available => $"Version {update.Version} is available.",
+        UpdateStage.Installing => $"Installing version {update.Version}\u2026",
+
+        // The message carries the reason when there are sessions in the way, and that
+        // reason is the whole content of the line.
+        UpdateStage.Restart => update.Message is { Length: > 0 } waiting
+            ? waiting
+            : $"Version {update.Version} is installed. Restarting\u2026",
+
+        UpdateStage.Failed => update.Message ?? "The last check for updates did not work.",
+        _ => string.Empty,
+    };
 
     /// <summary>
     /// One session as a line: what it is, what it is running, how long it has been

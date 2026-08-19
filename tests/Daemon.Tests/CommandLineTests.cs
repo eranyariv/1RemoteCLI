@@ -68,6 +68,7 @@ public class CommandLineTests
     [InlineData("status", CommandKind.Status)]
     [InlineData("install", CommandKind.Install)]
     [InlineData("uninstall", CommandKind.Uninstall)]
+    [InlineData("update", CommandKind.Update)]
     public void RecognisesSubcommands(string token, CommandKind expected)
     {
         Assert.Equal(expected, CommandLine.Parse([token]).Kind);
@@ -76,6 +77,7 @@ public class CommandLineTests
     [Theory]
     [InlineData("install")]
     [InlineData("uninstall")]
+    [InlineData("update")]
     [InlineData("wrap-shortcut")]
     public void EverySubcommandIsDocumented(string token)
     {

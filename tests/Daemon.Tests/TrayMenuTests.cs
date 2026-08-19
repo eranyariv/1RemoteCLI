@@ -1,4 +1,5 @@
 using OneRemoteCli.Daemon.Tray;
+using OneRemoteCli.Daemon.Update;
 using OneRemoteCli.Protocol;
 
 namespace OneRemoteCli.Daemon.Tests;
@@ -17,6 +18,14 @@ public sealed class TrayMenuTests
 {
     private static IReadOnlyList<TrayMenuItem> Menu(AgentState state, string? account = null) =>
         TrayMenu.Build(TrayPresenter.Present(state, 1, "ADA-LAPTOP", account));
+
+    private static IReadOnlyList<TrayMenuItem> MenuWithUpdate(string version = "0.13") =>
+        TrayMenu.Build(TrayPresenter.Present(
+            AgentState.Connected,
+            1,
+            "ADA-LAPTOP",
+            "ada@example.com",
+            new UpdateStatus(UpdateStage.Available, version)));
 
     private static TrayMenuItem Item(IReadOnlyList<TrayMenuItem> menu, TrayCommand command) =>
         menu.Single(item => item.Command == command);
@@ -92,12 +101,51 @@ public sealed class TrayMenuTests
     {
         // The renderer dispatches by position, so a duplicated command would be a
         // menu where one of two identical-looking items silently does nothing.
-        IReadOnlyList<TrayMenuItem> menu = Menu(AgentState.Connected, "ada@example.com");
+        IReadOnlyList<TrayMenuItem> menu = MenuWithUpdate();
 
         TrayCommand[] commands = [.. menu.Where(item => item.Command != TrayCommand.None).Select(item => item.Command)];
 
         Assert.Equal(commands.Length, commands.Distinct().Count());
         Assert.Equal(Enum.GetValues<TrayCommand>().Length - 1, commands.Length);
+    }
+
+    /// <summary>
+    /// The one item that is not always there. Offering "Update to 0.13" on a machine
+    /// that is already on 0.13 would be an invitation to a download that decides it has
+    /// nothing to do.
+    /// </summary>
+    [Fact]
+    public void ThereIsNothingToUpdateToUntilThereIs() =>
+        Assert.DoesNotContain(Menu(AgentState.Connected, "ada@example.com"), item => item.Command == TrayCommand.Update);
+
+    [Fact]
+    public void OffersTheReleaseThatWasFound() =>
+        Assert.Equal("Update to 0.13", Item(MenuWithUpdate(), TrayCommand.Update).Text);
+
+    /// <summary>
+    /// Above Quit, because the two are the only items that change the process, and Quit
+    /// stays last where muscle memory expects it.
+    /// </summary>
+    [Fact]
+    public void TheUpdateSitsJustAboveQuit()
+    {
+        IReadOnlyList<TrayMenuItem> menu = MenuWithUpdate();
+
+        int update = menu.ToList().FindIndex(item => item.Command == TrayCommand.Update);
+        int quit = menu.ToList().FindIndex(item => item.Command == TrayCommand.Quit);
+
+        Assert.Equal(quit - 1, update);
+    }
+
+    [Fact]
+    public void TheUpdateIsSetOffFromWhatItIsNot()
+    {
+        // A separator above it: it is not another way to look at this machine, it
+        // changes the program.
+        IReadOnlyList<TrayMenuItem> menu = MenuWithUpdate();
+        int update = menu.ToList().FindIndex(item => item.Command == TrayCommand.Update);
+
+        Assert.Equal(TrayCommand.None, menu[update - 1].Command);
     }
 
     [Fact]

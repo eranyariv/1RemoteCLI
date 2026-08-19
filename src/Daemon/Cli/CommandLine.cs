@@ -27,6 +27,9 @@ public enum CommandKind
     /// <summary>Undo <see cref="Install"/>.</summary>
     Uninstall,
 
+    /// <summary>Check for a newer release and install it.</summary>
+    Update,
+
     /// <summary>
     /// Prove this build of the executable actually works. Meant for the publish script
     /// rather than for users, which is why it is absent from the help.
@@ -106,6 +109,7 @@ public static class CommandLine
         ["status"] = CommandKind.Status,
         ["install"] = CommandKind.Install,
         ["uninstall"] = CommandKind.Uninstall,
+        ["update"] = CommandKind.Update,
         ["self-check"] = CommandKind.SelfCheck,
     };
 
@@ -337,6 +341,7 @@ public static class CommandLine
           1remote status                          Show who is signed in
           1remote install                         Start the agent now and at every logon
           1remote uninstall                       Stop starting the agent at logon
+          1remote update                          Install the latest release
           1remote wrap-shortcut <shortcut.lnk>    Copy a shortcut into a shareable one
 
         Options:

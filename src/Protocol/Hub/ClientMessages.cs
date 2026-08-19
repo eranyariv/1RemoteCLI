@@ -221,8 +221,7 @@ public sealed class CreateProjectRequest
 /// Client to hub. Edits an existing project's fields (not its icon, which is
 /// uploaded over a separate HTTP endpoint — see <c>docs/deployment.md</c>).
 /// <para>
-/// Works on the reserved General project too: the issue only requires it to be
-/// non-deletable, not immutable.
+/// General's optional metadata can be edited, but its reserved name is immutable.
 /// </para>
 /// </summary>
 [MessagePackObject]

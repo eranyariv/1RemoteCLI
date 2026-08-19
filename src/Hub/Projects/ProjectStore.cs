@@ -78,11 +78,10 @@ public sealed class ProjectState
 /// silently lost usage counter.
 /// </para>
 /// <para>
-/// <b>The General project is lazily seeded, never deleted, and freely edited.</b>
+/// <b>The General project is lazily seeded and never deleted or renamed.</b>
 /// Every partition access ensures it exists first, so a user who has never touched
-/// projects still has exactly one - the one new sessions default to. The issue
-/// requires only that it cannot be deleted, not that it cannot be renamed, so update
-/// works on it like any other project.
+/// projects still has exactly one - the fixed catch-all new sessions default to.
+/// Its optional metadata and icon remain editable.
 /// </para>
 /// <para>
 /// <b>Icons are files next to the state file, not inside it.</b> A user's uploaded
@@ -108,6 +107,7 @@ public sealed class ProjectStore
 
     private static readonly HashSet<string> AllowedIconContentTypes =
         new(StringComparer.OrdinalIgnoreCase) { "image/png", "image/jpeg", "image/webp" };
+    private static readonly byte[] PngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
     private static readonly JsonSerializerOptions Json = new()
     {
@@ -116,11 +116,13 @@ public sealed class ProjectStore
     };
 
     private readonly object _gate = new();
+    private readonly object _ioGate = new();
     private readonly TimeProvider _time;
     private readonly ILogger<ProjectStore> _logger;
     private readonly ProjectState _state;
 
     private bool _dirty;
+    private bool _persistenceAvailable = true;
 
     public ProjectStore(IOptions<ProjectsOptions> options, TimeProvider time, ILogger<ProjectStore> logger)
     {
@@ -193,50 +195,64 @@ public sealed class ProjectStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(userKey);
 
-        ProjectRecord record;
-
-        lock (_gate)
+        lock (_ioGate)
         {
-            List<ProjectRecord> partition = PartitionOf(userKey);
-
-            if (!TryValidate(name, description, siteUrl, repoUrl, out error))
+            lock (_gate)
             {
-                project = null;
-                return false;
+                if (!_persistenceAvailable)
+                {
+                    project = null;
+                    error = ErrorCodes.InternalError;
+                    return false;
+                }
+
+                List<ProjectRecord> partition = PartitionOf(userKey);
+
+                if (!TryValidate(name, description, siteUrl, repoUrl, out error))
+                {
+                    project = null;
+                    return false;
+                }
+
+                if (NameTaken(partition, name, excludeId: null))
+                {
+                    project = null;
+                    error = ErrorCodes.DuplicateProjectName;
+                    return false;
+                }
+
+                ProjectRecord record = new()
+                {
+                    ProjectId = Guid.NewGuid().ToString("n"),
+                    Name = name.Trim(),
+                    Description = Normalize(description, MaxDescriptionLength),
+                    SiteUrl = Normalize(siteUrl, MaxUrlLength),
+                    RepoUrl = Normalize(repoUrl, MaxUrlLength),
+                    IsGeneral = false,
+                    CreatedAt = _time.GetUtcNow(),
+                };
+
+                partition.Add(record);
+                _dirty = true;
+
+                if (!Flush())
+                {
+                    partition.Remove(record);
+                    project = null;
+                    error = ErrorCodes.InternalError;
+                    return false;
+                }
+
+                project = record.ToInfo();
+                error = null;
+                return true;
             }
-
-            if (NameTaken(partition, name, excludeId: null))
-            {
-                project = null;
-                error = ErrorCodes.DuplicateProjectName;
-                return false;
-            }
-
-            record = new ProjectRecord
-            {
-                ProjectId = Guid.NewGuid().ToString("n"),
-                Name = name.Trim(),
-                Description = Normalize(description, MaxDescriptionLength),
-                SiteUrl = Normalize(siteUrl, MaxUrlLength),
-                RepoUrl = Normalize(repoUrl, MaxUrlLength),
-                IsGeneral = false,
-                CreatedAt = _time.GetUtcNow(),
-            };
-
-            partition.Add(record);
-            _dirty = true;
         }
-
-        Flush();
-
-        project = record.ToInfo();
-        error = null;
-        return true;
     }
 
     /// <summary>
-    /// Edits a project's fields. Works on General too - only deletion is refused for
-    /// it, per the issue's requirement and this type's own remarks.
+    /// Edits a project's fields. General keeps its reserved name, but its optional
+    /// metadata remains editable.
     /// </summary>
     public bool TryUpdate(
         string userKey,
@@ -250,45 +266,75 @@ public sealed class ProjectStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(userKey);
 
-        ProjectRecord? record;
-
-        lock (_gate)
+        lock (_ioGate)
         {
-            List<ProjectRecord> partition = PartitionOf(userKey);
-            record = partition.Find(p => p.ProjectId == projectId);
-
-            if (record is null)
+            lock (_gate)
             {
-                project = null;
-                error = ErrorCodes.ProjectNotFound;
-                return false;
-            }
+                if (!_persistenceAvailable)
+                {
+                    project = null;
+                    error = ErrorCodes.InternalError;
+                    return false;
+                }
 
-            if (!TryValidate(name, description, siteUrl, repoUrl, out error))
-            {
-                project = null;
-                return false;
-            }
+                List<ProjectRecord> partition = PartitionOf(userKey);
+                ProjectRecord? record = partition.Find(p => p.ProjectId == projectId);
 
-            if (NameTaken(partition, name, excludeId: projectId))
-            {
-                project = null;
-                error = ErrorCodes.DuplicateProjectName;
-                return false;
-            }
+                if (record is null)
+                {
+                    project = null;
+                    error = ErrorCodes.ProjectNotFound;
+                    return false;
+                }
 
-            record.Name = name.Trim();
-            record.Description = Normalize(description, MaxDescriptionLength);
-            record.SiteUrl = Normalize(siteUrl, MaxUrlLength);
-            record.RepoUrl = Normalize(repoUrl, MaxUrlLength);
-            _dirty = true;
+                if (!TryValidate(name, description, siteUrl, repoUrl, out error))
+                {
+                    project = null;
+                    return false;
+                }
+
+                if (record.IsGeneral &&
+                    !string.Equals(name.Trim(), GeneralProjectName, StringComparison.Ordinal))
+                {
+                    project = null;
+                    error = ErrorCodes.InvalidRequest;
+                    return false;
+                }
+
+                if (NameTaken(partition, name, excludeId: projectId))
+                {
+                    project = null;
+                    error = ErrorCodes.DuplicateProjectName;
+                    return false;
+                }
+
+                string oldName = record.Name;
+                string? oldDescription = record.Description;
+                string? oldSiteUrl = record.SiteUrl;
+                string? oldRepoUrl = record.RepoUrl;
+
+                record.Name = name.Trim();
+                record.Description = Normalize(description, MaxDescriptionLength);
+                record.SiteUrl = Normalize(siteUrl, MaxUrlLength);
+                record.RepoUrl = Normalize(repoUrl, MaxUrlLength);
+                _dirty = true;
+
+                if (!Flush())
+                {
+                    record.Name = oldName;
+                    record.Description = oldDescription;
+                    record.SiteUrl = oldSiteUrl;
+                    record.RepoUrl = oldRepoUrl;
+                    project = null;
+                    error = ErrorCodes.InternalError;
+                    return false;
+                }
+
+                project = record.ToInfo();
+                error = null;
+                return true;
+            }
         }
-
-        Flush();
-
-        project = record.ToInfo();
-        error = null;
-        return true;
     }
 
     /// <summary>Deletes a project. Refused for General. The caller is responsible for reassigning its sessions.</summary>
@@ -302,28 +348,46 @@ public sealed class ProjectStore
             return false;
         }
 
-        lock (_gate)
+        lock (_ioGate)
         {
-            List<ProjectRecord> partition = PartitionOf(userKey);
-            int index = partition.FindIndex(p => p.ProjectId == projectId);
-
-            if (index < 0)
+            lock (_gate)
             {
-                error = ErrorCodes.ProjectNotFound;
-                return false;
+                if (!_persistenceAvailable)
+                {
+                    error = ErrorCodes.InternalError;
+                    return false;
+                }
+
+                List<ProjectRecord> partition = PartitionOf(userKey);
+                int index = partition.FindIndex(p => p.ProjectId == projectId);
+
+                if (index < 0)
+                {
+                    error = ErrorCodes.ProjectNotFound;
+                    return false;
+                }
+
+                ProjectRecord removed = partition[index];
+                partition.RemoveAt(index);
+                _dirty = true;
+
+                if (!Flush())
+                {
+                    partition.Insert(index, removed);
+                    error = ErrorCodes.InternalError;
+                    return false;
+                }
             }
-
-            partition.RemoveAt(index);
-            _dirty = true;
         }
-
-        Flush();
 
         // The icon file, if any, is best-effort cleanup - a stray file costs nothing
         // and is never served again once the project is gone from the state file.
         try
         {
-            File.Delete(IconPath(userKey, projectId));
+            lock (_ioGate)
+            {
+                File.Delete(IconPath(userKey, projectId));
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -364,47 +428,74 @@ public sealed class ProjectStore
             return false;
         }
 
-        ProjectRecord? record;
-
-        lock (_gate)
+        if (!MatchesIconSignature(bytes.Span, contentType))
         {
-            record = PartitionOf(userKey).Find(p => p.ProjectId == projectId);
-
-            if (record is null)
-            {
-                project = null;
-                error = ErrorCodes.ProjectNotFound;
-                return false;
-            }
-
-            record.IconVersion++;
-            record.IconContentType = contentType;
-            _dirty = true;
-        }
-
-        try
-        {
-            string directory = IconDirectory(userKey);
-            Directory.CreateDirectory(directory);
-
-            string path = IconPath(userKey, projectId);
-            string temporary = path + ".tmp";
-            File.WriteAllBytes(temporary, bytes.ToArray());
-            File.Move(temporary, path, overwrite: true);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            _logger.LogWarning(ex, "Could not write the icon file for project {ProjectId}.", projectId);
             project = null;
-            error = ErrorCodes.InternalError;
+            error = ErrorCodes.InvalidRequest;
             return false;
         }
 
-        Flush();
+        lock (_ioGate)
+        {
+            lock (_gate)
+            {
+                if (!_persistenceAvailable)
+                {
+                    project = null;
+                    error = ErrorCodes.InternalError;
+                    return false;
+                }
 
-        project = record.ToInfo();
-        error = null;
-        return true;
+                ProjectRecord? record = PartitionOf(userKey).Find(p => p.ProjectId == projectId);
+
+                if (record is null)
+                {
+                    project = null;
+                    error = ErrorCodes.ProjectNotFound;
+                    return false;
+                }
+
+                string iconPath = IconPath(userKey, projectId);
+                byte[]? previousBytes;
+                int previousVersion = record.IconVersion;
+                string? previousContentType = record.IconContentType;
+
+                try
+                {
+                    previousBytes = record.IconVersion > 0 && File.Exists(iconPath)
+                        ? File.ReadAllBytes(iconPath)
+                        : null;
+                    WriteAtomically(
+                        iconPath,
+                        temporary => File.WriteAllBytes(temporary, bytes.ToArray()));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _logger.LogWarning(ex, "Could not write the icon file for project {ProjectId}.", projectId);
+                    project = null;
+                    error = ErrorCodes.InternalError;
+                    return false;
+                }
+
+                record.IconVersion++;
+                record.IconContentType = contentType;
+                _dirty = true;
+
+                if (!Flush())
+                {
+                    record.IconVersion = previousVersion;
+                    record.IconContentType = previousContentType;
+                    RestoreIcon(iconPath, previousBytes, projectId);
+                    project = null;
+                    error = ErrorCodes.InternalError;
+                    return false;
+                }
+
+                project = record.ToInfo();
+                error = null;
+                return true;
+            }
+        }
     }
 
     /// <summary>Resets a project to the client's default icon.</summary>
@@ -412,38 +503,65 @@ public sealed class ProjectStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(userKey);
 
-        ProjectRecord? record;
-
-        lock (_gate)
+        lock (_ioGate)
         {
-            record = PartitionOf(userKey).Find(p => p.ProjectId == projectId);
-
-            if (record is null)
+            lock (_gate)
             {
-                project = null;
-                error = ErrorCodes.ProjectNotFound;
-                return false;
+                if (!_persistenceAvailable)
+                {
+                    project = null;
+                    error = ErrorCodes.InternalError;
+                    return false;
+                }
+
+                ProjectRecord? record = PartitionOf(userKey).Find(p => p.ProjectId == projectId);
+
+                if (record is null)
+                {
+                    project = null;
+                    error = ErrorCodes.ProjectNotFound;
+                    return false;
+                }
+
+                string iconPath = IconPath(userKey, projectId);
+                byte[]? previousBytes;
+                int previousVersion = record.IconVersion;
+                string? previousContentType = record.IconContentType;
+
+                try
+                {
+                    previousBytes = record.IconVersion > 0 && File.Exists(iconPath)
+                        ? File.ReadAllBytes(iconPath)
+                        : null;
+                    File.Delete(iconPath);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _logger.LogWarning(ex, "Could not remove the icon file for project {ProjectId}.", projectId);
+                    project = null;
+                    error = ErrorCodes.InternalError;
+                    return false;
+                }
+
+                record.IconVersion = 0;
+                record.IconContentType = null;
+                _dirty = true;
+
+                if (!Flush())
+                {
+                    record.IconVersion = previousVersion;
+                    record.IconContentType = previousContentType;
+                    RestoreIcon(iconPath, previousBytes, projectId);
+                    project = null;
+                    error = ErrorCodes.InternalError;
+                    return false;
+                }
+
+                project = record.ToInfo();
+                error = null;
+                return true;
             }
-
-            record.IconVersion = 0;
-            record.IconContentType = null;
-            _dirty = true;
         }
-
-        try
-        {
-            File.Delete(IconPath(userKey, projectId));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            _logger.LogWarning(ex, "Could not remove the icon file for project {ProjectId}.", projectId);
-        }
-
-        Flush();
-
-        project = record.ToInfo();
-        error = null;
-        return true;
     }
 
     /// <summary>Reads an uploaded icon's bytes back. False when there is none, scoped to this user's own project.</summary>
@@ -481,46 +599,39 @@ public sealed class ProjectStore
     }
 
     /// <summary>Writes the file if anything changed. Cheap and safe to call after every mutation.</summary>
-    public void Flush()
+    private bool Flush()
     {
-        string json;
-
-        lock (_gate)
+        lock (_ioGate)
         {
-            if (!_dirty)
-            {
-                return;
-            }
+            string json;
 
-            json = JsonSerializer.Serialize(_state, Json);
-            _dirty = false;
-        }
-
-        try
-        {
-            string? directory = Path.GetDirectoryName(StatePath);
-
-            if (!string.IsNullOrEmpty(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            string temporary = StatePath + ".tmp";
-            File.WriteAllText(temporary, json);
-            File.Move(temporary, StatePath, overwrite: true);
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-        {
-            // Losing a project create or edit is a materially bad experience, but taking
-            // the hub down over a filesystem hiccup would be worse. The state stays in
-            // memory - correct for the rest of this process's life - and the next
-            // mutation's flush will try writing it again.
             lock (_gate)
             {
-                _dirty = true;
+                if (!_dirty || !_persistenceAvailable)
+                {
+                    return _persistenceAvailable;
+                }
+
+                json = JsonSerializer.Serialize(_state, Json);
+                _dirty = false;
             }
 
-            _logger.LogWarning(error, "Could not write the project state file.");
+            try
+            {
+                WriteAtomically(StatePath, temporary => File.WriteAllText(temporary, json));
+                return true;
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                lock (_gate)
+                {
+                    _dirty = true;
+                    _persistenceAvailable = false;
+                }
+
+                _logger.LogWarning(error, "Could not write the project state file; project mutations are disabled.");
+                return false;
+            }
         }
     }
 
@@ -620,6 +731,71 @@ public sealed class ProjectStore
 
     private string IconPath(string userKey, string projectId) => Path.Combine(IconDirectory(userKey), projectId);
 
+    private static bool MatchesIconSignature(ReadOnlySpan<byte> bytes, string contentType) =>
+        contentType.ToLowerInvariant() switch
+        {
+            "image/png" =>
+                bytes.Length >= 8 &&
+                bytes[..8].SequenceEqual(PngSignature),
+            "image/jpeg" =>
+                bytes.Length >= 3 &&
+                bytes[0] == 0xff &&
+                bytes[1] == 0xd8 &&
+                bytes[2] == 0xff,
+            "image/webp" =>
+                bytes.Length >= 12 &&
+                bytes[..4].SequenceEqual("RIFF"u8) &&
+                bytes.Slice(8, 4).SequenceEqual("WEBP"u8),
+            _ => false,
+        };
+
+    private static void WriteAtomically(string path, Action<string> write)
+    {
+        string? directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        string temporary = $"{path}.{Guid.NewGuid():N}.tmp";
+
+        try
+        {
+            write(temporary);
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(temporary);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                // Best-effort cleanup of an unpublished temporary file.
+            }
+        }
+    }
+
+    private void RestoreIcon(string path, byte[]? previousBytes, string projectId)
+    {
+        try
+        {
+            if (previousBytes is null)
+            {
+                File.Delete(path);
+            }
+            else
+            {
+                WriteAtomically(path, temporary => File.WriteAllBytes(temporary, previousBytes));
+            }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogError(error, "Could not restore the icon file after project {ProjectId} failed to persist.", projectId);
+        }
+    }
+
     private ProjectState Load()
     {
         try
@@ -631,12 +807,32 @@ public sealed class ProjectStore
 
             return JsonSerializer.Deserialize<ProjectState>(File.ReadAllText(StatePath), Json) ?? new ProjectState();
         }
-        catch (Exception error) when (error is IOException or JsonException or UnauthorizedAccessException)
+        catch (JsonException error)
         {
-            // Starting fresh beats refusing to start. The worst case is every user's
-            // General project being re-seeded and any custom projects lost, which is
-            // recoverable by hand from a text editor if the file is merely corrupt.
-            _logger.LogWarning(error, "The project state file could not be read; starting from empty.");
+            string backup = $"{StatePath}.corrupt-{_time.GetUtcNow():yyyyMMddHHmmssfff}";
+
+            try
+            {
+                File.Copy(StatePath, backup, overwrite: false);
+                _logger.LogError(
+                    error,
+                    "The project state file was corrupt. It was preserved at {BackupPath}; starting from empty.",
+                    backup);
+            }
+            catch (Exception backupError) when (backupError is IOException or UnauthorizedAccessException)
+            {
+                _persistenceAvailable = false;
+                _logger.LogError(
+                    backupError,
+                    "The corrupt project state file could not be backed up. Project mutations are disabled.");
+            }
+
+            return new ProjectState();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            _persistenceAvailable = false;
+            _logger.LogError(error, "The project state file could not be read. Project mutations are disabled.");
             return new ProjectState();
         }
     }

@@ -201,9 +201,10 @@ export function ProjectEditor({
             <input
               value={name}
               onChange={(event) => setName(event.target.value)}
+              disabled={isGeneral}
               maxLength={60}
               placeholder="Project name"
-              className="min-h-10 rounded-lg border border-slate-700 bg-slate-950 px-2.5 text-[15px] text-slate-100 placeholder:text-slate-600 focus:border-slate-500 focus:outline-none"
+              className="min-h-10 rounded-lg border border-slate-700 bg-slate-950 px-2.5 text-[15px] text-slate-100 placeholder:text-slate-600 focus:border-slate-500 focus:outline-none disabled:text-slate-500"
             />
           </label>
 

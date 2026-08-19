@@ -719,7 +719,7 @@ public sealed class RelayHubTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task GeneralCanBeRenamedButNotDeleted()
+    public async Task GeneralCannotBeRenamedOrDeleted()
     {
         HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
         ProjectListNotification list = await client.InvokeAsync<ProjectListNotification>(
@@ -730,9 +730,8 @@ public sealed class RelayHubTests : IAsyncLifetime
             HubMethods.Server.UpdateProject,
             new UpdateProjectRequest { ProjectId = generalId, Name = "Everything" });
 
-        Assert.Null(renamed.Error);
-        Assert.Equal("Everything", renamed.Project!.Name);
-        Assert.True(renamed.Project.IsGeneral);
+        Assert.Equal(ErrorCodes.InvalidRequest, renamed.Error);
+        Assert.Null(renamed.Project);
 
         ErrorNotification? refused = await client.InvokeAsync<ErrorNotification?>(
             HubMethods.Server.DeleteProject, new DeleteProjectRequest { ProjectId = generalId });

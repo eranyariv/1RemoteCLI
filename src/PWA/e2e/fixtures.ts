@@ -33,7 +33,7 @@ interface Fixtures {
   /** Control over the phone's connection to the hub. */
   network: Network
 
-  /** The app, signed in as Alice, with the machine list on screen. */
+  /** The app, signed in as Alice, with General's machine list on screen. */
   app: Page
 }
 
@@ -111,9 +111,8 @@ export { expect }
 export async function signIn(page: Page, user: 'alice' | 'bob' = 'alice'): Promise<void> {
   await page.goto(`/?e2e-user=${user}`)
 
-  // The header only exists once the app believes somebody is signed in, so waiting for
-  // it is waiting for the thing the test actually depends on rather than for a delay.
-  await expect(page.getByRole('heading', { name: 'Machines' })).toBeVisible()
+  // The Projects header only exists once the app believes somebody is signed in.
+  await expect(page.getByRole('heading', { name: 'Projects' })).toBeVisible()
 
   // Then wait for the relay, which signing in does not imply. Every scenario starts a
   // session *after* this returns and expects to see it appear, and that only holds if
@@ -124,6 +123,13 @@ export async function signIn(page: Page, user: 'alice' | 'bob' = 'alice'): Promi
   // is how a suite ends up with one test that fails on a loaded machine and nowhere
   // else.
   await expect(page.getByText('Connected', { exact: true })).toBeVisible()
+
+  // Existing terminal scenarios exercise the default assignment. Enter General
+  // explicitly now that the project grid is the product's home screen.
+  const general = page.getByRole('button', { name: /^General/ }).first()
+  await expect(general).toBeVisible()
+  await general.click()
+  await expect(page.getByRole('heading', { name: 'General' })).toBeVisible()
 }
 
 /**

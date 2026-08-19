@@ -54,6 +54,7 @@ const session: SessionInfo = {
   customName: null,
   pinned: false,
   kind: 'AgentChat',
+  projectId: null,
 }
 
 describe('ChatView', () => {

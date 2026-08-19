@@ -279,20 +279,71 @@ try {
 
     Write-Step "Checked against the published SHA-256"
 
-    # Windows will not let the file be replaced while it is running, and the message
-    # it gives says nothing about why.
-    Get-Process -Name '1remote' -ErrorAction SilentlyContinue |
-        Where-Object { $_.Path -and $_.Path.ToLowerInvariant().StartsWith($InstallDirectory.ToLowerInvariant()) } |
-        ForEach-Object {
-            Write-Step "Stopping the agent that is already running"
-            Stop-Process -Id $_.Id -Force
-            Start-Sleep -Milliseconds 500
+    <#
+        Windows will not let the file be replaced while it is running, and the message
+        it gives says nothing about why.
+
+        Anything named 1remote counts, not only the copies whose path can be read.
+        Path comes from MainModule.FileName, which a normal shell cannot read for a
+        process running with rights it does not have -- so requiring it to match the
+        install directory silently skips the agent most likely to be holding the file
+        open, and the install then fails on Copy-Item with no idea what stopped it.
+    #>
+    $running = @(Get-Process -Name '1remote' -ErrorAction SilentlyContinue | Where-Object {
+            $path = try { $_.Path } catch { $null }
+            -not $path -or $path.ToLowerInvariant().StartsWith($InstallDirectory.ToLowerInvariant())
+        })
+
+    if ($running) {
+        Write-Step "Stopping the agent that is already running"
+
+        foreach ($process in $running) {
+            try {
+                Stop-Process -Id $process.Id -Force -ErrorAction Stop
+            }
+            catch {
+                Write-Host "    could not stop process $($process.Id): $($_.Exception.Message)" -ForegroundColor DarkGray
+            }
         }
+
+        Start-Sleep -Milliseconds 500
+    }
 
     New-Item $InstallDirectory -ItemType Directory -Force | Out-Null
 
     $installed = Join-Path $InstallDirectory '1remote.exe'
-    Copy-Item $downloaded $installed -Force
+
+    <#
+        Retried, because a process that has just been killed can keep its image open
+        for a moment and a single immediate attempt loses a race it would win a second
+        later. If it never wins, the message names what is holding the file: an
+        elevated agent cannot be stopped from an ordinary shell, and "another process"
+        does not tell anybody that.
+    #>
+    foreach ($attempt in 1..5) {
+        try {
+            Copy-Item $downloaded $installed -Force -ErrorAction Stop
+            break
+        }
+        catch {
+            if ($attempt -eq 5) {
+                $holding = @(Get-Process -Name '1remote' -ErrorAction SilentlyContinue |
+                    ForEach-Object { "      PID $($_.Id), started $($_.StartTime.ToString('HH:mm'))" })
+
+                throw @"
+$installed is in use and could not be replaced.
+
+$(if ($holding) { "These are still running:`n" + ($holding -join "`n") } else { 'Nothing named 1remote appears to be running, so something else is holding it open.' })
+
+An agent started from an elevated prompt cannot be stopped by this one. Close it, or
+run the install from an elevated PowerShell, and try again. Logging off and back on
+also clears it, since the agent starts from a logon task.
+"@
+            }
+
+            Start-Sleep -Seconds 1
+        }
+    }
 
     # Downloads carry the mark of the web, and it survives the copy. Left on, every
     # launch of a command-line tool raises a SmartScreen prompt. The file has just

@@ -280,58 +280,84 @@ try {
 
     Write-Step "Checked against the published SHA-256"
 
-    <#
-        Windows will not let the file be replaced while it is running, and the message
-        it gives says nothing about why.
-
-        Anything named 1remote counts, not only the copies whose path can be read.
-        Path comes from MainModule.FileName, which a normal shell cannot read for a
-        process running with rights it does not have -- so requiring it to match the
-        install directory silently skips the agent most likely to be holding the file
-        open, and the install then fails on Copy-Item with no idea what stopped it.
-    #>
-    $running = @(Get-Process -Name '1remote' -ErrorAction SilentlyContinue | Where-Object {
-            $path = try { $_.Path } catch { $null }
-            -not $path -or $path.ToLowerInvariant().StartsWith($InstallDirectory.ToLowerInvariant())
-        })
-
-    if ($running) {
-        Write-Step "Stopping the agent that is already running"
-
-        foreach ($process in $running) {
-            try {
-                Stop-Process -Id $process.Id -Force -ErrorAction Stop
-            }
-            catch {
-                Write-Host "    could not stop process $($process.Id): $($_.Exception.Message)" -ForegroundColor DarkGray
-            }
-        }
-
-        Start-Sleep -Milliseconds 500
-    }
-
     New-Item $InstallDirectory -ItemType Directory -Force | Out-Null
 
     $installed = Join-Path $InstallDirectory '1remote.exe'
 
     <#
-        Retried, because a process that has just been killed can keep its image open
-        for a moment and a single immediate attempt loses a race it would win a second
-        later. If it never wins, the message names what is holding the file: an
-        elevated agent cannot be stopped from an ordinary shell, and "another process"
-        does not tell anybody that.
-    #>
-    foreach ($attempt in 1..5) {
-        try {
-            Copy-Item $downloaded $installed -Force -ErrorAction Stop
-            break
-        }
-        catch {
-            if ($attempt -eq 5) {
-                $holding = @(Get-Process -Name '1remote' -ErrorAction SilentlyContinue |
-                    ForEach-Object { "      PID $($_.Id), started $($_.StartTime.ToString('HH:mm'))" })
+        A file that is already the build being installed is left exactly as it is.
 
-                throw @"
+        Not an optimisation. Windows judges executables as they are written, and its
+        verdict is not stable between two writes of identical bytes -- the attack
+        surface reduction rule behind issue #92 refused three of four launches of one
+        unchanged file. A copy that would change nothing therefore trades a working
+        install for another roll of that dice, and re-running the installer is the
+        first thing anyone does when something looks wrong.
+
+        Nothing is stopped either, so an agent that is up stays up. That also settles
+        the older complaint that re-running the installer failed with "the process
+        cannot access the file", which was this same pointless copy losing to a lock
+        held by the agent it was about to reinstall.
+    #>
+    $current = if (Test-Path $installed) {
+        (Get-FileHash $installed -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    else {
+        $null
+    }
+
+    if ($current -eq $expected) {
+        Write-Step "Already the current build, so the program file is untouched"
+    }
+    else {
+        <#
+            Windows will not let the file be replaced while it is running, and the message
+            it gives says nothing about why.
+
+            Anything named 1remote counts, not only the copies whose path can be read.
+            Path comes from MainModule.FileName, which a normal shell cannot read for a
+            process running with rights it does not have -- so requiring it to match the
+            install directory silently skips the agent most likely to be holding the file
+            open, and the install then fails on Copy-Item with no idea what stopped it.
+        #>
+        $running = @(Get-Process -Name '1remote' -ErrorAction SilentlyContinue | Where-Object {
+                $path = try { $_.Path } catch { $null }
+                -not $path -or $path.ToLowerInvariant().StartsWith($InstallDirectory.ToLowerInvariant())
+            })
+
+        if ($running) {
+            Write-Step "Stopping the agent that is already running"
+
+            foreach ($process in $running) {
+                try {
+                    Stop-Process -Id $process.Id -Force -ErrorAction Stop
+                }
+                catch {
+                    Write-Host "    could not stop process $($process.Id): $($_.Exception.Message)" -ForegroundColor DarkGray
+                }
+            }
+
+            Start-Sleep -Milliseconds 500
+        }
+
+        <#
+            Retried, because a process that has just been killed can keep its image open
+            for a moment and a single immediate attempt loses a race it would win a second
+            later. If it never wins, the message names what is holding the file: an
+            elevated agent cannot be stopped from an ordinary shell, and "another process"
+            does not tell anybody that.
+        #>
+        foreach ($attempt in 1..5) {
+            try {
+                Copy-Item $downloaded $installed -Force -ErrorAction Stop
+                break
+            }
+            catch {
+                if ($attempt -eq 5) {
+                    $holding = @(Get-Process -Name '1remote' -ErrorAction SilentlyContinue |
+                        ForEach-Object { "      PID $($_.Id), started $($_.StartTime.ToString('HH:mm'))" })
+
+                    throw @"
 $installed is in use and could not be replaced.
 
 $(if ($holding) { "These are still running:`n" + ($holding -join "`n") } else { 'Nothing named 1remote appears to be running, so something else is holding it open.' })
@@ -340,20 +366,21 @@ An agent started from an elevated prompt cannot be stopped by this one. Close it
 run the install from an elevated PowerShell, and try again. Logging off and back on
 also clears it, since the agent starts from a logon task.
 "@
+                }
+
+                Start-Sleep -Seconds 1
             }
-
-            Start-Sleep -Seconds 1
         }
+
+        # Belt and braces. Invoke-WebRequest attaches no mark of the web, so there is
+        # normally nothing here to clear -- but a download that acquired one some other
+        # way would survive the copy and make every launch of a command-line tool raise a
+        # SmartScreen prompt. The file has just been checked against the hash the release
+        # publishes, which is a stronger claim than the mark would be making.
+        Unblock-File $installed
+
+        Write-Step "Installed to $installed"
     }
-
-    # Belt and braces. Invoke-WebRequest attaches no mark of the web, so there is
-    # normally nothing here to clear -- but a download that acquired one some other
-    # way would survive the copy and make every launch of a command-line tool raise a
-    # SmartScreen prompt. The file has just been checked against the hash the release
-    # publishes, which is a stronger claim than the mark would be making.
-    Unblock-File $installed
-
-    Write-Step "Installed to $installed"
 
     <#
         Windows sometimes refuses the first launch. On a machine managed by an
@@ -370,6 +397,12 @@ also clears it, since the agent starts from a logon task.
         here is for the case where something refuses it anyway, where retrying is
         often enough -- the verdict can lift within seconds, once the file has been
         submitted and come back clean.
+
+        The verdict attaches to the write, not to the contents: four launches of one
+        unchanged file during issue #92 gave three refusals and one success. That is
+        why the copy above is skipped when the installed file is already this build,
+        and why a machine that has just refused the file may well accept it on the
+        next attempt without anything having changed.
 
         Each blocked attempt costs a couple of seconds inside Windows, so this is
         bounded by attempts rather than by a deadline.
@@ -394,15 +427,18 @@ attack surface reduction rule "Use advanced protection against ransomware". Wind
 Security > Protection history will name it, and will blame powershell.exe rather than
 the file it stopped.
 
+The decision is made about the file as it was written, and it is not consistent: the
+same bytes can be refused once and allowed a minute later. So the first thing to try
+is simply again.
+
 Worth trying, in this order:
 
-  Wait. Some machines relent after twenty minutes or so; others never do. Once it is
-  allowed, this finishes the install:
+  Again, now. Either of these; neither rewrites the program file, so a copy that is
+  already working cannot be lost by trying:
       & "$installed" install
+      irm https://raw.githubusercontent.com/$Repository/main/scripts/install.ps1 | iex
 
-  Run this same install from inside Copilot CLI or Claude Code, as a shell command.
-  Windows partly judges a file by the process that wrote it, and a trusted writer
-  improves the odds -- though measured carefully it is not reliable on its own.
+  Wait. Some machines relent after twenty minutes or so; others never do.
 
   Run scripts\diagnose-launch.ps1 from the repository, which reports which protection
   is refusing it and how long it has been doing so.

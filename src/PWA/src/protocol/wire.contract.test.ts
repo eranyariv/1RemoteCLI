@@ -20,6 +20,8 @@ import {
   encodeInterruptSession,
   encodeResizeTerminal,
   encodeSendInput,
+  encodeSetSessionName,
+  encodeSetSessionPinned,
   encodeSetSessionType,
   type CliType,
 } from './wire'
@@ -120,6 +122,27 @@ describe('decoding what the hub sends', () => {
     expect(updated.machineId).toBe(want.machineId)
     expect(updated.session.sessionId).toBe(want.session.sessionId)
     expect(updated.session.cliType).toBe('CopilotCli')
+  })
+
+  it('reads the name the user gave a session, and whether they pinned it', () => {
+    const updated = decodeSessionUpdated(wire('sessionUpdated'))
+    const want = expected('sessionUpdated')
+
+    expect(updated.session.customName).toBe(want.session.customName)
+    expect(updated.session.pinned).toBe(want.session.pinned)
+  })
+
+  it('treats a session from a hub that predates renaming as unnamed and unpinned', () => {
+    // The two fields were appended, so an older hub sends a ten-element session.
+    // Reading past the end has to land on "nobody renamed it", not on undefined
+    // reaching a row that then renders the string "undefined".
+    const raw = wire('sessionUpdated') as unknown[]
+    const session = raw[1] as unknown[]
+
+    const decoded = decodeSessionUpdated([raw[0], session.slice(0, 10)]).session
+
+    expect(decoded.customName).toBeNull()
+    expect(decoded.pinned).toBe(false)
   })
 
   it('recovers the real instant a session started, not the sender wall clock', () => {
@@ -275,5 +298,30 @@ describe('encoding what we send the hub', () => {
 
     expect(want[1]).toBe('ClaudeCode')
     expect(encodeSetSessionType(want[0] as string, want[1] as CliType)).toEqual(want)
+  })
+
+  it('sends a rename, machine id first', () => {
+    const want = shape('setSessionNameRequest')
+
+    expect(encodeSetSessionName(want[0] as string, want[1] as string, want[2] as string)).toEqual(
+      want,
+    )
+  })
+
+  it('sends a cleared name as null, not as an empty string', () => {
+    // The difference is the whole feature: null reveals the agent's own name again,
+    // an empty string would leave the row with nothing to show.
+    const want = shape('setSessionNameClearRequest')
+
+    expect(want[2]).toBeNull()
+    expect(encodeSetSessionName(want[0] as string, want[1] as string, null)).toEqual(want)
+  })
+
+  it('sends a pin', () => {
+    const want = shape('setSessionPinnedRequest')
+
+    expect(encodeSetSessionPinned(want[0] as string, want[1] as string, want[2] as boolean)).toEqual(
+      want,
+    )
   })
 })

@@ -184,6 +184,10 @@ public sealed class WireContractTests
         // The correction, which is the same shape as the open and deliberately not
         // the same message: an open counts towards usage, and being told twice what
         // a session is should not look like having started it twice.
+        //
+        // Also the message that carries a rename, which is why this one is the copy
+        // with the label fields set: the appended pair has to be pinned by a fixture
+        // somewhere, and this is the message a rename actually travels in.
         Add(messages, "sessionUpdated", new ClientSessionUpdatedNotification
         {
             MachineId = "5d41402abc4b2a76b9719d911017c592",
@@ -199,6 +203,8 @@ public sealed class WireContractTests
                 DisplayName = null,
                 AwaitingInput = false,
                 CliType = CliType.CopilotCli,
+                CustomName = "The deploy",
+                Pinned = true,
             },
         });
 
@@ -275,6 +281,30 @@ public sealed class WireContractTests
         {
             SessionId = "ff00ff00",
             CliType = CliType.ClaudeCode,
+        });
+
+        // Carries the machine id, unlike its neighbours: a rename is done from the
+        // list, where nothing is attached, so the hub has no attachment to read the
+        // machine from. Null is not a missing name, it is the instruction to clear one.
+        Add(messages, "setSessionNameRequest", new SetSessionNameRequest
+        {
+            MachineId = "5d41402abc4b2a76b9719d911017c592",
+            SessionId = "ff00ff00",
+            Name = "The deploy",
+        });
+
+        Add(messages, "setSessionNameClearRequest", new SetSessionNameRequest
+        {
+            MachineId = "5d41402abc4b2a76b9719d911017c592",
+            SessionId = "ff00ff00",
+            Name = null,
+        });
+
+        Add(messages, "setSessionPinnedRequest", new SetSessionPinnedRequest
+        {
+            MachineId = "5d41402abc4b2a76b9719d911017c592",
+            SessionId = "ff00ff00",
+            Pinned = true,
         });
 
         return new JsonObject

@@ -369,6 +369,181 @@ public sealed class RelayRegistryTests
         Assert.Equal(CliType.Cmd, stored.CliType);
     }
 
+    /// <summary>
+    /// The push notification is most of why the name lives at the hub at all: it is
+    /// what a locked phone shows, and "pwsh is waiting" is not what the user is
+    /// waiting on.
+    /// </summary>
+    [Fact]
+    public void UsesTheUsersNameForThePushNotification()
+    {
+        var registry = new RelayRegistry();
+
+        registry.Connect(Alice, "agent-a");
+        registry.RegisterMachine(Alice, "agent-a", Request("machine-a"));
+        registry.AddSession("agent-a", Session("session-1"));
+        registry.Connect(Alice, "client-a");
+        registry.RegisterClient(Alice, "client-a");
+
+        Assert.True(registry.TryRenameSession("client-a", "machine-a", "session-1", "The deploy", out _, out _));
+
+        SessionAddress? address = registry.MarkAwaitingInput("agent-a", "session-1", awaiting: true);
+
+        Assert.Equal("The deploy", address!.SessionName);
+    }
+
+    [Fact]
+    public void FallsBackToTheAgentNameForThePushNotificationOnceTheUserClearsTheirs()
+    {
+        var registry = new RelayRegistry();
+
+        registry.Connect(Alice, "agent-a");
+        registry.RegisterMachine(Alice, "agent-a", Request("machine-a"));
+
+        SessionInfo session = Session("session-1");
+        session.DisplayName = "PowerShell";
+        registry.AddSession("agent-a", session);
+
+        registry.Connect(Alice, "client-a");
+        registry.RegisterClient(Alice, "client-a");
+
+        registry.TryRenameSession("client-a", "machine-a", "session-1", "The deploy", out _, out _);
+        registry.TryRenameSession("client-a", "machine-a", "session-1", null, out _, out _);
+
+        SessionAddress? address = registry.MarkAwaitingInput("agent-a", "session-1", awaiting: true);
+
+        Assert.Equal("PowerShell", address!.SessionName);
+    }
+
+    /// <summary>
+    /// The agent never sends a custom name and must not be able to introduce one.
+    /// The hub is the only writer of that field, so a correction from the agent has
+    /// to leave it exactly as the hub last set it.
+    /// </summary>
+    [Fact]
+    public void KeepsTheUsersNameWhenTheAgentCorrectsASession()
+    {
+        var registry = new RelayRegistry();
+
+        registry.Connect(Alice, "agent-a");
+        registry.RegisterMachine(Alice, "agent-a", Request("machine-a"));
+        registry.AddSession("agent-a", Session("session-1"));
+        registry.Connect(Alice, "client-a");
+        registry.RegisterClient(Alice, "client-a");
+
+        registry.TryRenameSession("client-a", "machine-a", "session-1", "The deploy", out _, out _);
+        registry.UpdateSession("agent-a", Session("session-1", CliType.Cmd));
+
+        SessionInfo stored = Assert.Single(Assert.Single(registry.ListMachines(Alice)).Sessions);
+        Assert.Equal("The deploy", stored.CustomName);
+        Assert.Equal(CliType.Cmd, stored.CliType);
+    }
+
+    /// <summary>
+    /// A machine going away clears its sessions, and they come back when the agent
+    /// announces them again. The label has to outlive that, or a rename would be
+    /// undone by a wifi blip.
+    /// </summary>
+    [Fact]
+    public void KeepsALabelAcrossTheAgentDisconnecting()
+    {
+        var registry = new RelayRegistry();
+
+        registry.Connect(Alice, "agent-a");
+        registry.RegisterMachine(Alice, "agent-a", Request("machine-a"));
+        registry.AddSession("agent-a", Session("session-1"));
+        registry.Connect(Alice, "client-a");
+        registry.RegisterClient(Alice, "client-a");
+
+        registry.TryRenameSession("client-a", "machine-a", "session-1", "The deploy", out _, out _);
+        registry.TryPinSession("client-a", "machine-a", "session-1", pinned: true, out _, out _);
+
+        registry.Disconnect("agent-a");
+        registry.Connect(Alice, "agent-b");
+        registry.RegisterMachine(Alice, "agent-b", Request("machine-a"));
+        registry.AddSession("agent-b", Session("session-1"));
+
+        SessionInfo stored = Assert.Single(Assert.Single(registry.ListMachines(Alice)).Sessions);
+        Assert.Equal("The deploy", stored.CustomName);
+        Assert.True(stored.Pinned);
+    }
+
+    [Fact]
+    public void ForgetsALabelWhenItsSessionEnds()
+    {
+        var registry = new RelayRegistry();
+
+        registry.Connect(Alice, "agent-a");
+        registry.RegisterMachine(Alice, "agent-a", Request("machine-a"));
+        registry.AddSession("agent-a", Session("session-1"));
+        registry.Connect(Alice, "client-a");
+        registry.RegisterClient(Alice, "client-a");
+
+        registry.TryRenameSession("client-a", "machine-a", "session-1", "The deploy", out _, out _);
+        registry.RemoveSession("agent-a", "session-1");
+        registry.AddSession("agent-a", Session("session-1"));
+
+        Assert.Null(Assert.Single(Assert.Single(registry.ListMachines(Alice)).Sessions).CustomName);
+    }
+
+    /// <summary>
+    /// A label whose session ended while the machine was offline never hears about it.
+    /// The cap is what stops those accumulating, and it drops the ones with no live
+    /// session first because those are the ones nobody can ever see again.
+    /// </summary>
+    [Fact]
+    public void DoesNotHoardLabelsForSessionsThatQuietlyEnded()
+    {
+        var registry = new RelayRegistry();
+
+        registry.Connect(Alice, "agent-a");
+        registry.RegisterMachine(Alice, "agent-a", Request("machine-a"));
+        registry.Connect(Alice, "client-a");
+        registry.RegisterClient(Alice, "client-a");
+
+        registry.AddSession("agent-a", Session("keeper"));
+        registry.TryRenameSession("client-a", "machine-a", "keeper", "The deploy", out _, out _);
+
+        // Every one of these is renamed and then vanishes without a close, which is
+        // exactly what an agent that drops off the network leaves behind.
+        for (int i = 0; i < 200; i++)
+        {
+            registry.AddSession("agent-a", Session($"ghost-{i}"));
+            registry.TryRenameSession("client-a", "machine-a", $"ghost-{i}", $"ghost {i}", out _, out _);
+            registry.Disconnect("agent-a");
+            registry.Connect(Alice, "agent-a");
+            registry.RegisterMachine(Alice, "agent-a", Request("machine-a"));
+            registry.AddSession("agent-a", Session("keeper"));
+        }
+
+        Assert.Equal("The deploy", Assert.Single(Assert.Single(registry.ListMachines(Alice)).Sessions).CustomName);
+    }
+
+    [Fact]
+    public void WillNotRenameASessionInAnotherUsersPartition()
+    {
+        var registry = new RelayRegistry();
+
+        registry.Connect(Alice, "agent-a");
+        registry.RegisterMachine(Alice, "agent-a", Request("machine-a"));
+        registry.AddSession("agent-a", Session("session-1"));
+
+        registry.Connect(Bob, "client-b");
+        registry.RegisterClient(Bob, "client-b");
+
+        Assert.False(registry.TryRenameSession(
+            "client-b",
+            "machine-a",
+            "session-1",
+            "mine now",
+            out LabelledSession? result,
+            out ErrorNotification? error));
+
+        Assert.Null(result);
+        Assert.Equal(ErrorCodes.MachineNotFound, error!.Code);
+        Assert.Null(Assert.Single(Assert.Single(registry.ListMachines(Alice)).Sessions).CustomName);
+    }
+
     [Fact]
     public void IgnoresAnUnknownConnection()
     {

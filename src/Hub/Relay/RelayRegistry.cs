@@ -38,6 +38,12 @@ public sealed record Attachment(string MachineId, string SessionId, string? Agen
 /// <summary>The agent connection a client request should be forwarded to.</summary>
 public sealed record RelayTarget(string AgentConnectionId, string MachineId, string SessionId);
 
+/// <summary>
+/// A session after the user changed what they call it, with everything needed to
+/// tell the rest of their devices.
+/// </summary>
+public sealed record LabelledSession(string UserKey, string MachineId, SessionInfo Session);
+
 /// <summary>What the hub must clean up after a connection drops.</summary>
 public sealed record DisconnectResult
 {
@@ -66,6 +72,37 @@ public sealed record AttachResult(RelayTarget Target, Attachment? Displaced);
 /// </para>
 /// </summary>
 public readonly record struct RelayCounts(int Accounts, int Machines, int Sessions, int Connections);
+
+/// <summary>
+/// What one user decided to call a session, and whether they lifted it to the top.
+/// <para>
+/// Held apart from the <see cref="SessionInfo"/> it decorates, and that separation is
+/// the whole design. A machine that drops its hub connection has its session records
+/// cleared — they are re-announced when the agent reconnects — so a name kept on the
+/// record alone would be lost to any wifi blip, and the user would watch their rename
+/// revert for a reason nothing on screen could explain. The label outlives the record
+/// and is re-applied to whatever comes back under the same session id.
+/// </para>
+/// <para>
+/// It does not outlive the session itself. There is no expiry to get right and
+/// nothing to clean up on a schedule, because the thing it is keyed to disappears on
+/// its own — which is what makes "for as long as the session runs" a property of the
+/// design rather than a rule somebody has to maintain.
+/// </para>
+/// </summary>
+public sealed class SessionLabel
+{
+    /// <summary>Null once the user clears it, which reveals the agent's name again.</summary>
+    public string? Name { get; set; }
+
+    public bool Pinned { get; set; }
+
+    /// <summary>When this was last written. Decides which label goes first when the cap bites.</summary>
+    public DateTimeOffset TouchedAt { get; set; }
+
+    /// <summary>A label that says nothing is not worth keeping.</summary>
+    public bool IsEmpty => Name is null && !Pinned;
+}
 
 /// <summary>
 /// The hub's entire routing state, partitioned by user key.
@@ -250,6 +287,11 @@ public sealed class RelayRegistry
             machine.Sessions[session.SessionId] = session;
             machine.LastSeen = _time.GetUtcNow();
 
+            // A session the user had already named, arriving again after a reconnect.
+            // The agent has never heard of the label and cannot send it, so this is
+            // the only place it can be restored.
+            machine.ApplyLabel(session);
+
             return new SessionAddress(userKey, machine.MachineId, session.SessionId);
         }
     }
@@ -285,6 +327,12 @@ public sealed class RelayRegistry
             machine.Sessions[session.SessionId] = session;
             machine.LastSeen = _time.GetUtcNow();
 
+            // Same argument, one step further: the name and the pin are not merely
+            // held by the hub, they are unknown to the agent. An update that carried
+            // them across from the record would work; re-applying from the label is
+            // what also covers a record that has just been re-created by a reconnect.
+            machine.ApplyLabel(session);
+
             return new SessionAddress(userKey, machine.MachineId, session.SessionId);
         }
     }
@@ -303,6 +351,11 @@ public sealed class RelayRegistry
             {
                 return null;
             }
+
+            // The session is over, so the name the user gave it is over too. This is
+            // the ordinary end of a label's life and the reason nothing here needs an
+            // expiry sweep.
+            machine.ForgetLabel(sessionId);
 
             UserPartition partition = PartitionOf(userKey);
             int watchers = 0;
@@ -324,7 +377,7 @@ public sealed class RelayRegistry
                 machine.MachineId,
                 sessionId,
                 machine.DisplayName,
-                SessionName(removed),
+                NameOf(removed),
                 watchers);
         }
     }
@@ -351,7 +404,7 @@ public sealed class RelayRegistry
                 machine.MachineId,
                 sessionId,
                 machine.DisplayName,
-                SessionName(session),
+                NameOf(session),
                 CountWatchers(userKey, machine.MachineId, sessionId));
         }
     }
@@ -369,6 +422,44 @@ public sealed class RelayRegistry
             PartitionOf(userKey).Clients[connectionId] = new ClientRecord();
         }
     }
+
+    /// <summary>
+    /// Renames a session for as long as it runs, or clears the name with null.
+    /// <para>
+    /// The agent's own name is never overwritten, only shadowed, which is what makes
+    /// clearing possible at all: there is something underneath to reveal.
+    /// </para>
+    /// </summary>
+    public bool TryRenameSession(
+        string clientConnectionId,
+        string machineId,
+        string sessionId,
+        string? name,
+        out LabelledSession? result,
+        out ErrorNotification? error) =>
+        TryEditLabel(
+            clientConnectionId,
+            machineId,
+            sessionId,
+            label => label.Name = SessionName.Sanitize(name),
+            out result,
+            out error);
+
+    /// <summary>Lifts a session above the rest of this user's list, or puts it back.</summary>
+    public bool TryPinSession(
+        string clientConnectionId,
+        string machineId,
+        string sessionId,
+        bool pinned,
+        out LabelledSession? result,
+        out ErrorNotification? error) =>
+        TryEditLabel(
+            clientConnectionId,
+            machineId,
+            sessionId,
+            label => label.Pinned = pinned,
+            out result,
+            out error);
 
     /// <summary>Everything this user owns. Never reaches into another partition.</summary>
     public MachineInfo[] ListMachines(string userKey)
@@ -589,14 +680,66 @@ public sealed class RelayRegistry
     /// <summary>
     /// What to call a session on a lock screen.
     /// <para>
-    /// The program, not the session id, when the agent gave it no name of its own.
-    /// The id is a machine-local handle that means nothing to the person reading the
+    /// The program, not the session id, when nobody has given it a name. The id is a
+    /// machine-local handle that means nothing to the person reading the
     /// notification; "claude is waiting" is the whole message, and
     /// "9f3c-…-21 is waiting" is noise they have to open the app to decode.
     /// </para>
+    /// <para>
+    /// The user's own name wins, which is most of the point of letting them set one:
+    /// the notification that wakes a phone should say "the deploy is waiting", not
+    /// "pwsh is waiting".
+    /// </para>
     /// </summary>
-    private static string SessionName(SessionInfo session) =>
-        string.IsNullOrWhiteSpace(session.DisplayName) ? session.Program : session.DisplayName;
+    private static string NameOf(SessionInfo session) =>
+        SessionName.Best(session.CustomName, session.DisplayName, session.Program);
+
+    /// <summary>
+    /// Finds the session, edits its label, and puts the result back on the record.
+    /// <para>
+    /// The one place a label changes. Resolved from the caller's own partition rather
+    /// than through an attachment, unlike everything else a client can ask for by
+    /// session id — because renaming is done from the list, where nothing is attached.
+    /// That is safe here and would not be for the others: this message never crosses
+    /// to a machine, so the most a forged machine id achieves is finding nothing.
+    /// </para>
+    /// </summary>
+    private bool TryEditLabel(
+        string clientConnectionId,
+        string machineId,
+        string sessionId,
+        Action<SessionLabel> edit,
+        out LabelledSession? result,
+        out ErrorNotification? error)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(clientConnectionId);
+
+        result = null;
+
+        lock (_gate)
+        {
+            if (!TryClient(clientConnectionId, out UserPartition? partition, out _) ||
+                !_connections.TryGetValue(clientConnectionId, out ConnectionRecord? record))
+            {
+                error = Error(ErrorCodes.InvalidRequest, "Handshake before changing a session.", sessionId);
+                return false;
+            }
+
+            if (!TryLiveSession(partition!, machineId, sessionId, out RegisteredMachine? machine, out error))
+            {
+                return false;
+            }
+
+            SessionInfo session = machine!.Sessions[sessionId];
+
+            machine.EditLabel(sessionId, edit, _time.GetUtcNow());
+            machine.ApplyLabel(session);
+
+            result = new LabelledSession(record.UserKey, machineId, session);
+            error = null;
+            return true;
+        }
+    }
 
     /// <summary>Caller must hold the gate.</summary>
     private int CountWatchers(string userKey, string machineId, string sessionId) =>
@@ -735,6 +878,21 @@ public sealed class RelayRegistry
 /// <summary>A machine known to the hub. Outlives its agent connection so it can be reported offline.</summary>
 public sealed class RegisteredMachine(string machineId)
 {
+    /// <summary>
+    /// How many session labels one machine may hold.
+    /// <para>
+    /// A label is normally removed when its session closes, so this never bites in
+    /// ordinary use. It exists for the one path where the close never arrives: an
+    /// agent that drops off the network has its sessions cleared without a
+    /// <c>SessionClosed</c> for any of them, and their labels have nothing left to
+    /// tell them the session is over. Without a ceiling, a machine that reconnects
+    /// often enough would accumulate them for the lifetime of the process.
+    /// </para>
+    /// </summary>
+    private const int MaxLabels = 64;
+
+    private readonly Dictionary<string, SessionLabel> _labels = new(StringComparer.Ordinal);
+
     public string MachineId { get; } = machineId;
 
     /// <summary>Null when no agent is currently connected for this machine.</summary>
@@ -759,4 +917,70 @@ public sealed class RegisteredMachine(string machineId)
         Online = ConnectionId is not null,
         Sessions = Sessions.Values.OrderBy(session => session.StartedAt).ToArray(),
     };
+
+    /// <summary>
+    /// Writes this machine's label for a session onto the record clients will read.
+    /// <para>
+    /// Always both fields, including when there is no label: a record that arrives
+    /// from an agent carrying a stale name — impossible today, but only because the
+    /// agent has never been given one to send — must not be able to introduce one.
+    /// The hub is the only writer of these two fields, and this is where it writes.
+    /// </para>
+    /// </summary>
+    internal void ApplyLabel(SessionInfo session)
+    {
+        _labels.TryGetValue(session.SessionId, out SessionLabel? label);
+
+        session.CustomName = label?.Name;
+        session.Pinned = label?.Pinned ?? false;
+    }
+
+    /// <summary>Changes a session's label, creating it on first use and dropping it once it says nothing.</summary>
+    internal void EditLabel(string sessionId, Action<SessionLabel> edit, DateTimeOffset now)
+    {
+        if (!_labels.TryGetValue(sessionId, out SessionLabel? label))
+        {
+            label = new SessionLabel();
+            _labels[sessionId] = label;
+        }
+
+        edit(label);
+        label.TouchedAt = now;
+
+        // A cleared name on an unpinned session is not an empty label to be kept, it
+        // is the absence of one. Removing it is what stops "rename, then rename back"
+        // from leaving anything behind.
+        if (label.IsEmpty)
+        {
+            _labels.Remove(sessionId);
+            return;
+        }
+
+        Evict();
+    }
+
+    internal void ForgetLabel(string sessionId) => _labels.Remove(sessionId);
+
+    /// <summary>
+    /// Makes room, orphans first.
+    /// <para>
+    /// A label whose session is no longer on this machine cannot ever be seen again,
+    /// so it is always the better thing to lose. Only if every label is in use does
+    /// this fall back to the least recently set one — and a user with more than
+    /// <see cref="MaxLabels"/> live named sessions on one machine has a different
+    /// problem than the one this cap is for.
+    /// </para>
+    /// </summary>
+    private void Evict()
+    {
+        while (_labels.Count > MaxLabels)
+        {
+            KeyValuePair<string, SessionLabel> victim = _labels
+                .OrderBy(pair => Sessions.ContainsKey(pair.Key))
+                .ThenBy(pair => pair.Value.TouchedAt)
+                .First();
+
+            _labels.Remove(victim.Key);
+        }
+    }
 }

@@ -455,6 +455,12 @@ The command line it reads is the whole one, not just the program. Desktop shortc
 
 It is a hint and never a control — nothing about how a session is relayed, framed or interrupted changes with the type — so guessing is acceptable here in a way it would not be anywhere else. The worst a wrong answer does is offer a menu of commands the program does not have. The guess is shown twice: as a badge on the session row, and in the terminal view's header beside the machine and geometry, because the header is where you are standing when you notice it is wrong. Tapping it there opens the quick-action sheet with the picker already showing — one picker, in the place where the buttons it decides are. The correction travels to the *agent*, which owns session state, and comes back as `SessionUpdated` to every device. Applying it locally would be one line of code and would leave the phone in the pocket, the tablet on the desk, and the settings window disagreeing about the same session.
 
+**Naming and pinning a session.** Three sessions all called `pwsh`, on two machines, is the state the list is actually in after an hour's work, and the agent cannot fix it: it knows what was launched, not what it is for. So a session can be renamed from the list — a `⋯` button on the row opens a small panel with a text field and a pin toggle, rather than crowding two controls onto a row that is a single tap target on purpose.
+
+The name is stored at the hub (§5.3) rather than in the browser, which is what lets it reach a **push notification**: the reason to call something "the deploy" is that the phone says the deploy is waiting. Clearing it reveals the agent's own name again. Wherever a session is named — the row, the terminal header, the "opening…" line, the notification title — the same order is used: the user's name, then the agent's, then the program.
+
+Pinned sessions are lifted into a single **Pinned** group above every machine card, not merely sorted to the top of their own. On the screen this app is for the fold arrives after about four rows, and a session pinned on the third machine down would otherwise still be below it. The pinned row shows its machine's name where it would otherwise show the working directory, since it is now being read away from the card that said which machine it was on; the machine's own session count still includes it, because that count answers "what is running there", which pinning does not change.
+
 **Terminal view.** The `xterm.js` viewport, a status bar, and a fixed accessory bar above the on-screen keyboard, addressing the fact that mobile keyboards have no modifier or arrow keys:
 
 ```
@@ -565,19 +571,41 @@ Also: `SessionClosed { sessionId, exitCode }`, `SessionUpdated { session }`, `Se
 
 ### 5.3 Client ↔ hub
 
-**Client → hub**: `ListMachines {}`, `AttachSession { machineId, sessionId, cols, rows, lastSeq? }`, `DetachSession { sessionId }`, `SendInput { sessionId, data }`, `ResizeTerminal { sessionId, cols, rows }`, `InterruptSession { sessionId }`, `SetSessionType { sessionId, cliType }`, `RegisterPush { endpoint, keys }`, `RefreshToken { token }`.
+**Client → hub**: `ListMachines {}`, `AttachSession { machineId, sessionId, cols, rows, lastSeq? }`, `DetachSession { sessionId }`, `SendInput { sessionId, data }`, `ResizeTerminal { sessionId, cols, rows }`, `InterruptSession { sessionId }`, `SetSessionType { sessionId, cliType }`, `SetSessionName { machineId, sessionId, name? }`, `SetSessionPinned { machineId, sessionId, pinned }`, `RegisterPush { endpoint, keys }`, `RefreshToken { token }`.
 
 **Hub → client**: `MachineList { machines[] }`, `MachineOnline / MachineOffline { machineId }`, `SessionOpened / SessionUpdated / SessionClosed { machineId, session }`, `TerminalOutput { sessionId, seq, kind, data }`, `SessionAwaitingInput { machineId, sessionId }`, `TokenExpiring { expiresAt }`, `Error { code, message, sessionId? }`.
 
 `SetSessionType` is resolved through the caller's own attachment, like every other client → agent message, so the type can only be corrected from the session you are watching. Resolving it by ownership instead would be more convenient and would add a second way for a client message to reach a machine, which is the invariant that keeps "how could this possibly reach the wrong machine" a one-place question.
 
+`SetSessionName` and `SetSessionPinned` are the two exceptions, and they are exceptions precisely because they are *not* client → agent messages. They are answered inside the hub and never cross to a machine, so the invariant above does not apply to them; what does apply is that they carry `machineId` explicitly and resolve it inside the caller's own partition, because renaming is done from the list, where nothing is attached. A forged machine id therefore finds nothing rather than finding someone else's session.
+
+Both are answered with the ordinary `SessionUpdated` fan-out to every one of that user's clients rather than a notification of their own. The label is applied to the `SessionInfo` the hub materialises, so the message that already exists carries it, and the phone that is looking at the list — attached to nothing — is told as well as the laptop that is watching the terminal.
+
 `SendInput` is a pure passthrough: `data` is the exact byte sequence the terminal should receive — `"y\r"`, `"\u001b[A"` for cursor-up, `"\u0003"` for `Ctrl+C`. The hub never interprets it, which keeps the phone's input indistinguishable from the keyboard's.
+
+#### Session names and pins
+
+A session carries two labels the user owns rather than the agent: `customName` and `pinned`. They live at the hub, for the lifetime of the session, and are deliberately **not** stored on the agent or in browser storage:
+
+- The hub is the only place where "for as long as the session runs" enforces itself, because the registry entry disappears when the session does.
+- It is the only place that can put the user's name in a **push notification**, which is most of the value — the point of naming a session "the deploy" is that the lock screen says the deploy is waiting, not that `pwsh` is.
+- It syncs to every device the user has open, for free, through a message that already exists.
+
+The label is held *beside* the session record, in a per-machine map, rather than on the record itself. An agent that drops off the network has its session records cleared and gets them back by announcing the same sessions again; a name stored on the record would be lost to any wifi blip, which for a feature that promises to last as long as the session would be a lie. The map survives the clear and is re-applied whenever a session is added or updated — which also makes the hub the sole writer of those two fields, so an agent cannot introduce a name it was never given.
+
+Labels are dropped when the session closes. The one path that leaks is a session that ends while its machine is offline, where no close ever arrives, so each machine keeps at most 64 labels and evicts orphans — labels with no live session — before anything else.
+
+`name` is `null` to clear it, which is distinct from an empty string: clearing reveals the agent's own `displayName` again, so the two must stay distinguishable all the way down the wire. Names are sanitised once on the way in (`SessionName.Sanitize`, in the shared protocol assembly): control and format characters are dropped, whitespace runs are folded to a single space, and the result is truncated to 60 text elements. This is the only field in the product whose contents are chosen by one person and rendered somewhere that person is not standing — a lock screen, a terminal header, another device's list — so a bidi override or a control character is cleaned at the single point of entry rather than at each of the places it leaves. A name that sanitises to nothing is treated as no name at all.
+
+Like every other display name, a custom name is never logged, at any level, and never reaches the operator channel or the usage counters.
 
 ### 5.4 Versioning
 
 `RegisterMachine` and the client handshake both carry `protocolVersion`. The hub rejects an unsupported version with a clear `Error` telling the user to update, rather than failing in an obscure way at the first incompatible message.
 
 Version 2 added `cliType` and its two messages. The minimum supported version stayed at 1, because both changes are additive: `[Key(n)]` serialises as a positional array, so a version 1 agent simply sends a shorter session and a version 1 client reads a longer one and ignores the tail. A field inserted anywhere but the end would shift every later field with no error anywhere — the machine list would quietly start showing the agent version in the OS column — which is why appending is the only permitted way to evolve one of these messages, and why `wire.fixture.json` pins the layout against bytes the C# serializer actually produced.
+
+`customName` and `pinned` were appended to `SessionInfo` on the same terms, along with `SetSessionName` and `SetSessionPinned`, and the version stayed at 2 for the same reason: a client that has never heard of either reads a longer session and ignores the tail, and one that has reads a shorter one from an older hub and lands on "nobody renamed it". Neither is a new capability the other end has to have — the two methods are answered entirely inside the hub — so there is nothing an older peer could fail to honour.
 
 ---
 

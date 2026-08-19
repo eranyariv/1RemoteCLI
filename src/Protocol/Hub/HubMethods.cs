@@ -34,6 +34,21 @@ public static class HubMethods
         public const string ResizeTerminal = "ResizeTerminal";
         public const string InterruptSession = "InterruptSession";
         public const string SetSessionType = "SetSessionType";
+
+        /// <summary>
+        /// What the user calls a session, and whether it sits at the top of the list.
+        /// <para>
+        /// Both are answered by the hub rather than forwarded to the agent, unlike
+        /// <see cref="SetSessionType"/>. The agent owns what a session *is*; the hub
+        /// owns what one user chose to call it, which is why neither name nor pin
+        /// appears anywhere in the agent half of this file.
+        /// </para>
+        /// </summary>
+        public const string SetSessionName = "SetSessionName";
+
+        /// <inheritdoc cref="SetSessionName"/>
+        public const string SetSessionPinned = "SetSessionPinned";
+
         public const string RegisterPush = "RegisterPush";
 
         // Both.
@@ -61,7 +76,7 @@ public static class HubMethods
         public const string MachineOffline = "MachineOffline";
         public const string SessionOpened = "SessionOpened";
 
-        /// <summary>A live session's details changed — its type, and later its name.</summary>
+        /// <summary>A live session's details changed — its type, its name, or its pin.</summary>
         public const string SessionUpdated = "SessionUpdated";
 
         public const string SessionClosed = "SessionClosed";

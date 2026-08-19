@@ -586,7 +586,98 @@ public sealed class RelayHub(
             });
     }
 
+    /// <summary>
+    /// The user renaming a session to whatever they actually call it.
+    /// <para>
+    /// Answered here rather than forwarded to the agent, which is the opposite of
+    /// <see cref="SetSessionType"/> and for the same reason. The agent owns what a
+    /// session <i>is</i>, so a type correction has to go there or the next thing the
+    /// agent announces would undo it. Nobody owns what you call it — the agent has
+    /// never heard of the name, cannot send it, and so cannot overwrite it. Keeping it
+    /// at the hub also means it reaches the user's other devices and, more to the
+    /// point, the push notification: the name is worth having mostly because it is
+    /// what a locked phone shows.
+    /// </para>
+    /// </summary>
+    public Task<ErrorNotification?> SetSessionName(SetSessionNameRequest request)
+    {
+        if (request is null ||
+            string.IsNullOrWhiteSpace(request.MachineId) ||
+            string.IsNullOrWhiteSpace(request.SessionId))
+        {
+            return Task.FromResult<ErrorNotification?>(
+                Error(ErrorCodes.InvalidRequest, "SetSessionName needs a machine id and a session id."));
+        }
+
+        bool renamed = _registry.TryRenameSession(
+            Context.ConnectionId,
+            request.MachineId,
+            request.SessionId,
+            request.Name,
+            out LabelledSession? labelled,
+            out ErrorNotification? error);
+
+        return AnnounceLabelAsync(renamed, labelled, error);
+    }
+
+    /// <summary>The user lifting a session to the top of the list, on every device they own.</summary>
+    public Task<ErrorNotification?> SetSessionPinned(SetSessionPinnedRequest request)
+    {
+        if (request is null ||
+            string.IsNullOrWhiteSpace(request.MachineId) ||
+            string.IsNullOrWhiteSpace(request.SessionId))
+        {
+            return Task.FromResult<ErrorNotification?>(
+                Error(ErrorCodes.InvalidRequest, "SetSessionPinned needs a machine id and a session id."));
+        }
+
+        bool pinned = _registry.TryPinSession(
+            Context.ConnectionId,
+            request.MachineId,
+            request.SessionId,
+            request.Pinned,
+            out LabelledSession? labelled,
+            out ErrorNotification? error);
+
+        return AnnounceLabelAsync(pinned, labelled, error);
+    }
+
     // Internals.
+
+    /// <summary>
+    /// Tells every one of this user's clients what a session is now called.
+    /// <para>
+    /// Every client, not only the one that asked and not only those attached. Two
+    /// devices renaming at once settle on the last write, which is fine — but only if
+    /// the loser hears about it, and a phone looking at the list is by definition not
+    /// attached to anything.
+    /// </para>
+    /// <para>
+    /// Nothing about the name is logged, here or anywhere. A session's display name is
+    /// already treated as sensitive (<c>docs/logging.md</c>), and one the user typed
+    /// is no different.
+    /// </para>
+    /// </summary>
+    private async Task<ErrorNotification?> AnnounceLabelAsync(
+        bool changed,
+        LabelledSession? labelled,
+        ErrorNotification? error)
+    {
+        if (!changed)
+        {
+            return error;
+        }
+
+        await Clients.Clients(_registry.ClientsOf(labelled!.UserKey)).SendAsync(
+            HubMethods.Client.SessionUpdated,
+            new ClientSessionUpdatedNotification
+            {
+                MachineId = labelled.MachineId,
+                Session = labelled.Session,
+            });
+
+        return null;
+    }
 
     /// <summary>
     /// The one place a client request crosses to an agent. Every caller resolves the

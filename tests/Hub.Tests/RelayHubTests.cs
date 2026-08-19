@@ -273,6 +273,230 @@ public sealed class RelayHubTests : IAsyncLifetime
         Assert.Equal(ErrorCodes.InvalidRequest, refused!.Code);
     }
 
+    /// <summary>
+    /// A rename is answered by the hub, not carried to the agent, and every device
+    /// this user has open is told — including the ones that are not attached to
+    /// anything, which on a phone is the only state the list is ever in.
+    /// </summary>
+    [Fact]
+    public async Task RenamingASessionReachesEveryOneOfTheUsersDevices()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "session-1", "pwsh");
+
+        HubConnection phone = await ConnectClientAsync(AliceTenant, AliceObject);
+        HubConnection laptop = await ConnectClientAsync(AliceTenant, AliceObject);
+        Channel<ClientSessionUpdatedNotification> onLaptop =
+            Listen<ClientSessionUpdatedNotification>(laptop, HubMethods.Client.SessionUpdated);
+
+        // Deliberately without attaching first. Renaming is done from the list.
+        Assert.Null(await phone.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SetSessionName,
+            new SetSessionNameRequest
+            {
+                MachineId = "machine-a",
+                SessionId = "session-1",
+                Name = "The deploy",
+            }));
+
+        ClientSessionUpdatedNotification update = await Next(onLaptop);
+        Assert.Equal("machine-a", update.MachineId);
+        Assert.Equal("The deploy", update.Session.CustomName);
+    }
+
+    [Fact]
+    public async Task ANameSurvivesInTheListTheHubSends()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "session-1", "pwsh");
+
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        await RenameAsync(client, "machine-a", "session-1", "The deploy");
+        await PinAsync(client, "machine-a", "session-1", pinned: true);
+
+        MachineListNotification list = await client.InvokeAsync<MachineListNotification>(
+            HubMethods.Server.ListMachines);
+
+        SessionInfo session = Assert.Single(Assert.Single(list.Machines).Sessions);
+        Assert.Equal("The deploy", session.CustomName);
+        Assert.True(session.Pinned);
+    }
+
+    /// <summary>
+    /// The reason the label is kept beside the session record rather than on it.
+    /// <para>
+    /// An agent that drops off the network has its session records cleared, and gets
+    /// them back by announcing the same sessions again. A name stored on the record
+    /// itself would be lost to any wifi blip — which, for a feature whose whole promise
+    /// is "for as long as the session runs", would be a lie.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task ANameSurvivesTheAgentReconnecting()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "session-1", "pwsh");
+
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        await RenameAsync(client, "machine-a", "session-1", "The deploy");
+
+        await agent.DisposeAsync();
+
+        HubConnection again = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(again, "session-1", "pwsh");
+
+        MachineListNotification list = await client.InvokeAsync<MachineListNotification>(
+            HubMethods.Server.ListMachines);
+
+        Assert.Equal("The deploy", Assert.Single(Assert.Single(list.Machines).Sessions).CustomName);
+    }
+
+    /// <summary>The name lasts as long as the session and not one moment longer.</summary>
+    [Fact]
+    public async Task ANameDiesWithItsSession()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "session-1", "pwsh");
+
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        await RenameAsync(client, "machine-a", "session-1", "The deploy");
+
+        Assert.Null(await agent.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SessionClosed,
+            new AgentSessionClosedNotification { SessionId = "session-1", ExitCode = 0 }));
+
+        // Same id, new session. Reusing an id is not something the agent does, but the
+        // point stands whichever way the id arrives: a name belongs to a session, not
+        // to a string.
+        await OpenSessionAsync(agent, "session-1", "pwsh");
+
+        MachineListNotification list = await client.InvokeAsync<MachineListNotification>(
+            HubMethods.Server.ListMachines);
+
+        Assert.Null(Assert.Single(Assert.Single(list.Machines).Sessions).CustomName);
+    }
+
+    [Fact]
+    public async Task ClearingANameRevealsTheAgentsOwnAgain()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "session-1", "pwsh");
+
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        await RenameAsync(client, "machine-a", "session-1", "The deploy");
+        await RenameAsync(client, "machine-a", "session-1", null);
+
+        MachineListNotification list = await client.InvokeAsync<MachineListNotification>(
+            HubMethods.Server.ListMachines);
+
+        Assert.Null(Assert.Single(Assert.Single(list.Machines).Sessions).CustomName);
+    }
+
+    /// <summary>
+    /// Blank is not a name. A row rendered from an empty string has nothing in it, and
+    /// the way back from that is not obvious to the person who typed the spaces.
+    /// </summary>
+    [Fact]
+    public async Task ANameOfNothingButSpacesClearsItInstead()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "session-1", "pwsh");
+
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        await RenameAsync(client, "machine-a", "session-1", "The deploy");
+        await RenameAsync(client, "machine-a", "session-1", "   ");
+
+        MachineListNotification list = await client.InvokeAsync<MachineListNotification>(
+            HubMethods.Server.ListMachines);
+
+        Assert.Null(Assert.Single(Assert.Single(list.Machines).Sessions).CustomName);
+    }
+
+    /// <summary>
+    /// The name is typed by a person and drawn on a lock screen. It is sanitised on
+    /// the way in, once, rather than at each of the places it is later rendered.
+    /// </summary>
+    [Fact]
+    public async Task ANameIsCleanedBeforeItIsStored()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "session-1", "pwsh");
+
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        await RenameAsync(client, "machine-a", "session-1", "\u202ethe\ndeploy");
+
+        MachineListNotification list = await client.InvokeAsync<MachineListNotification>(
+            HubMethods.Server.ListMachines);
+
+        Assert.Equal("the deploy", Assert.Single(Assert.Single(list.Machines).Sessions).CustomName);
+    }
+
+    /// <summary>
+    /// Rename and pin resolve the machine from the caller's own partition rather than
+    /// from an attachment, so this is the test that the partition still holds: a valid
+    /// user handed a real machine id from someone else's account finds nothing.
+    /// </summary>
+    [Fact]
+    public async Task AnotherUserCannotRenameASessionTheyCannotSee()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "session-1", "pwsh");
+
+        HubConnection bob = await ConnectClientAsync(BobTenant, BobObject);
+
+        ErrorNotification? refused = await bob.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SetSessionName,
+            new SetSessionNameRequest
+            {
+                MachineId = "machine-a",
+                SessionId = "session-1",
+                Name = "mine now",
+            });
+
+        Assert.Equal(ErrorCodes.MachineNotFound, refused!.Code);
+
+        HubConnection alice = await ConnectClientAsync(AliceTenant, AliceObject);
+        MachineListNotification list = await alice.InvokeAsync<MachineListNotification>(
+            HubMethods.Server.ListMachines);
+
+        Assert.Null(Assert.Single(Assert.Single(list.Machines).Sessions).CustomName);
+    }
+
+    [Fact]
+    public async Task WillNotRenameASessionThatWasNeverOpened()
+    {
+        await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+
+        ErrorNotification? refused = await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SetSessionName,
+            new SetSessionNameRequest
+            {
+                MachineId = "machine-a",
+                SessionId = "ghost",
+                Name = "The deploy",
+            });
+
+        Assert.Equal(ErrorCodes.SessionNotFound, refused!.Code);
+    }
+
+    [Fact]
+    public async Task PinningAndUnpinningBothReachEveryDevice()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "session-1", "pwsh");
+
+        HubConnection phone = await ConnectClientAsync(AliceTenant, AliceObject);
+        Channel<ClientSessionUpdatedNotification> updates =
+            Listen<ClientSessionUpdatedNotification>(phone, HubMethods.Client.SessionUpdated);
+
+        await PinAsync(phone, "machine-a", "session-1", pinned: true);
+        Assert.True((await Next(updates)).Session.Pinned);
+
+        await PinAsync(phone, "machine-a", "session-1", pinned: false);
+        Assert.False((await Next(updates)).Session.Pinned);
+    }
+
     [Fact]
     public async Task WillNotUpdateASessionThatWasNeverOpened()
     {
@@ -595,6 +819,24 @@ public sealed class RelayHubTests : IAsyncLifetime
                 Cols = 120,
                 Rows = 30,
             }));
+
+    private static async Task RenameAsync(
+        HubConnection client,
+        string machineId,
+        string sessionId,
+        string? name) =>
+        Assert.Null(await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SetSessionName,
+            new SetSessionNameRequest { MachineId = machineId, SessionId = sessionId, Name = name }));
+
+    private static async Task PinAsync(
+        HubConnection client,
+        string machineId,
+        string sessionId,
+        bool pinned) =>
+        Assert.Null(await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SetSessionPinned,
+            new SetSessionPinnedRequest { MachineId = machineId, SessionId = sessionId, Pinned = pinned }));
 
     private static SessionInfo NewSession(string sessionId, string program) => new()
     {

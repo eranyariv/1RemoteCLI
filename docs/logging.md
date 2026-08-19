@@ -45,7 +45,7 @@ Local time with offset, fixed-width level, category, and an **event id in bracke
 
 ## What is never in there
 
-**No terminal content, at any level, ever.** Not output, not input, not the screen, not the session's display name. This is enforced by the closed logging vocabulary in `src/Protocol/Diagnostics/LogEvents.cs` and by three tests, not by discipline — see §7.3 of the design spec.
+**No terminal content, at any level, ever.** Not output, not input, not the screen, not the session's display name, and not the name the user gave it. A custom name is more obviously personal than the one the agent worked out from a command line, not less, so it is treated the same way: it is never logged and never reaches the operator channel. This is enforced by the closed logging vocabulary in `src/Protocol/Diagnostics/LogEvents.cs` and by three tests, not by discipline — see §7.3 of the design spec.
 
 Traffic is logged as sizes and sequence numbers:
 

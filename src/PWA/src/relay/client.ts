@@ -27,6 +27,8 @@ import {
   encodeResizeTerminal,
   encodeRefreshToken,
   encodeSendInput,
+  encodeSetSessionName,
+  encodeSetSessionPinned,
   encodeSetSessionType,
   type CliType,
   type HubError,
@@ -397,6 +399,29 @@ export class RelayClient {
    */
   async setSessionType(sessionId: string, cliType: CliType): Promise<HubError | null> {
     return this.request(Server.SetSessionType, encodeSetSessionType(sessionId, cliType))
+  }
+
+  /**
+   * Renames a session for as long as it runs, or clears the name with null.
+   *
+   * The name lives at the hub rather than on the machine, so this needs the machine
+   * id spelled out: it is invoked from the list, where nothing is attached.
+   */
+  async setSessionName(
+    machineId: string,
+    sessionId: string,
+    name: string | null,
+  ): Promise<HubError | null> {
+    return this.request(Server.SetSessionName, encodeSetSessionName(machineId, sessionId, name))
+  }
+
+  /** Lifts a session above the rest of the list, on every device this user owns. */
+  async setSessionPinned(
+    machineId: string,
+    sessionId: string,
+    pinned: boolean,
+  ): Promise<HubError | null> {
+    return this.request(Server.SetSessionPinned, encodeSetSessionPinned(machineId, sessionId, pinned))
   }
 
   /** Offers this browser's push subscription, so the hub can reach the phone when nothing is connected. */

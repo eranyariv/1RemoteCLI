@@ -82,4 +82,24 @@ public sealed class SessionInfo
     /// </summary>
     [Key(9)]
     public CliType CliType { get; set; }
+
+    /// <summary>
+    /// What the user decided to call this session, which outranks
+    /// <see cref="DisplayName"/> everywhere a human reads one.
+    /// <para>
+    /// Null means nobody has renamed it. That is deliberately distinct from an empty
+    /// string: the agent's name has to survive underneath so clearing the custom one
+    /// reverts to it rather than leaving a blank row.
+    /// </para>
+    /// <para>
+    /// Held by the hub rather than the agent, and so never sent by one — see
+    /// <c>RelayRegistry</c>. Appended, for the reason above.
+    /// </para>
+    /// </summary>
+    [Key(10)]
+    public string? CustomName { get; set; }
+
+    /// <summary>Lifted above the rest of the list on every one of this user's devices.</summary>
+    [Key(11)]
+    public bool Pinned { get; set; }
 }

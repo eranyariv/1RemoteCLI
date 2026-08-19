@@ -17,6 +17,8 @@ export const Server = {
   ResizeTerminal: 'ResizeTerminal',
   InterruptSession: 'InterruptSession',
   SetSessionType: 'SetSessionType',
+  SetSessionName: 'SetSessionName',
+  SetSessionPinned: 'SetSessionPinned',
   RegisterPush: 'RegisterPush',
   RefreshToken: 'RefreshToken',
 } as const

@@ -105,6 +105,47 @@ public sealed class SetSessionTypeRequest
     public CliType CliType { get; set; }
 }
 
+/// <summary>
+/// Client to hub. Renames a session for as long as it runs.
+/// <para>
+/// Unlike every other client request that names a session, this one is not routed
+/// through the caller's attachment. Renaming is done from the list — that is the
+/// screen the wrong name is on — and there is nothing to attach to from there. It is
+/// safe because it never crosses to a machine: the hub answers it out of the caller's
+/// own partition, so the worst a forged machine id can do is find nothing.
+/// </para>
+/// </summary>
+[MessagePackObject]
+public sealed class SetSessionNameRequest
+{
+    [Key(0)]
+    public string MachineId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string SessionId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The new name. Null or blank reverts to the name the agent gave the session,
+    /// which is why the agent's name is never overwritten.
+    /// </summary>
+    [Key(2)]
+    public string? Name { get; set; }
+}
+
+/// <summary>Client to hub. Lifts a session to the top of the list, or puts it back.</summary>
+[MessagePackObject]
+public sealed class SetSessionPinnedRequest
+{
+    [Key(0)]
+    public string MachineId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(2)]
+    public bool Pinned { get; set; }
+}
+
 /// <summary>Client to hub. Registers a Web Push subscription for awaiting-input alerts.</summary>
 [MessagePackObject]
 public sealed class RegisterPushRequest

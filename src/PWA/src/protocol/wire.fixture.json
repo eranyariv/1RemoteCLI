@@ -4,7 +4,7 @@
   "messages": {
     "machineList": {
       "type": "MachineListNotification",
-      "base64": "kZKW2SA1ZDQxNDAyYWJjNGIyYTc2Yjk3MTlkOTExMDE3YzU5MqREZXNrvE1pY3Jvc29mdCBXaW5kb3dzIDEwLjAuMjYxMDCnMS4yLjMuNMORmqxhYWIwZjFlMmMzZDSmY2xhdWRlkqgtLXJlc3VtZaRsYXN0tkM6XFByb2plY3RzXDFSZW1vdGVDTEl4HpLW/2ZHI6fMtKtDbGF1ZGUgQ29kZcOqQ2xhdWRlQ29kZZbZIDBjYzE3NWI5YzBmMWI2YTgzMWMzOTllMjY5NzcyNjYxpkxhcHRvcLxNaWNyb3NvZnQgV2luZG93cyAxMC4wLjIyNjMxpzEuMi4zLjTCkA==",
+      "base64": "kZKW2SA1ZDQxNDAyYWJjNGIyYTc2Yjk3MTlkOTExMDE3YzU5MqREZXNrvE1pY3Jvc29mdCBXaW5kb3dzIDEwLjAuMjYxMDCnMS4yLjMuNMORnKxhYWIwZjFlMmMzZDSmY2xhdWRlkqgtLXJlc3VtZaRsYXN0tkM6XFByb2plY3RzXDFSZW1vdGVDTEl4HpLW/2ZHI6fMtKtDbGF1ZGUgQ29kZcOqQ2xhdWRlQ29kZcDCltkgMGNjMTc1YjljMGYxYjZhODMxYzM5OWUyNjk3NzI2NjGmTGFwdG9wvE1pY3Jvc29mdCBXaW5kb3dzIDEwLjAuMjI2MzGnMS4yLjMuNMKQ",
       "decoded": {
         "machines": [
           {
@@ -27,7 +27,9 @@
                 "startedAt": "2024-05-17T09:30:15\u002B03:00",
                 "displayName": "Claude Code",
                 "awaitingInput": true,
-                "cliType": 3
+                "cliType": 3,
+                "customName": null,
+                "pinned": false
               }
             ]
           },
@@ -65,7 +67,7 @@
     },
     "sessionOpened": {
       "type": "ClientSessionOpenedNotification",
-      "base64": "ktkgNWQ0MTQwMmFiYzRiMmE3NmI5NzE5ZDkxMTAxN2M1OTKaqGZmMDBmZjAwpHB3c2iQrUM6XFVzZXJzXGVyYW5QGJLW/2ZHI6fMtMDCqlBvd2VyU2hlbGw=",
+      "base64": "ktkgNWQ0MTQwMmFiYzRiMmE3NmI5NzE5ZDkxMTAxN2M1OTKcqGZmMDBmZjAwpHB3c2iQrUM6XFVzZXJzXGVyYW5QGJLW/2ZHI6fMtMDCqlBvd2VyU2hlbGzAwg==",
       "decoded": {
         "machineId": "5d41402abc4b2a76b9719d911017c592",
         "session": {
@@ -78,13 +80,15 @@
           "startedAt": "2024-05-17T09:30:15\u002B03:00",
           "displayName": null,
           "awaitingInput": false,
-          "cliType": 2
+          "cliType": 2,
+          "customName": null,
+          "pinned": false
         }
       }
     },
     "sessionUpdated": {
       "type": "ClientSessionUpdatedNotification",
-      "base64": "ktkgNWQ0MTQwMmFiYzRiMmE3NmI5NzE5ZDkxMTAxN2M1OTKaqGZmMDBmZjAwpHB3c2iQrUM6XFVzZXJzXGVyYW5QGJLW/2ZHI6fMtMDCqkNvcGlsb3RDbGk=",
+      "base64": "ktkgNWQ0MTQwMmFiYzRiMmE3NmI5NzE5ZDkxMTAxN2M1OTKcqGZmMDBmZjAwpHB3c2iQrUM6XFVzZXJzXGVyYW5QGJLW/2ZHI6fMtMDCqkNvcGlsb3RDbGmqVGhlIGRlcGxvecM=",
       "decoded": {
         "machineId": "5d41402abc4b2a76b9719d911017c592",
         "session": {
@@ -97,7 +101,9 @@
           "startedAt": "2024-05-17T09:30:15\u002B03:00",
           "displayName": null,
           "awaitingInput": false,
-          "cliType": 4
+          "cliType": 4,
+          "customName": "The deploy",
+          "pinned": true
         }
       }
     },
@@ -202,6 +208,33 @@
       "decoded": {
         "sessionId": "ff00ff00",
         "cliType": 3
+      }
+    },
+    "setSessionNameRequest": {
+      "type": "SetSessionNameRequest",
+      "base64": "k9kgNWQ0MTQwMmFiYzRiMmE3NmI5NzE5ZDkxMTAxN2M1OTKoZmYwMGZmMDCqVGhlIGRlcGxveQ==",
+      "decoded": {
+        "machineId": "5d41402abc4b2a76b9719d911017c592",
+        "sessionId": "ff00ff00",
+        "name": "The deploy"
+      }
+    },
+    "setSessionNameClearRequest": {
+      "type": "SetSessionNameRequest",
+      "base64": "k9kgNWQ0MTQwMmFiYzRiMmE3NmI5NzE5ZDkxMTAxN2M1OTKoZmYwMGZmMDDA",
+      "decoded": {
+        "machineId": "5d41402abc4b2a76b9719d911017c592",
+        "sessionId": "ff00ff00",
+        "name": null
+      }
+    },
+    "setSessionPinnedRequest": {
+      "type": "SetSessionPinnedRequest",
+      "base64": "k9kgNWQ0MTQwMmFiYzRiMmE3NmI5NzE5ZDkxMTAxN2M1OTKoZmYwMGZmMDDD",
+      "decoded": {
+        "machineId": "5d41402abc4b2a76b9719d911017c592",
+        "sessionId": "ff00ff00",
+        "pinned": true
       }
     }
   }

@@ -7,6 +7,7 @@ import '@xterm/xterm/css/xterm.css'
 import { describeError } from '../protocol/errors'
 import { CLI_TYPES, type CliType, type MachineInfo, type SessionInfo, type TerminalOutputKind } from '../protocol/wire'
 import type { RelayClient } from '../relay/client'
+import { sessionLabel } from '../relay/machines'
 import { catalogFor, labelFor, type CommandDefinition } from '../terminal/catalog'
 import {
   ExtraKeys,
@@ -365,7 +366,9 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
         </button>
 
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[15px] font-semibold text-slate-100">{session.displayName}</p>
+          <p className="truncate text-[15px] font-semibold text-slate-100">
+            {sessionLabel(session)}
+          </p>
           <p className="flex items-baseline gap-1 text-xs text-slate-500">
             <span className="min-w-0 truncate">
               {machine.displayName} · {geometry.cols}×{geometry.rows}

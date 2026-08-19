@@ -142,3 +142,49 @@ export function findSession(
 export function totalSessions(machines: Machines): number {
   return machines.reduce((count, machine) => count + machine.sessions.length, 0)
 }
+
+/** A pinned session, carrying the machine it belongs to because it is shown away from it. */
+export interface PinnedSession {
+  machineId: string
+  machineName: string
+  online: boolean
+  session: SessionInfo
+}
+
+/**
+ * What the user pinned, across every machine, in the order they pinned nothing in
+ * particular — oldest session first, same as everywhere else.
+ *
+ * Flattened out of the machine list rather than sorted within it. Pinning is for the
+ * phone case, where the list is four rows tall and the session you care about is on
+ * the third machine down; leaving it inside its machine card would put it back below
+ * the fold, which is the entire thing pinning is meant to fix.
+ */
+export function pinnedSessions(machines: Machines): PinnedSession[] {
+  return machines
+    .flatMap((machine) =>
+      machine.sessions
+        .filter((session) => session.pinned)
+        .map((session) => ({
+          machineId: machine.machineId,
+          machineName: machine.displayName,
+          online: machine.online,
+          session,
+        })),
+    )
+    .sort((a, b) => a.session.startedAt.getTime() - b.session.startedAt.getTime())
+}
+
+/**
+ * What a session should be called: the user's name for it, then the agent's, then
+ * the program.
+ *
+ * The same order the hub uses for push notifications, on purpose. A notification
+ * that names a session one thing and a list that names it another is a bug report
+ * waiting to happen.
+ */
+export function sessionLabel(session: SessionInfo): string {
+  if (session.customName) return session.customName
+  if (session.displayName) return session.displayName
+  return session.program
+}

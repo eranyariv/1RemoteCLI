@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { auth } from './auth/impl'
 import { describeError } from './protocol/errors'
@@ -6,6 +6,7 @@ import type { MachineInfo, SessionInfo } from './protocol/wire'
 import { readDeepLink, withoutDeepLink, type DeepLink } from './push/subscription'
 import { usePushRegistration } from './push/usePush'
 import { useRelay } from './relay/useRelay'
+import { sessionLabel } from './relay/machines'
 import { Banner, StatusPill, VersionLine } from './ui/Chrome'
 import { MachineList } from './ui/MachineList'
 import { NotificationsCard } from './ui/NotificationsCard'
@@ -75,6 +76,21 @@ export default function App() {
   }, [])
 
   const closeSession = useCallback(() => setOpened(null), [])
+
+  // Not applied optimistically. The hub owns the name and answers with a
+  // SessionUpdated to every device this user has open, so the moment the row
+  // changes is the moment every other screen has changed too.
+  const sessionActions = useMemo(
+    () => ({
+      onRename: (machineId: string, sessionId: string, name: string | null) => {
+        void relay.client.setSessionName(machineId, sessionId, name)
+      },
+      onPin: (machineId: string, sessionId: string, pinned: boolean) => {
+        void relay.client.setSessionPinned(machineId, sessionId, pinned)
+      },
+    }),
+    [relay.client],
+  )
 
   if (!signedIn) {
     return <SignInScreen busy={busy} />
@@ -175,7 +191,11 @@ export default function App() {
           />
         ) : null}
 
-        <MachineList machines={relay.machines} onOpenSession={openSession} />
+        <MachineList
+          machines={relay.machines}
+          actions={sessionActions}
+          onOpenSession={openSession}
+        />
 
         <NotificationsCard onGranted={registerPush} />
 
@@ -212,7 +232,7 @@ export default function App() {
         <Suspense
           fallback={
             <div className="fixed inset-0 z-20 flex items-center justify-center bg-slate-950 text-sm text-slate-500">
-              Opening {showing.session.displayName}…
+              Opening {sessionLabel(showing.session)}…
             </div>
           }
         >

@@ -42,6 +42,15 @@ export interface SessionInfo {
   displayName: string
   awaitingInput: boolean
   cliType: CliType
+  /**
+   * What the user renamed this session to, or null if nobody has.
+   *
+   * Null rather than an empty string on purpose: clearing the name is meant to
+   * reveal the agent's own {@link displayName} again, so the two have to stay
+   * distinguishable all the way down the wire.
+   */
+  customName: string | null
+  pinned: boolean
 }
 
 export interface MachineInfo {
@@ -145,6 +154,10 @@ export function decodeSession(value: unknown): SessionInfo {
     // has said what this is — and both must land on Generic rather than on a string
     // the button catalogue will never match.
     cliType: cliType(s[9]),
+    // Both absent from a hub that predates renaming, which decodes as undefined and
+    // has to land on "not renamed, not pinned" rather than on the string "undefined".
+    customName: typeof s[10] === 'string' && s[10].length > 0 ? s[10] : null,
+    pinned: bool(s[11]),
   }
 }
 
@@ -289,6 +302,30 @@ export function encodeInterruptSession(sessionId: string): unknown[] {
  */
 export function encodeSetSessionType(sessionId: string, cliType: CliType): unknown[] {
   return [sessionId, cliType]
+}
+
+/**
+ * `SetSessionNameRequest`
+ *
+ * Carries the machine id, unlike its neighbours, because renaming is done from the
+ * list where nothing is attached and the hub therefore has no attachment to read the
+ * machine from. Null clears the name.
+ */
+export function encodeSetSessionName(
+  machineId: string,
+  sessionId: string,
+  name: string | null,
+): unknown[] {
+  return [machineId, sessionId, name]
+}
+
+/** `SetSessionPinnedRequest` */
+export function encodeSetSessionPinned(
+  machineId: string,
+  sessionId: string,
+  pinned: boolean,
+): unknown[] {
+  return [machineId, sessionId, pinned]
 }
 
 /**

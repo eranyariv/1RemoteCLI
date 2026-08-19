@@ -5,9 +5,11 @@ import {
   findSession,
   machineOffline,
   machineOnline,
+  pinnedSessions,
   replaceAll,
   sessionAwaitingInput,
   sessionClosed,
+  sessionLabel,
   sessionOpened,
   totalSessions,
   type Machines,
@@ -25,6 +27,8 @@ function session(id: string, overrides: Partial<SessionInfo> = {}): SessionInfo 
     displayName: 'PowerShell',
     awaitingInput: false,
     cliType: 'PowerShell',
+    customName: null,
+    pinned: false,
     ...overrides,
   }
 }
@@ -182,5 +186,65 @@ describe('counting', () => {
     ])
 
     expect(totalSessions(machines)).toBe(3)
+  })
+})
+
+describe('pinning', () => {
+  it('gathers pinned sessions from every machine', () => {
+    const machines = replaceAll([
+      machine('a', { displayName: 'Desk', sessions: [session('s1', { pinned: true }), session('s2')] }),
+      machine('b', { displayName: 'Attic', sessions: [session('s3', { pinned: true })] }),
+    ])
+
+    expect(pinnedSessions(machines).map((entry) => entry.session.sessionId).sort()).toEqual([
+      's1',
+      's3',
+    ])
+  })
+
+  it('carries the machine along, because the row is shown away from it', () => {
+    const machines = replaceAll([
+      machine('a', { displayName: 'Desk', sessions: [session('s1', { pinned: true })] }),
+    ])
+
+    expect(pinnedSessions(machines)[0]).toMatchObject({ machineId: 'a', machineName: 'Desk' })
+  })
+
+  it('orders pinned sessions oldest first, like every other list', () => {
+    const machines = replaceAll([
+      machine('a', {
+        sessions: [session('late', { pinned: true, startedAt: new Date('2024-05-17T11:00:00Z') })],
+      }),
+      machine('b', {
+        sessions: [session('early', { pinned: true, startedAt: new Date('2024-05-17T09:00:00Z') })],
+      }),
+    ])
+
+    expect(pinnedSessions(machines).map((entry) => entry.session.sessionId)).toEqual([
+      'early',
+      'late',
+    ])
+  })
+
+  it('has nothing to show when nothing is pinned', () => {
+    expect(pinnedSessions(replaceAll([machine('a', { sessions: [session('s1')] })]))).toEqual([])
+  })
+})
+
+describe('what a session is called', () => {
+  it('prefers the name the user typed', () => {
+    expect(sessionLabel(session('s1', { customName: 'The deploy' }))).toBe('The deploy')
+  })
+
+  it('falls back to the agent name once the user clears theirs', () => {
+    expect(sessionLabel(session('s1', { customName: null, displayName: 'PowerShell' }))).toBe(
+      'PowerShell',
+    )
+  })
+
+  it('falls back to the program when there is no name at all', () => {
+    expect(sessionLabel(session('s1', { customName: null, displayName: '', program: 'pwsh' }))).toBe(
+      'pwsh',
+    )
   })
 })

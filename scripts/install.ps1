@@ -424,26 +424,33 @@ Windows would not let '$installed' start, after $attempts attempts: $($_.Excepti
 The download is installed and its hash matched the release, so the file is fine.
 Something on this machine is refusing to run it -- on a managed machine, usually the
 attack surface reduction rule "Use advanced protection against ransomware". Windows
-Security > Protection history will name it, and will blame powershell.exe rather than
-the file it stopped.
+Security > Protection history is where to confirm it: the entry blames powershell.exe
+under "App or process blocked", and names this file under "Affected items".
 
-The decision is made about the file as it was written, and it is not consistent: the
-same bytes can be refused once and allowed a minute later. So the first thing to try
-is simply again.
+That rule allows an executable that is signed by a trusted publisher, or that enough
+machines have already seen. A new release of an unsigned program is neither, so the
+block is about the file's reputation and not its contents -- which is why downloading
+or writing it again does not help.
 
 Worth trying, in this order:
 
-  Again, now. Either of these; neither rewrites the program file, so a copy that is
-  already working cannot be lost by trying:
+  Again, now. The verdict is not always stable, and this rewrites nothing, so a copy
+  that is already working cannot be lost by trying:
       & "$installed" install
-      irm https://raw.githubusercontent.com/$Repository/main/scripts/install.ps1 | iex
 
-  Wait. Some machines relent after twenty minutes or so; others never do.
+  Allow this one file. Needs an elevated PowerShell, and is the remedy that actually
+  applies if the machine is yours:
+      Add-MpPreference -AttackSurfaceReductionOnlyExclusions "$installed"
+      & "$installed" install
+
+  Wait. The rule relents once a build has been seen widely enough, which for a new
+  release can be hours. Some machines never do.
 
   Run scripts\diagnose-launch.ps1 from the repository, which reports which protection
   is refusing it and how long it has been doing so.
 
-If none of that helps, an administrator has to allow it.
+If the machine is managed by an organisation, the exclusion above may be overruled by
+policy, and an administrator has to allow it.
 "@
             }
 

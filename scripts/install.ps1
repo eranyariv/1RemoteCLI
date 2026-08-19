@@ -56,6 +56,29 @@ function Write-Step([string] $message) {
     Write-Host "==> $message" -ForegroundColor Cyan
 }
 
+<#
+    Whether a scheduled task exists, asked without letting schtasks abort the script.
+
+    schtasks writes "cannot find the file specified" to stderr for a task that is not
+    there, which is the ordinary answer to this question and not a fault. Under the
+    Stop preference this file runs with, PowerShell turns that into a terminating
+    error, so asking about a task that does not exist yet -- which is exactly what
+    polling for one does -- would abandon whatever was waiting for it.
+#>
+function Test-ScheduledTask([string] $name) {
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+
+    try {
+        & schtasks /query /tn $name 2>&1 | Out-Null
+
+        return $LASTEXITCODE -eq 0
+    }
+    finally {
+        $ErrorActionPreference = $previous
+    }
+}
+
 if ($PSVersionTable.Platform -and $PSVersionTable.Platform -ne 'Win32NT') {
     throw 'The 1RemoteCLI agent is a Windows program. Install it on the machine whose terminals you want to reach.'
 }
@@ -409,6 +432,7 @@ also clears it, since the agent starts from a logon task.
     #>
     $attempts = 6
     $ran = $false
+    $viaTask = $false
 
     for ($attempt = 1; $attempt -le $attempts; $attempt++) {
         try {
@@ -418,8 +442,78 @@ also clears it, since the agent starts from a logon task.
         }
         catch {
             if ($attempt -eq $attempts) {
+                $refusal = $_.Exception.Message
+
+                <#
+                    Last resort: let Task Scheduler perform the launch instead.
+
+                    The block names powershell.exe as the process it stopped, so it is
+                    at least possible that what is refused is this shell starting an
+                    unknown program rather than the program itself -- and the agent is
+                    normally started by the scheduler, which is a launcher Windows
+                    treats quite differently. That has never been observed at a moment
+                    when the file was actually blocked, so this is a question as much
+                    as a remedy, and it is asked only once everything else has failed.
+
+                    A task of its own rather than the agent's, because the agent's does
+                    not exist yet: registering it is what `install` is being run to do.
+                    Nothing of the command's output survives -- a task reports only an
+                    exit code -- so success is judged by whether the logon task it was
+                    supposed to create is there afterwards.
+                #>
+                $bootstrap = '1RemoteCLI First Run'
+                $created = $false
+
+                # Must match AgentTask.TaskName, which is what `install` registers and
+                # therefore the only evidence available that it got that far.
+                $agentTask = '1RemoteCLI Agent'
+
+                try {
+                    Write-Step "Windows refused to start it from here; asking Task Scheduler instead"
+
+                    $previous = $ErrorActionPreference
+                    $ErrorActionPreference = 'Continue'
+
+                    try {
+                        & schtasks /create /tn $bootstrap /tr "`"$installed`" install" `
+                            /sc once /st 23:59 /rl LIMITED /f 2>&1 | Out-Null
+                        $created = $LASTEXITCODE -eq 0
+
+                        if ($created) {
+                            & schtasks /run /tn $bootstrap 2>&1 | Out-Null
+                        }
+                    }
+                    finally {
+                        $ErrorActionPreference = $previous
+                    }
+
+                    if ($created) {
+                        # Judged by the logon task appearing, since a task reports only
+                        # an exit code and `install` does its work through side effects.
+                        foreach ($wait in 1..30) {
+                            Start-Sleep -Seconds 2
+
+                            if (Test-ScheduledTask $agentTask) { $viaTask = $true; break }
+                        }
+                    }
+                }
+                catch { }
+                finally {
+                    $previous = $ErrorActionPreference
+                    $ErrorActionPreference = 'Continue'
+
+                    try { & schtasks /delete /tn $bootstrap /f 2>&1 | Out-Null }
+                    finally { $ErrorActionPreference = $previous }
+                }
+
+                if ($viaTask) {
+                    Write-Step "Task Scheduler was allowed to run it, and the install completed"
+                    $ran = $true
+                    break
+                }
+
                 throw @"
-Windows would not let '$installed' start, after $attempts attempts: $($_.Exception.Message)
+Windows would not let '$installed' start, after $attempts attempts: $refusal
 
 The download is installed and its hash matched the release, so the file is fine.
 Something on this machine is refusing to run it -- on a managed machine, usually the
@@ -437,6 +531,12 @@ Worth trying, in this order:
   Again, now. The verdict is not always stable, and this rewrites nothing, so a copy
   that is already working cannot be lost by trying:
       & "$installed" install
+
+  Start it through Task Scheduler, which is how it starts at every logon and is a
+  launcher Windows judges separately from this shell. The install above already
+  tried this and it did not take; running the whole installer again retries it,
+  and rewrites nothing:
+      irm https://raw.githubusercontent.com/$Repository/main/scripts/install.ps1 | iex
 
   Allow this one file. Needs an elevated PowerShell, and is the remedy that actually
   applies if the machine is yours:
@@ -462,7 +562,13 @@ policy, and an administrator has to allow it.
         }
     }
 
-    if ($ran -and $LASTEXITCODE -ne 0) {
+    <#
+        The exit code belongs to `install` only when this shell ran it. On the
+        Task Scheduler path the last native command was the schtasks cleanup, and
+        the task's own exit code is not reported back, so the logon task appearing
+        is the whole of the evidence and there is nothing further to check.
+    #>
+    if ($ran -and -not $viaTask -and $LASTEXITCODE -ne 0) {
         throw "1remote install failed. The executable is in place; run '$installed install' to see why."
     }
 

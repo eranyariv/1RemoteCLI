@@ -24,6 +24,7 @@ function session(id: string, overrides: Partial<SessionInfo> = {}): SessionInfo 
     startedAt: new Date('2024-05-17T09:00:00Z'),
     displayName: 'PowerShell',
     awaitingInput: false,
+    cliType: 'PowerShell',
     ...overrides,
   }
 }

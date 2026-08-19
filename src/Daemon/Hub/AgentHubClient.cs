@@ -451,6 +451,10 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
                 notification.SessionId,
                 () => _sessions.InterruptAsync(notification.SessionId)).ConfigureAwait(false));
 
+        _connection.On<SetSessionTypeRequestedNotification>(
+            HubMethods.Agent.SetSessionTypeRequested,
+            async notification => await OnSetSessionTypeAsync(notification).ConfigureAwait(false));
+
         _connection.On<AttachRequestedNotification>(
             HubMethods.Agent.AttachRequested,
             async notification => await OnAttachRequestedAsync(notification).ConfigureAwait(false));
@@ -466,6 +470,38 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
         _connection.On<ErrorNotification>(
             HubMethods.Agent.Error,
             notification => Once(1901, () => _logger.Refused("A hub call", notification.Code, notification.Message)));
+    }
+
+    /// <summary>
+    /// Records the user's correction and tells the hub, so every one of their devices
+    /// and the settings window on this machine agree about what is running.
+    /// <para>
+    /// The agent is the only writer of session state, which is why the correction
+    /// travels all the way here instead of being applied where it was made. It also
+    /// means the answer survives the phone that gave it going away, and outlives its
+    /// connection rather than its tab.
+    /// </para>
+    /// </summary>
+    private async Task OnSetSessionTypeAsync(SetSessionTypeRequestedNotification notification)
+    {
+        if (!_sessions.TryGet(notification.SessionId, out TerminalSession session))
+        {
+            _logger.Refused("Set session type", "session_not_found", notification.SessionId);
+            return;
+        }
+
+        if (!Enum.IsDefined(notification.CliType))
+        {
+            _logger.Refused("Set session type", "invalid_request", notification.SessionId);
+            return;
+        }
+
+        session.CliType = notification.CliType;
+
+        await TryInvokeAsync(
+            HubMethods.Server.SessionUpdated,
+            new AgentSessionUpdatedNotification { Session = Describe(session) },
+            CancellationToken.None).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -760,6 +796,7 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
         Rows = session.Rows,
         StartedAt = session.StartedUtc,
         DisplayName = session.DisplayName,
+        CliType = session.CliType,
     };
 
     private static string AgentVersion => ProductVersion.Current;

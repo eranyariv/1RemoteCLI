@@ -1,3 +1,5 @@
+using OneRemoteCli.Protocol.Hub;
+
 namespace OneRemoteCli.Daemon.Agent;
 
 /// <summary>
@@ -42,6 +44,7 @@ public sealed class TerminalSession
     private int _rows;
     private long _outputCount;
     private long _lastOutputTicks;
+    private int _cliType;
 
     public TerminalSession(
         string sessionId,
@@ -64,6 +67,7 @@ public sealed class TerminalSession
         Screen = new SessionScreen(cols, rows);
         StartedUtc = DateTimeOffset.UtcNow;
         _lastOutputTicks = StartedUtc.UtcTicks;
+        _cliType = (int)CliTypes.Detect(program, args);
     }
 
     public string SessionId { get; }
@@ -77,6 +81,21 @@ public sealed class TerminalSession
     public string DisplayName { get; }
 
     public DateTimeOffset StartedUtc { get; }
+
+    /// <summary>
+    /// Which CLI this session is hosting.
+    /// <para>
+    /// Detected from the command line when the session opens, and settable afterwards
+    /// because detection is a guess and the person looking at the screen is not. The
+    /// setter is what the phone's picker ultimately reaches; it is deliberately not
+    /// guarded by the output gate, since nothing here orders against terminal bytes.
+    /// </para>
+    /// </summary>
+    public CliType CliType
+    {
+        get => (CliType)Volatile.Read(ref _cliType);
+        set => Volatile.Write(ref _cliType, (int)value);
+    }
 
     public int Cols => Volatile.Read(ref _cols);
 

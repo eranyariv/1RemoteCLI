@@ -496,7 +496,8 @@ public static class Program
             .. host.Sessions.Snapshot().Select(session => new SessionSummary(
                 session.DisplayName,
                 session.StartedUtc,
-                host.AwaitingInput.IsAwaitingInput(session))),
+                host.AwaitingInput.IsAwaitingInput(session),
+                session.CliType)),
         ];
 
         var settings = new SettingsActions(

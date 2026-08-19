@@ -13,6 +13,15 @@ public static class HubMethods
         public const string RegisterMachine = "RegisterMachine";
         public const string SessionOpened = "SessionOpened";
         public const string SessionClosed = "SessionClosed";
+
+        /// <summary>
+        /// Something about a live session changed. Distinct from
+        /// <see cref="SessionOpened"/> on purpose: an update is not an open, and
+        /// reusing the open would mean every rename counted as a new session in the
+        /// usage figures and read as one in the logs.
+        /// </summary>
+        public const string SessionUpdated = "SessionUpdated";
+
         public const string TerminalOutput = "TerminalOutput";
         public const string SessionAwaitingInput = "SessionAwaitingInput";
 
@@ -24,6 +33,7 @@ public static class HubMethods
         public const string SendInput = "SendInput";
         public const string ResizeTerminal = "ResizeTerminal";
         public const string InterruptSession = "InterruptSession";
+        public const string SetSessionType = "SetSessionType";
         public const string RegisterPush = "RegisterPush";
 
         // Both.
@@ -38,6 +48,7 @@ public static class HubMethods
         public const string SendInput = "SendInput";
         public const string ResizeTerminal = "ResizeTerminal";
         public const string InterruptSession = "InterruptSession";
+        public const string SetSessionTypeRequested = "SetSessionTypeRequested";
         public const string TokenExpiring = "TokenExpiring";
         public const string Error = "Error";
     }
@@ -49,6 +60,10 @@ public static class HubMethods
         public const string MachineOnline = "MachineOnline";
         public const string MachineOffline = "MachineOffline";
         public const string SessionOpened = "SessionOpened";
+
+        /// <summary>A live session's details changed — its type, and later its name.</summary>
+        public const string SessionUpdated = "SessionUpdated";
+
         public const string SessionClosed = "SessionClosed";
         public const string TerminalOutput = "TerminalOutput";
         public const string SessionAwaitingInput = "SessionAwaitingInput";

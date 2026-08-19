@@ -5,9 +5,17 @@ import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 
 import { describeError } from '../protocol/errors'
-import type { MachineInfo, SessionInfo, TerminalOutputKind } from '../protocol/wire'
+import { CLI_TYPES, type CliType, type MachineInfo, type SessionInfo, type TerminalOutputKind } from '../protocol/wire'
 import type { RelayClient } from '../relay/client'
-import { ExtraKeys, KeyBarLayout, encodeBinary, encodeKey, type KeyDefinition } from '../terminal/keys'
+import { catalogFor, labelFor, type CommandDefinition } from '../terminal/catalog'
+import {
+  ExtraKeys,
+  KeyBarLayout,
+  encodeBinary,
+  encodeKey,
+  encodeText,
+  type KeyDefinition,
+} from '../terminal/keys'
 import { NoModifiers, applyModifiers, isArmed, type Modifiers } from '../terminal/modifiers'
 import {
   measureViewport,
@@ -60,6 +68,8 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
   const fitRef = useRef<FitAddon | null>(null)
   const [geometry, setGeometry] = useState({ cols: session.cols, rows: session.rows })
   const [showExtras, setShowExtras] = useState(false)
+  const [showActions, setShowActions] = useState(false)
+  const [showPicker, setShowPicker] = useState(false)
   const [modifiers, setModifiers] = useState<Modifiers>(NoModifiers)
 
   // Read by the xterm callbacks, which are wired once and must see what is armed
@@ -281,8 +291,41 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
     termRef.current?.focus()
   }, [])
 
-  const saveTrace = useCallback(() => {
-    attached.stopRecording()
+  /**
+   * Types a command without sending it.
+   *
+   * The Return is left to the user, because half of these take an argument and the
+   * other half — `/clear` foremost — discard work that cannot be recovered by
+   * apologising to the model afterwards.
+   */
+  const type = useCallback(
+    (command: CommandDefinition) => {
+      attached.send(encodeText(command.text))
+      termRef.current?.focus()
+    },
+    [attached],
+  )
+
+  /**
+   * Corrects the guess.
+   *
+   * Nothing is set locally. The request goes to the machine, which owns session
+   * state and answers with a `SessionUpdated` that reaches every device — so the
+   * phone in your pocket and the settings window on the desk cannot disagree about
+   * what is running here.
+   */
+  const chooseType = useCallback(
+    (next: CliType) => {
+      setShowPicker(false)
+      void client.setSessionType(session.sessionId, next)
+      termRef.current?.focus()
+    },
+    [client, session.sessionId],
+  )
+
+  const catalog = catalogFor(session.cliType)
+
+  const saveTrace = useCallback(() => {    attached.stopRecording()
     downloadTrace(
       attached.recorder.build({
         program: session.program,
@@ -390,6 +433,73 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
       <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden px-1 py-1" />
 
       <div className="border-t border-slate-800 bg-slate-900/60 pb-[env(safe-area-inset-bottom)]">
+        {/*
+          The per-CLI sheet, above the key row rather than below it: the row is the
+          one thing that must never move, because it is aimed at by muscle memory
+          while looking at the terminal rather than at the keys.
+        */}
+        {showActions ? (
+          <div className="border-b border-slate-800 px-2 py-2">
+            {catalog.shortcuts.length > 0 ? (
+              <div className="flex items-center gap-1 overflow-x-auto pb-2">
+                {catalog.shortcuts.map((key) => (
+                  <KeyButton key={key.name} definition={key} onPress={press} />
+                ))}
+              </div>
+            ) : null}
+
+            {catalog.commands.length > 0 ? (
+              <div className="flex flex-wrap gap-1">
+                {catalog.commands.map((command) => (
+                  <button
+                    key={command.text}
+                    type="button"
+                    aria-label={`${command.text} — ${command.description}`}
+                    onPointerDown={(event) => {
+                      event.preventDefault()
+                      type(command)
+                    }}
+                    className="min-h-10 rounded-lg bg-slate-800 px-3 font-mono text-sm text-slate-200 transition active:bg-slate-700"
+                  >
+                    {command.text}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                aria-expanded={showPicker}
+                onClick={() => setShowPicker((v) => !v)}
+                className="text-[11px] text-slate-500 underline decoration-dotted underline-offset-2"
+              >
+                {session.cliType === 'Generic'
+                  ? "We couldn't tell what this is running. Set it →"
+                  : `Running ${labelFor(session.cliType)}. Not right? →`}
+              </button>
+
+              {showPicker
+                ? CLI_TYPES.map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      aria-pressed={option === session.cliType}
+                      onClick={() => chooseType(option)}
+                      className={`min-h-9 rounded-lg px-3 text-xs transition ${
+                        option === session.cliType
+                          ? 'bg-sky-400 text-slate-950'
+                          : 'bg-slate-800 text-slate-300 active:bg-slate-700'
+                      }`}
+                    >
+                      {labelFor(option)}
+                    </button>
+                  ))
+                : null}
+            </div>
+          </div>
+        ) : null}
+
         <div className="flex items-center gap-1 overflow-x-auto px-2 py-2">
           <ModifierButton
             label="Ctrl"
@@ -407,6 +517,18 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
           {KeyBarLayout.map((key) => (
             <KeyButton key={key.name} definition={key} onPress={press} />
           ))}
+
+          <button
+            type="button"
+            aria-expanded={showActions}
+            onClick={() => setShowActions((v) => !v)}
+            aria-label={`Shortcuts and commands for ${labelFor(session.cliType)}`}
+            className={`min-h-10 shrink-0 rounded-lg px-3 text-sm transition active:bg-slate-700 ${
+              showActions ? 'bg-slate-700 text-slate-100' : 'text-slate-400'
+            }`}
+          >
+            ⌘
+          </button>
 
           <button
             type="button"

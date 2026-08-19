@@ -254,6 +254,41 @@ public sealed class RelayRegistry
         }
     }
 
+    /// <summary>
+    /// Replaces a session's details in place.
+    /// <para>
+    /// Refuses to create one. An update for a session that is not here is either a
+    /// race with its own close or an agent working from a stale list, and in both
+    /// cases inserting would put a session on the user's list that no longer exists
+    /// and that nothing will ever remove.
+    /// </para>
+    /// </summary>
+    public SessionAddress? UpdateSession(string connectionId, SessionInfo session)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionId);
+        ArgumentNullException.ThrowIfNull(session);
+
+        lock (_gate)
+        {
+            RegisteredMachine? machine = MachineOf(connectionId, out string? userKey);
+            if (machine is null || userKey is null ||
+                !machine.Sessions.TryGetValue(session.SessionId, out SessionInfo? existing))
+            {
+                return null;
+            }
+
+            // The agent does not track the idle heuristic per session, so a whole-record
+            // update would clear a flag the hub is the one holding. Carried across
+            // rather than trusted from the sender.
+            session.AwaitingInput = existing.AwaitingInput;
+
+            machine.Sessions[session.SessionId] = session;
+            machine.LastSeen = _time.GetUtcNow();
+
+            return new SessionAddress(userKey, machine.MachineId, session.SessionId);
+        }
+    }
+
     /// <summary>Removes a session, and detaches any client watching it.</summary>
     public SessionAddress? RemoveSession(string connectionId, string sessionId)
     {

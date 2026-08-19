@@ -21,6 +21,14 @@
 /** Matches `TerminalOutputKind`. Enums travel as their names, not their numbers. */
 export type TerminalOutputKind = 'Delta' | 'Snapshot'
 
+/**
+ * Matches `CliType`. Which program a session is hosting, as far as the agent could
+ * tell — a hint that decides which buttons to offer, and nothing else.
+ */
+export type CliType = 'Generic' | 'Cmd' | 'PowerShell' | 'ClaudeCode' | 'CopilotCli'
+
+export const CLI_TYPES: readonly CliType[] = ['Generic', 'Cmd', 'PowerShell', 'ClaudeCode', 'CopilotCli']
+
 export interface SessionInfo {
   sessionId: string
   program: string
@@ -33,6 +41,7 @@ export interface SessionInfo {
   /** Falls back to the program name, which is what the agent does when unset. */
   displayName: string
   awaitingInput: boolean
+  cliType: CliType
 }
 
 export interface MachineInfo {
@@ -131,7 +140,18 @@ export function decodeSession(value: unknown): SessionInfo {
     // us from an older agent, and "unnamed session" is nobody's idea of a label.
     displayName: typeof s[7] === 'string' && s[7].length > 0 ? s[7] : program,
     awaitingInput: bool(s[8]),
+    // Absent from a version 1 agent, and unrecognised if a later one adds a type
+    // this build has never heard of. Both are the same thing to the user — nobody
+    // has said what this is — and both must land on Generic rather than on a string
+    // the button catalogue will never match.
+    cliType: cliType(s[9]),
   }
+}
+
+function cliType(value: unknown): CliType {
+  return typeof value === 'string' && (CLI_TYPES as readonly string[]).includes(value)
+    ? (value as CliType)
+    : 'Generic'
 }
 
 export function decodeMachine(value: unknown): MachineInfo {
@@ -166,6 +186,12 @@ export function decodeMachineOffline(value: unknown): string {
 /** `ClientSessionOpenedNotification` */
 export function decodeSessionOpened(value: unknown): { machineId: string; session: SessionInfo } {
   const n = tuple(value, 'ClientSessionOpenedNotification')
+  return { machineId: str(n[0]), session: decodeSession(n[1]) }
+}
+
+/** `ClientSessionUpdatedNotification` — same shape as the open, different meaning. */
+export function decodeSessionUpdated(value: unknown): { machineId: string; session: SessionInfo } {
+  const n = tuple(value, 'ClientSessionUpdatedNotification')
   return { machineId: str(n[0]), session: decodeSession(n[1]) }
 }
 
@@ -252,6 +278,17 @@ export function encodeResizeTerminal(sessionId: string, cols: number, rows: numb
 
 export function encodeInterruptSession(sessionId: string): unknown[] {
   return [sessionId]
+}
+
+/**
+ * `SetSessionTypeRequest`
+ *
+ * The type goes on the wire as its name, which is how SignalR's MessagePack
+ * protocol writes a C# enum. Sending the ordinal instead would decode to whatever
+ * enum member happens to sit at that number, and the hub would accept it.
+ */
+export function encodeSetSessionType(sessionId: string, cliType: CliType): unknown[] {
+  return [sessionId, cliType]
 }
 
 /**

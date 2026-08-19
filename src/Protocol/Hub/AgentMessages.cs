@@ -32,6 +32,23 @@ public sealed class AgentSessionOpenedNotification
     public SessionInfo Session { get; set; } = new();
 }
 
+/// <summary>
+/// Agent to hub. A live session's details changed.
+/// <para>
+/// Carries the whole <see cref="SessionInfo"/> rather than the field that moved. The
+/// hub stores sessions as whole records and hands them out the same way, so a delta
+/// would have to be applied field by field in the one place that must not get a
+/// session's shape wrong — and a client that missed the delta would be left showing
+/// the old value with nothing to correct it.
+/// </para>
+/// </summary>
+[MessagePackObject]
+public sealed class AgentSessionUpdatedNotification
+{
+    [Key(0)]
+    public SessionInfo Session { get; set; } = new();
+}
+
 /// <summary>Agent to hub. A session ended, either because the child exited or the wrapper died.</summary>
 [MessagePackObject]
 public sealed class AgentSessionClosedNotification
@@ -180,6 +197,17 @@ public sealed class InterruptSessionNotification
 {
     [Key(0)]
     public string SessionId { get; set; } = string.Empty;
+}
+
+/// <summary>Hub to agent. Set the session's CLI type, because the user said so.</summary>
+[MessagePackObject]
+public sealed class SetSessionTypeRequestedNotification
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public CliType CliType { get; set; }
 }
 
 /// <summary>

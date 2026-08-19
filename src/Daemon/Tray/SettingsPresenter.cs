@@ -1,4 +1,5 @@
 using OneRemoteCli.Protocol;
+using OneRemoteCli.Protocol.Hub;
 
 namespace OneRemoteCli.Daemon.Tray;
 
@@ -11,7 +12,16 @@ namespace OneRemoteCli.Daemon.Tray;
 /// notification fires once per quiet episode, and a window would then keep showing
 /// "waiting" for a session the user already answered.
 /// </param>
-public readonly record struct SessionSummary(string DisplayName, DateTimeOffset StartedUtc, bool AwaitingInput);
+/// <param name="CliType">
+/// Which CLI it is hosting. Shown even when it is <see cref="Protocol.Hub.CliType.Generic"/>,
+/// because "we could not tell" is the state that explains why the phone is offering
+/// no shortcuts, and a user who cannot see it has no reason to go and set one.
+/// </param>
+public readonly record struct SessionSummary(
+    string DisplayName,
+    DateTimeOffset StartedUtc,
+    bool AwaitingInput,
+    CliType CliType = CliType.Generic);
 
 /// <summary>Everything the settings window reads, as text.</summary>
 /// <param name="Account">Who is signed in, or that nobody is.</param>
@@ -102,13 +112,23 @@ public static class SettingsPresenter
     }
 
     /// <summary>
-    /// One session as a line: what it is, how long it has been there, and whether it
-    /// wants something. In that order, because the first is how the user finds the one
-    /// they are looking for and the last is why they opened the window.
+    /// One session as a line: what it is, what it is running, how long it has been
+    /// there, and whether it wants something. In that order, because the first is how
+    /// the user finds the one they are looking for and the last is why they opened the
+    /// window.
+    /// <para>
+    /// A type we could not work out is left out rather than written as "Generic".
+    /// Naming the absence of an answer costs a reader a moment on every line to learn
+    /// nothing, and does it on the lines that are already the least informative.
+    /// </para>
     /// </summary>
     public static string Describe(SessionSummary session, DateTimeOffset now)
     {
-        string line = $"{session.DisplayName} \u2014 started {Since(now - session.StartedUtc)}";
+        string kind = session.CliType == CliType.Generic
+            ? string.Empty
+            : $"{CliTypes.Label(session.CliType)} \u2014 ";
+
+        string line = $"{session.DisplayName} \u2014 {kind}started {Since(now - session.StartedUtc)}";
 
         return session.AwaitingInput ? $"{line} \u2014 waiting for input" : line;
     }

@@ -209,6 +209,82 @@ public sealed class RelayHubTests : IAsyncLifetime
         Assert.Equal("session-1", (await Next(interrupts)).SessionId);
     }
 
+    /// <summary>
+    /// The full round trip of a correction: client asks, agent is told, agent
+    /// re-announces, every device hears.
+    /// <para>
+    /// Worth an end-to-end test rather than two unit tests, because the value of the
+    /// feature is entirely in the loop closing. A client that set the type locally
+    /// would pass every test of its own and still leave the phone and the settings
+    /// window on the desk disagreeing about what is running.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task CorrectingASessionTypeGoesToTheAgentAndComesBackToEveryClient()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        Channel<SetSessionTypeRequestedNotification> requests =
+            Listen<SetSessionTypeRequestedNotification>(agent, HubMethods.Agent.SetSessionTypeRequested);
+        await OpenSessionAsync(agent, "session-1", "node");
+
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        Channel<ClientSessionUpdatedNotification> updates =
+            Listen<ClientSessionUpdatedNotification>(client, HubMethods.Client.SessionUpdated);
+        await AttachAsync(client, "machine-a", "session-1");
+
+        Assert.Null(await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SetSessionType,
+            new SetSessionTypeRequest { SessionId = "session-1", CliType = CliType.ClaudeCode }));
+
+        SetSessionTypeRequestedNotification asked = await Next(requests);
+        Assert.Equal("session-1", asked.SessionId);
+        Assert.Equal(CliType.ClaudeCode, asked.CliType);
+
+        // The agent is the only writer of session state, so nothing has changed until
+        // it says so.
+        SessionInfo corrected = NewSession("session-1", "node");
+        corrected.CliType = CliType.ClaudeCode;
+
+        Assert.Null(await agent.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SessionUpdated,
+            new AgentSessionUpdatedNotification { Session = corrected }));
+
+        ClientSessionUpdatedNotification update = await Next(updates);
+        Assert.Equal("machine-a", update.MachineId);
+        Assert.Equal(CliType.ClaudeCode, update.Session.CliType);
+    }
+
+    [Fact]
+    public async Task RefusesACliTypeThatDoesNotExist()
+    {
+        // The enum arrives from a browser, so it is input rather than a type. Passing
+        // it on unchecked would put a number the agent has no case for into the record
+        // every client then renders.
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "session-1", "pwsh");
+
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        await AttachAsync(client, "machine-a", "session-1");
+
+        ErrorNotification? refused = await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SetSessionType,
+            new SetSessionTypeRequest { SessionId = "session-1", CliType = (CliType)97 });
+
+        Assert.Equal(ErrorCodes.InvalidRequest, refused!.Code);
+    }
+
+    [Fact]
+    public async Task WillNotUpdateASessionThatWasNeverOpened()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+
+        ErrorNotification? refused = await agent.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SessionUpdated,
+            new AgentSessionUpdatedNotification { Session = NewSession("ghost", "pwsh") });
+
+        Assert.Equal(ErrorCodes.SessionNotFound, refused!.Code);
+    }
+
     [Fact]
     public async Task ResizeReachesTheAgentAndNonsenseDoesNot()
     {

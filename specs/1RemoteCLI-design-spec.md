@@ -445,7 +445,13 @@ Everything is reconstructed by agents and clients reconnecting after a restart. 
 
 React + Vite + Tailwind, `@xterm/xterm` with `@xterm/addon-fit` and `@xterm/addon-web-links`, and a service worker for installability and Web Push.
 
-**Screens.** A machine list (online/offline, session counts); a session list per machine (program, working directory, uptime, "waiting for input" badge); and the terminal view.
+**Screens.** A machine list (online/offline, session counts); a session list per machine (program, CLI type, working directory, uptime, "waiting for input" badge); and the terminal view.
+
+**Knowing what a session is running.** Each session carries a `cliType`, worked out by the agent from the command line it was asked to wrap — `claude`, `pwsh`, `gh copilot` — and shipped as a field on `SessionInfo`. It exists so the phone can offer the right buttons: a terminal on a phone is mostly a screen you cannot type into comfortably, and the difference between a usable session and a frustrating one is whether `/compact` and `Shift+Tab` are one tap away rather than a dozen against autocorrect.
+
+Detection is a pure function of the command line, not of the output stream. Sniffing would be more accurate for the awkward cases and is the wrong trade twice: it puts a parser on the hottest path in the product, and it makes the type arrive some seconds *after* the session, so the buttons appear late on the one screen where the user is already waiting.
+
+It is a hint and never a control — nothing about how a session is relayed, framed or interrupted changes with the type — so guessing is acceptable here in a way it would not be anywhere else. The worst a wrong answer does is offer a menu of commands the program does not have. When the guess is wrong the user corrects it from the terminal view, and the correction travels to the *agent*, which owns session state, and comes back as `SessionUpdated` to every device. Applying it locally would be one line of code and would leave the phone in the pocket, the tablet on the desk, and the settings window disagreeing about the same session.
 
 **Terminal view.** The `xterm.js` viewport, a status bar, and a fixed accessory bar above the on-screen keyboard, addressing the fact that mobile keyboards have no modifier or arrow keys:
 
@@ -467,6 +473,10 @@ React + Vite + Tailwind, `@xterm/xterm` with `@xterm/addon-fit` and `@xterm/addo
 The encodings are the ones a real terminal puts on the wire, since the whole design rests on the PTY being unable to tell the phone apart from the keyboard on the desk. `Ctrl`+letter clears bit 6, which is ASCII's own construction (`Ctrl+C` → `0x03`); the digit row carries the DEC convention that makes `Ctrl+3` an Esc and `Ctrl+8` a Delete; `Alt` prefixes an escape, which is what readline, bash and zsh are written against. A character `Ctrl` does not modify is sent unchanged rather than swallowed, so arming `Ctrl` and typing an accented letter produces the letter. Cursor keys carry their modifiers inside the sequence — `Ctrl+Left` is `CSI 1;5D`, which readline reads as "back one word" — while unmodified cursor keys keep the short `CSI D` form, because programs that match on exact bytes, as agent prompts do, recognise only that one.
 
 `Ctrl+C` is a distinct, red, always-visible control because interrupting a runaway agent is the single most time-critical action in the product. It is deliberately not reachable only through the sticky-modifier path, it never sits behind the "more" disclosure, and it discards whatever was armed rather than combining with it — it is the one key that must do the same thing every time it is pressed. It also does not travel as a byte: it uses the dedicated interrupt method, which signals the process, because a session wedged badly enough to have stopped reading its input is exactly the session being interrupted.
+
+**Per-CLI quick actions.** Behind a disclosure on the same bar sits a short, per-`cliType` list: the shortcuts that program is actually driven by, and its most-reached-for commands. Claude Code and Copilot CLI get `Shift+Tab` (`CSI Z`), which is how you change what an agent is allowed to do without editing a config file, and Claude Code additionally gets a double Escape as a single button — it distinguishes one Esc from two by timing, and a relayed double tap cannot be relied on to land inside that window. Shells get PSReadLine's line editing instead, which is the part that hurts most without a physical keyboard.
+
+The lists are deliberately short. A list of everything is a reference manual, and a reference manual on a phone screen is slower than typing. Commands are *inserted, not submitted*: half take an argument, and the ones that do not include `/clear`, which discards work that cannot be recovered by apologising to the model afterwards. A session whose type is unknown is offered no commands at all rather than a guess, because a button whose effect nobody can predict is worse than no button.
 
 **Sizing.** The phone is authoritative while attached: on attach, and on orientation change, the client computes columns and rows from the viewport and sends `ResizeTerminal`, which reshapes the real PTY. The desk terminal window does not resize in response, so a program will render to the phone's narrower width in a wider desktop window until the phone detaches. This is the accepted trade: a correctly reflowed phone view is worth a temporarily odd-looking desk window, and TUIs handle `SIGWINCH`-equivalent resizes natively. On detach the client hands the session back the shape it had at the desk, so walking away does not leave a 45-column program stranded inside a wide window until somebody drags the corner. Resizes are debounced, so the keyboard animating open produces one message rather than thirty.
 
@@ -513,7 +523,7 @@ Length-prefixed MessagePack frames over the named pipe.
     "displayName": "Primary Dev Workstation",
     "os": "Microsoft Windows 11 Pro 10.0.26100",
     "agentVersion": "1.0.0",
-    "protocolVersion": 1
+    "protocolVersion": 2
   }]
 }
 ```
@@ -526,7 +536,8 @@ Length-prefixed MessagePack frames over the named pipe.
     "args": ["--resume"],
     "cwd": "C:\\Projects\\1RemoteCLI",
     "cols": 120, "rows": 30,
-    "startedAt": "2026-08-13T15:22:04Z"
+    "startedAt": "2026-08-13T15:22:04Z",
+    "cliType": "ClaudeCode"
   }]
 }
 ```
@@ -544,21 +555,27 @@ Length-prefixed MessagePack frames over the named pipe.
 
 `kind` is `"delta"` or `"snapshot"`; a snapshot resets the client's terminal before it is applied.
 
-Also: `SessionClosed { sessionId, exitCode }`, `SessionAwaitingInput { sessionId, hint }`, `RefreshToken { token }`.
+Also: `SessionClosed { sessionId, exitCode }`, `SessionUpdated { session }`, `SessionAwaitingInput { sessionId, hint }`, `RefreshToken { token }`.
 
-**Hub → agent**: `AttachRequested { sessionId, clientConnectionId, cols, rows, lastSeq? }`, `DetachRequested { sessionId, clientConnectionId }`, `SendInput { sessionId, data }`, `ResizeTerminal { sessionId, cols, rows }`, `InterruptSession { sessionId }`, `TokenExpiring { expiresAt }`.
+`SessionUpdated` is deliberately not a second `SessionOpened`, even though the registry's add is an upsert and would store the right thing. An open is counted in the usage figures, and being told twice what a session is should not look like having started it twice.
+
+**Hub → agent**: `AttachRequested { sessionId, clientConnectionId, cols, rows, lastSeq? }`, `DetachRequested { sessionId, clientConnectionId }`, `SendInput { sessionId, data }`, `ResizeTerminal { sessionId, cols, rows }`, `InterruptSession { sessionId }`, `SetSessionTypeRequested { sessionId, cliType }`, `TokenExpiring { expiresAt }`.
 
 ### 5.3 Client ↔ hub
 
-**Client → hub**: `ListMachines {}`, `AttachSession { machineId, sessionId, cols, rows, lastSeq? }`, `DetachSession { sessionId }`, `SendInput { sessionId, data }`, `ResizeTerminal { sessionId, cols, rows }`, `InterruptSession { sessionId }`, `RegisterPush { endpoint, keys }`, `RefreshToken { token }`.
+**Client → hub**: `ListMachines {}`, `AttachSession { machineId, sessionId, cols, rows, lastSeq? }`, `DetachSession { sessionId }`, `SendInput { sessionId, data }`, `ResizeTerminal { sessionId, cols, rows }`, `InterruptSession { sessionId }`, `SetSessionType { sessionId, cliType }`, `RegisterPush { endpoint, keys }`, `RefreshToken { token }`.
 
-**Hub → client**: `MachineList { machines[] }`, `MachineOnline / MachineOffline { machineId }`, `SessionOpened / SessionClosed { machineId, session }`, `TerminalOutput { sessionId, seq, kind, data }`, `SessionAwaitingInput { machineId, sessionId }`, `TokenExpiring { expiresAt }`, `Error { code, message, sessionId? }`.
+**Hub → client**: `MachineList { machines[] }`, `MachineOnline / MachineOffline { machineId }`, `SessionOpened / SessionUpdated / SessionClosed { machineId, session }`, `TerminalOutput { sessionId, seq, kind, data }`, `SessionAwaitingInput { machineId, sessionId }`, `TokenExpiring { expiresAt }`, `Error { code, message, sessionId? }`.
+
+`SetSessionType` is resolved through the caller's own attachment, like every other client → agent message, so the type can only be corrected from the session you are watching. Resolving it by ownership instead would be more convenient and would add a second way for a client message to reach a machine, which is the invariant that keeps "how could this possibly reach the wrong machine" a one-place question.
 
 `SendInput` is a pure passthrough: `data` is the exact byte sequence the terminal should receive — `"y\r"`, `"\u001b[A"` for cursor-up, `"\u0003"` for `Ctrl+C`. The hub never interprets it, which keeps the phone's input indistinguishable from the keyboard's.
 
 ### 5.4 Versioning
 
 `RegisterMachine` and the client handshake both carry `protocolVersion`. The hub rejects an unsupported version with a clear `Error` telling the user to update, rather than failing in an obscure way at the first incompatible message.
+
+Version 2 added `cliType` and its two messages. The minimum supported version stayed at 1, because both changes are additive: `[Key(n)]` serialises as a positional array, so a version 1 agent simply sends a shorter session and a version 1 client reads a longer one and ignores the tail. A field inserted anywhere but the end would shift every later field with no error anywhere — the machine list would quietly start showing the agent version in the OS column — which is why appending is the only permitted way to evolve one of these messages, and why `wire.fixture.json` pins the layout against bytes the C# serializer actually produced.
 
 ---
 

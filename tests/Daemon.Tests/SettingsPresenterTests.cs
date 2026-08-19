@@ -1,5 +1,6 @@
 using OneRemoteCli.Daemon.Tray;
 using OneRemoteCli.Protocol;
+using OneRemoteCli.Protocol.Hub;
 
 namespace OneRemoteCli.Daemon.Tests;
 
@@ -85,6 +86,31 @@ public sealed class SettingsPresenterTests
 
         Assert.True(view.HasSessions);
         Assert.Equal("Claude Code \u2014 started 4 minutes ago", view.Sessions[0]);
+    }
+
+    [Fact]
+    public void ASessionSaysWhatItIsRunningWhenWeKnow()
+    {
+        // The reason the setting exists: the desk should agree with the phone about
+        // what is in each window, including after the user corrects a bad guess.
+        string line = SettingsPresenter.Describe(
+            new SessionSummary("1RemoteCLI", Now.AddMinutes(-4), false, CliType.ClaudeCode),
+            Now);
+
+        Assert.Equal("1RemoteCLI \u2014 Claude Code \u2014 started 4 minutes ago", line);
+    }
+
+    [Fact]
+    public void DoesNotWriteGenericOnALineThatAlreadySaysNothing()
+    {
+        // "build — Generic — started 2 hours ago" spends a word telling the reader that
+        // we do not know, on exactly the lines that are least worth reading.
+        string line = SettingsPresenter.Describe(
+            new SessionSummary("build", Now.AddHours(-2), false),
+            Now);
+
+        Assert.DoesNotContain("Generic", line, StringComparison.Ordinal);
+        Assert.Equal("build \u2014 started 2 hours ago", line);
     }
 
     [Fact]

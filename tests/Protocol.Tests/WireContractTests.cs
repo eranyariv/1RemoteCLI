@@ -91,6 +91,7 @@ public sealed class WireContractTests
         Assert.Contains("machineOnline", covered);
         Assert.Contains("machineOffline", covered);
         Assert.Contains("sessionOpened", covered);
+        Assert.Contains("sessionUpdated", covered);
         Assert.Contains("sessionClosed", covered);
         Assert.Contains("terminalOutput", covered);
         Assert.Contains("sessionAwaitingInput", covered);
@@ -128,6 +129,7 @@ public sealed class WireContractTests
                             StartedAt = Instant,
                             DisplayName = "Claude Code",
                             AwaitingInput = true,
+                            CliType = CliType.ClaudeCode,
                         },
                     ],
                 },
@@ -175,6 +177,28 @@ public sealed class WireContractTests
                 StartedAt = Instant,
                 DisplayName = null,
                 AwaitingInput = false,
+                CliType = CliType.PowerShell,
+            },
+        });
+
+        // The correction, which is the same shape as the open and deliberately not
+        // the same message: an open counts towards usage, and being told twice what
+        // a session is should not look like having started it twice.
+        Add(messages, "sessionUpdated", new ClientSessionUpdatedNotification
+        {
+            MachineId = "5d41402abc4b2a76b9719d911017c592",
+            Session = new SessionInfo
+            {
+                SessionId = "ff00ff00",
+                Program = "pwsh",
+                Args = [],
+                Cwd = @"C:\Users\eran",
+                Cols = 80,
+                Rows = 24,
+                StartedAt = Instant,
+                DisplayName = null,
+                AwaitingInput = false,
+                CliType = CliType.CopilotCli,
             },
         });
 
@@ -243,6 +267,15 @@ public sealed class WireContractTests
         });
 
         Add(messages, "interruptSessionRequest", new InterruptSessionRequest { SessionId = "ff00ff00" });
+
+        // The enum on a *request* matters more than on a notification: the hub
+        // validates what arrives, and a client that sent the ordinal instead of the
+        // name would be silently rejected with no way to tell why from the browser.
+        Add(messages, "setSessionTypeRequest", new SetSessionTypeRequest
+        {
+            SessionId = "ff00ff00",
+            CliType = CliType.ClaudeCode,
+        });
 
         return new JsonObject
         {

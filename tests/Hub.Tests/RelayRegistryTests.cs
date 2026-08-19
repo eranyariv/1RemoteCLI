@@ -317,6 +317,59 @@ public sealed class RelayRegistryTests
     }
 
     [Fact]
+    public void ReplacesASessionInPlaceWhenTheAgentCorrectsIt()
+    {
+        var registry = new RelayRegistry();
+
+        registry.Connect(Alice, "agent-a");
+        registry.RegisterMachine(Alice, "agent-a", Request("machine-a"));
+        registry.AddSession("agent-a", Session("session-1"));
+
+        SessionAddress? address = registry.UpdateSession(
+            "agent-a",
+            Session("session-1", CliType.ClaudeCode));
+
+        Assert.Equal("machine-a", address!.MachineId);
+
+        SessionInfo stored = Assert.Single(Assert.Single(registry.ListMachines(Alice)).Sessions);
+        Assert.Equal(CliType.ClaudeCode, stored.CliType);
+    }
+
+    [Fact]
+    public void WillNotUpdateASessionOntoTheListThatIsNotOnIt()
+    {
+        // An update is a correction, never an announcement. A closed session whose
+        // update arrives a moment late would otherwise reappear on the user's list
+        // with nothing left alive to ever take it off again.
+        var registry = new RelayRegistry();
+
+        registry.Connect(Alice, "agent-a");
+        registry.RegisterMachine(Alice, "agent-a", Request("machine-a"));
+
+        Assert.Null(registry.UpdateSession("agent-a", Session("session-1")));
+        Assert.Empty(Assert.Single(registry.ListMachines(Alice)).Sessions);
+    }
+
+    [Fact]
+    public void KeepsTheWaitingFlagTheHubOwnsWhenTheAgentUpdatesASession()
+    {
+        // The agent does not track the idle heuristic, so its record says false. Taking
+        // it at its word would clear the amber dot the user is looking at.
+        var registry = new RelayRegistry();
+
+        registry.Connect(Alice, "agent-a");
+        registry.RegisterMachine(Alice, "agent-a", Request("machine-a"));
+        registry.AddSession("agent-a", Session("session-1"));
+        registry.MarkAwaitingInput("agent-a", "session-1", awaiting: true);
+
+        registry.UpdateSession("agent-a", Session("session-1", CliType.Cmd));
+
+        SessionInfo stored = Assert.Single(Assert.Single(registry.ListMachines(Alice)).Sessions);
+        Assert.True(stored.AwaitingInput);
+        Assert.Equal(CliType.Cmd, stored.CliType);
+    }
+
+    [Fact]
     public void IgnoresAnUnknownConnection()
     {
         var registry = new RelayRegistry();
@@ -334,7 +387,7 @@ public sealed class RelayRegistryTests
         ProtocolVersion = ProtocolVersion.Current,
     };
 
-    private static SessionInfo Session(string sessionId) => new()
+    private static SessionInfo Session(string sessionId, CliType cliType = CliType.Generic) => new()
     {
         SessionId = sessionId,
         Program = "pwsh",
@@ -343,5 +396,6 @@ public sealed class RelayRegistryTests
         Cols = 120,
         Rows = 30,
         StartedAt = DateTimeOffset.UnixEpoch,
+        CliType = cliType,
     };
 }

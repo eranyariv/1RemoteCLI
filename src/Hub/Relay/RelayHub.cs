@@ -180,6 +180,42 @@ public sealed class RelayHub(
         return null;
     }
 
+    /// <summary>
+    /// An agent reports that a live session's details changed.
+    /// <para>
+    /// Deliberately not routed through <see cref="SessionOpened"/>, which is an
+    /// upsert and would do the right thing to the stored record. It would also record
+    /// a second session open in the usage figures for every correction the user makes,
+    /// which is how a metric quietly stops meaning what its name says.
+    /// </para>
+    /// </summary>
+    public async Task<ErrorNotification?> SessionUpdated(AgentSessionUpdatedNotification notification)
+    {
+        if (notification?.Session is null || string.IsNullOrWhiteSpace(notification.Session.SessionId))
+        {
+            return Error(ErrorCodes.InvalidRequest, "SessionUpdated needs a session.");
+        }
+
+        SessionAddress? address = _registry.UpdateSession(Context.ConnectionId, notification.Session);
+        if (address is null)
+        {
+            return Error(
+                ErrorCodes.SessionNotFound,
+                "No such session on this machine.",
+                notification.Session.SessionId);
+        }
+
+        await Clients.Clients(_registry.ClientsOf(address.UserKey)).SendAsync(
+            HubMethods.Client.SessionUpdated,
+            new ClientSessionUpdatedNotification
+            {
+                MachineId = address.MachineId,
+                Session = notification.Session,
+            });
+
+        return null;
+    }
+
     /// <summary>An agent reports a session ended.</summary>
     public async Task<ErrorNotification?> SessionClosed(AgentSessionClosedNotification notification)
     {
@@ -515,6 +551,39 @@ public sealed class RelayHub(
             request.SessionId,
             HubMethods.Agent.InterruptSession,
             target => new InterruptSessionNotification { SessionId = target.SessionId });
+    }
+
+    /// <summary>
+    /// The user correcting what the agent guessed this session is running.
+    /// <para>
+    /// Forwarded to the agent rather than applied here, even though the hub holds the
+    /// record the phone reads. The agent owns session state; a hub that could edit it
+    /// directly would have two writers for one field, and the next thing the agent
+    /// announced would silently undo the user's choice.
+    /// </para>
+    /// </summary>
+    public Task<ErrorNotification?> SetSessionType(SetSessionTypeRequest request)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.SessionId))
+        {
+            return Task.FromResult<ErrorNotification?>(
+                Error(ErrorCodes.InvalidRequest, "SetSessionType needs a session id."));
+        }
+
+        if (!Enum.IsDefined(request.CliType))
+        {
+            return Task.FromResult<ErrorNotification?>(
+                Error(ErrorCodes.InvalidRequest, "That is not a CLI type.", request.SessionId));
+        }
+
+        return ForwardAsync(
+            request.SessionId,
+            HubMethods.Agent.SetSessionTypeRequested,
+            target => new SetSessionTypeRequestedNotification
+            {
+                SessionId = target.SessionId,
+                CliType = request.CliType,
+            });
     }
 
     // Internals.

@@ -71,4 +71,15 @@ public sealed class SessionInfo
     /// <summary>Set when the idle heuristic believes the session is waiting on the user.</summary>
     [Key(8)]
     public bool AwaitingInput { get; set; }
+
+    /// <summary>
+    /// Which CLI this session is hosting, so the phone can offer the right buttons.
+    /// <para>
+    /// Appended, because every field the browser reads is identified by a position
+    /// nothing in the payload spells out; inserting this anywhere else would silently
+    /// shift the two fields after it. An older PWA simply stops reading before it.
+    /// </para>
+    /// </summary>
+    [Key(9)]
+    public CliType CliType { get; set; }
 }

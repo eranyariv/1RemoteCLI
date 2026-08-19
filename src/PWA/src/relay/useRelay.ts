@@ -69,6 +69,12 @@ export function useRelay(signedIn: boolean): Relay {
         setMachines((m) => sessionOpened(m, machineId, session)),
       ),
 
+      // The same upsert as an open. A session that is not on the list cannot be
+      // updated onto it, because `sessionOpened` only touches a machine it knows.
+      client.on('sessionUpdated', (machineId, session) =>
+        setMachines((m) => sessionOpened(m, machineId, session)),
+      ),
+
       client.on('sessionClosed', (machineId, sessionId) =>
         setMachines((m) => sessionClosed(m, machineId, sessionId)),
       ),

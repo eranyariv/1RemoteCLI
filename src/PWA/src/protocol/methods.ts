@@ -16,6 +16,7 @@ export const Server = {
   SendInput: 'SendInput',
   ResizeTerminal: 'ResizeTerminal',
   InterruptSession: 'InterruptSession',
+  SetSessionType: 'SetSessionType',
   RegisterPush: 'RegisterPush',
   RefreshToken: 'RefreshToken',
 } as const
@@ -26,6 +27,7 @@ export const Client = {
   MachineOnline: 'MachineOnline',
   MachineOffline: 'MachineOffline',
   SessionOpened: 'SessionOpened',
+  SessionUpdated: 'SessionUpdated',
   SessionClosed: 'SessionClosed',
   TerminalOutput: 'TerminalOutput',
   SessionAwaitingInput: 'SessionAwaitingInput',
@@ -34,4 +36,4 @@ export const Client = {
 } as const
 
 /** Must match `ProtocolVersion.Current`. */
-export const PROTOCOL_VERSION = 1
+export const PROTOCOL_VERSION = 2

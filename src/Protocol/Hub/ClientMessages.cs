@@ -86,6 +86,25 @@ public sealed class InterruptSessionRequest
     public string SessionId { get; set; } = string.Empty;
 }
 
+/// <summary>
+/// Client to hub. Corrects the session's CLI type when detection guessed wrong.
+/// <para>
+/// Scoped to a session the caller is attached to, like every other client request
+/// that crosses to an agent. That is not incidental: it keeps one place in the hub
+/// where a client's message can reach a machine, and the picker lives on the screen
+/// you are already looking at, so requiring the attachment costs the user nothing.
+/// </para>
+/// </summary>
+[MessagePackObject]
+public sealed class SetSessionTypeRequest
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public CliType CliType { get; set; }
+}
+
 /// <summary>Client to hub. Registers a Web Push subscription for awaiting-input alerts.</summary>
 [MessagePackObject]
 public sealed class RegisterPushRequest
@@ -138,6 +157,24 @@ public sealed class MachineOfflineNotification
 /// <summary>Hub to client. A new session appeared on a machine.</summary>
 [MessagePackObject]
 public sealed class ClientSessionOpenedNotification
+{
+    [Key(0)]
+    public string MachineId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public SessionInfo Session { get; set; } = new();
+}
+
+/// <summary>
+/// Hub to client. A session that is already on the list changed.
+/// <para>
+/// Sent to every client of the user, not only those attached: the type shows on the
+/// session list, and a phone that is looking at the list is by definition not
+/// attached to anything.
+/// </para>
+/// </summary>
+[MessagePackObject]
+public sealed class ClientSessionUpdatedNotification
 {
     [Key(0)]
     public string MachineId { get; set; } = string.Empty;

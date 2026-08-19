@@ -17,6 +17,7 @@ import {
   decodeMachineOnline,
   decodeSessionClosed,
   decodeSessionOpened,
+  decodeSessionUpdated,
   decodeTerminalOutput,
   encodeAttachSession,
   encodeClientHandshake,
@@ -26,6 +27,8 @@ import {
   encodeResizeTerminal,
   encodeRefreshToken,
   encodeSendInput,
+  encodeSetSessionType,
+  type CliType,
   type HubError,
   type MachineInfo,
   type SessionInfo,
@@ -50,6 +53,7 @@ export interface RelayEvents {
   machineOnline(machine: MachineInfo): void
   machineOffline(machineId: string): void
   sessionOpened(machineId: string, session: SessionInfo): void
+  sessionUpdated(machineId: string, session: SessionInfo): void
   sessionClosed(machineId: string, sessionId: string, exitCode: number): void
   awaitingInput(machineId: string, sessionId: string, hint: string | null): void
   terminalOutput(output: TerminalOutput): void
@@ -290,6 +294,11 @@ export class RelayClient {
       this.emit('sessionOpened', machineId, session)
     })
 
+    connection.on(Client.SessionUpdated, (n) => {
+      const { machineId, session } = decodeSessionUpdated(n)
+      this.emit('sessionUpdated', machineId, session)
+    })
+
     connection.on(Client.SessionClosed, (n) => {
       const { machineId, sessionId, exitCode } = decodeSessionClosed(n)
       this.emit('sessionClosed', machineId, sessionId, exitCode)
@@ -377,6 +386,17 @@ export class RelayClient {
 
   async interrupt(sessionId: string): Promise<HubError | null> {
     return this.request(Server.InterruptSession, encodeInterruptSession(sessionId))
+  }
+
+  /**
+   * Corrects what the agent guessed this session is running.
+   *
+   * The answer is not applied optimistically. It travels to the agent, which owns
+   * session state, and comes back as a `SessionUpdated` for every device — so the
+   * moment the button stops looking pressed is the moment the machine agrees.
+   */
+  async setSessionType(sessionId: string, cliType: CliType): Promise<HubError | null> {
+    return this.request(Server.SetSessionType, encodeSetSessionType(sessionId, cliType))
   }
 
   /** Offers this browser's push subscription, so the hub can reach the phone when nothing is connected. */

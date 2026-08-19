@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import type { MachineInfo, SessionInfo } from '../protocol/wire'
+import { labelFor } from '../terminal/catalog'
 import { shortOs, shortPath, uptime } from './format'
 import { Empty } from './Chrome'
 
@@ -53,8 +54,15 @@ function SessionRow({
             </span>
           ) : null}
         </span>
-        <span className="mt-0.5 block truncate font-mono text-xs text-slate-500">
-          {shortPath(session.cwd)}
+        <span className="mt-0.5 flex items-baseline gap-2">
+          {session.cliType === 'Generic' ? null : (
+            <span className="shrink-0 rounded bg-slate-700/60 px-1.5 py-0.5 text-[11px] font-medium text-slate-300">
+              {labelFor(session.cliType)}
+            </span>
+          )}
+          <span className="min-w-0 truncate font-mono text-xs text-slate-500">
+            {shortPath(session.cwd)}
+          </span>
         </span>
       </span>
 

@@ -11,6 +11,7 @@ import {
   decodeMachineOnline,
   decodeSessionClosed,
   decodeSessionOpened,
+  decodeSessionUpdated,
   decodeTerminalOutput,
   decodeTokenExpiring,
   encodeAttachSession,
@@ -19,6 +20,8 @@ import {
   encodeInterruptSession,
   encodeResizeTerminal,
   encodeSendInput,
+  encodeSetSessionType,
+  type CliType,
 } from './wire'
 
 /**
@@ -83,6 +86,40 @@ describe('decoding what the hub sends', () => {
     expect(session.rows).toBe(want.rows)
     expect(session.displayName).toBe(want.displayName)
     expect(session.awaitingInput).toBe(want.awaitingInput)
+  })
+
+  /**
+   * The C# side renders the enum as a number in the fixture's `decoded` block —
+   * that is `System.Text.Json` describing a C# enum, not what MessagePack put on the
+   * wire. The bytes carry the *name*, which is what the decoder has to read, so this
+   * asserts the name and cross-checks the ordinal the C# enum declares.
+   */
+  it('reads the CLI type as the name the wire actually carries', () => {
+    const session = decodeMachineList(wire('machineList'))[0].sessions[0]
+
+    expect(session.cliType).toBe('ClaudeCode')
+    expect(expected('machineList').machines[0].sessions[0].cliType).toBe(3)
+  })
+
+  it('calls a session Generic when the type is missing or unknown', () => {
+    // A version 1 agent sends a nine-element session; a later one could send a type
+    // this build has never heard of. Both mean "nobody has said", not a crash.
+    const raw = wire('sessionOpened') as unknown[]
+    const session = raw[1] as unknown[]
+
+    expect(decodeSessionOpened([raw[0], session.slice(0, 9)]).session.cliType).toBe('Generic')
+    expect(
+      decodeSessionOpened([raw[0], [...session.slice(0, 9), 'Emacs']]).session.cliType,
+    ).toBe('Generic')
+  })
+
+  it('reads a session being corrected', () => {
+    const updated = decodeSessionUpdated(wire('sessionUpdated'))
+    const want = expected('sessionUpdated')
+
+    expect(updated.machineId).toBe(want.machineId)
+    expect(updated.session.sessionId).toBe(want.session.sessionId)
+    expect(updated.session.cliType).toBe('CopilotCli')
   })
 
   it('recovers the real instant a session started, not the sender wall clock', () => {
@@ -231,5 +268,12 @@ describe('encoding what we send the hub', () => {
     const want = shape('interruptSessionRequest')
 
     expect(encodeInterruptSession(want[0] as string)).toEqual(want)
+  })
+
+  it('sends a type correction as the name the hub validates', () => {
+    const want = shape('setSessionTypeRequest')
+
+    expect(want[1]).toBe('ClaudeCode')
+    expect(encodeSetSessionType(want[0] as string, want[1] as CliType)).toEqual(want)
   })
 })

@@ -13,11 +13,12 @@
     are all registered -- and the agent is started, so the tray icon is there when
     this finishes rather than after the next logon.
 
-    The hash check is not optional and there is no switch to skip it. These builds
-    are unsigned, so SmartScreen's warning is the only thing standing between the
-    user and a download they cannot verify -- and a warning everyone is told to
-    click through protects nobody. The checksum published alongside the build is
-    what actually establishes that the file came from the release it claims to.
+    The hash check is not optional and there is no switch to skip it. Nothing else on
+    this path verifies anything: the builds are unsigned, and SmartScreen -- which
+    people assume is the backstop -- never sees the file, because it inspects
+    downloads carrying a mark of the web and Invoke-WebRequest attaches none. The
+    checksum published alongside the build is the only thing that establishes that
+    the file came from the release it claims to.
 
     Per user, never machine-wide. The agent runs as the signed-in user, holds that
     user's token cache and starts from that user's logon task; installing it into
@@ -345,10 +346,11 @@ also clears it, since the agent starts from a logon task.
         }
     }
 
-    # Downloads carry the mark of the web, and it survives the copy. Left on, every
-    # launch of a command-line tool raises a SmartScreen prompt. The file has just
-    # been checked against the hash the release publishes, which is a stronger claim
-    # than the mark was making.
+    # Belt and braces. Invoke-WebRequest attaches no mark of the web, so there is
+    # normally nothing here to clear -- but a download that acquired one some other
+    # way would survive the copy and make every launch of a command-line tool raise a
+    # SmartScreen prompt. The file has just been checked against the hash the release
+    # publishes, which is a stronger claim than the mark would be making.
     Unblock-File $installed
 
     Write-Step "Installed to $installed"

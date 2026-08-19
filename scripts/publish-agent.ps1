@@ -33,9 +33,9 @@
     workflow get them without a flag.
 
     The build is NOT signed. There is no code-signing certificate for this project, so
-    SmartScreen will warn the first time it runs. The published SHA-256 is printed
-    here and recorded in docs/deployment.md so the download can at least be checked
-    against the build.
+    SmartScreen will warn the first time it is run from Explorer. The published
+    SHA-256 is printed here and recorded in docs/deployment.md so the download can at
+    least be checked against the build.
 
 .PARAMETER Output
     Where to put the result. Defaults to `artifacts/` at the repository root.

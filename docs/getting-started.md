@@ -35,8 +35,6 @@ It prints the product version — `0.01` — which is the same number the agent'
 
 Both clients also carry a **Send feedback** link beside it, which opens your mail client with that version already in the subject.
 
-Windows may still stop you the first time; see [SmartScreen](#windows-blocked-the-download) below.
-
 ### By hand instead
 
 Download `1remote-win-x64.exe` (or `-win-arm64`) from the [latest release](https://github.com/eranyariv/1RemoteCLI/releases/latest) and check it against the hash in `SHA256SUMS.txt`:
@@ -196,7 +194,9 @@ its session will be an empty terminal.
 
 ## Windows blocked the download
 
-The executable is not code-signed, so SmartScreen will show **"Windows protected your PC"** the first time you run it. This is expected and it is not a false positive in the interesting sense: the binary genuinely has no publisher identity attached to it.
+This one only applies if you took the **by hand** route above: downloaded the executable in a browser and ran it from Explorer. The one-line install does not go through it — `Invoke-WebRequest` does not attach a mark of the web to what it downloads, and SmartScreen only inspects files that carry one.
+
+If you did download it by hand, SmartScreen will show **"Windows protected your PC"** the first time you run it. That is expected, and it is not a false positive in the interesting sense: the executable genuinely has no publisher identity attached to it, because there is no code-signing certificate for this project.
 
 Verify it is the file that was published before you get past the warning:
 
@@ -230,7 +230,7 @@ If it happens anyway, the executable is already in place and this finishes the h
 
 If it is still blocked after that, an administrator has to allow it — or the build has to be signed, which is [#93](https://github.com/eranyariv/1RemoteCLI/issues/93).
 
-Both this and the SmartScreen warning above have the same root cause: these builds are unsigned. See [deployment](deployment.md#it-is-not-signed).
+Both this and the SmartScreen warning above come of the same thing: these builds are unsigned. They are not the same problem, though, and for a while we assumed they were — the block above was ours, and signing would not have fixed it. See [deployment](deployment.md#it-is-not-signed).
 
 ## Uninstalling
 

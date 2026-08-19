@@ -187,7 +187,7 @@ It would be 13 MB with single-file compression on, which is how it shipped up to
 
 ### It is not signed
 
-There is no code-signing certificate for this project, so SmartScreen warns on first run on every machine. The SHA-256 published beside each download is what stands in for a signature:
+There is no code-signing certificate for this project, so SmartScreen warns the first time the executable is run — though only when it carries a mark of the web, which in practice means a browser download launched from Explorer. `install.ps1` downloads with `Invoke-WebRequest`, which attaches no such mark, so the scripted install does not raise that prompt at all. The SHA-256 published beside each download is what stands in for a signature:
 
 ```powershell
 Get-FileHash .\1remote-win-x64.exe -Algorithm SHA256

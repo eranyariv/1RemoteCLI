@@ -5,9 +5,10 @@
 # is the one anybody else is running.
 #
 # The binaries are NOT signed. There is no code-signing certificate for this project,
-# so SmartScreen warns on first run and the SHA-256 of each file is published beside
-# it -- that hash is the only way a user can check that what they downloaded is what
-# this workflow built. scripts/install.ps1 verifies it for them.
+# so SmartScreen warns the first time one is run from Explorer, and the SHA-256 of
+# each file is published beside it -- that hash is the only way a user can check that
+# what they downloaded is what this workflow built. scripts/install.ps1 verifies it
+# for them.
 name: Release
 
 on:

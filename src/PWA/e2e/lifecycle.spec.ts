@@ -1,4 +1,4 @@
-import { attach, expect, expectScreen, test, type } from './fixtures'
+import { attach, expect, expectScreen, sessionCard, test, type } from './fixtures'
 
 /**
  * The two ways a session stops answering, which are different in one way that matters:
@@ -97,6 +97,6 @@ test.describe('a session that ends', () => {
 
     // A session that has ended but is still offered is worse than one that disappears:
     // tapping it is a dead end with no explanation.
-    await expect(app.getByRole('button', { name: /vanish/ })).toHaveCount(0, { timeout: 30_000 })
+    await expect(sessionCard(app, 'vanish')).toHaveCount(0, { timeout: 30_000 })
   })
 })

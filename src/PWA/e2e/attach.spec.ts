@@ -1,4 +1,4 @@
-import { attach, expect, expectScreen, screen, signIn, test } from './fixtures'
+import { attach, expect, expectScreen, screen, sessionCard, signIn, test } from './fixtures'
 
 /**
  * The first two minutes of using the product: sign in, find the machine, open what is
@@ -9,11 +9,11 @@ test.describe('finding and opening a session', () => {
     await desk('build watcher')
 
     await expect(app.getByText('desk')).toBeVisible()
-    await expect(app.getByRole('button', { name: /build watcher/ })).toBeVisible()
+    await expect(sessionCard(app, 'build watcher')).toBeVisible()
 
     // The session's identity, not just its name — a card that says the right thing
     // while pointing at the wrong session is the failure worth catching.
-    await expect(app.getByRole('button', { name: /build watcher/ })).toBeVisible()
+    await expect(sessionCard(app, 'build watcher')).toBeVisible()
   })
 
   test('says so when a machine has nothing running', async ({ app }) => {
@@ -92,7 +92,7 @@ test.describe('finding and opening a session', () => {
       await signIn(page, 'bob')
 
       await expect(page.getByText(/No machines yet/i).or(page.getByText(/Nothing running/))).toBeVisible()
-      await expect(page.getByRole('button', { name: /alice only/ })).toHaveCount(0)
+      await expect(sessionCard(page, 'alice only')).toHaveCount(0)
     } finally {
       await context.close()
     }

@@ -1,4 +1,10 @@
-import { expect, test as base, type Page, type WebSocketRoute } from '@playwright/test'
+import {
+  expect,
+  test as base,
+  type Locator,
+  type Page,
+  type WebSocketRoute,
+} from '@playwright/test'
 
 /**
  * The pieces every scenario needs: a signed-in app, a session running at the desk, and
@@ -121,6 +127,20 @@ export async function signIn(page: Page, user: 'alice' | 'bob' = 'alice'): Promi
 }
 
 /**
+ * The card that opens a session, found by the name shown on it.
+ *
+ * Anchored at the start, because the row carries a second button — the "⋯" that renames
+ * and pins — whose own label ends in the same session name. An unanchored match finds
+ * both and Playwright refuses to guess, so the anchor is what keeps "the session" and
+ * "the menu for the session" apart.
+ */
+export function sessionCard(page: Page, displayName: string): Locator {
+  return page.getByRole('button', {
+    name: new RegExp(`^${displayName.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`)}`),
+  })
+}
+
+/**
  * Opens a session from the machine list.
  *
  * By its display name, the way a person would, rather than by index: a test that taps
@@ -128,7 +148,7 @@ export async function signIn(page: Page, user: 'alice' | 'bob' = 'alice'): Promi
  * bug worth catching when a machine has two.
  */
 export async function attach(page: Page, displayName: string): Promise<void> {
-  const session = page.getByRole('button', { name: new RegExp(displayName) }).first()
+  const session = sessionCard(page, displayName).first()
 
   // Waited for explicitly, rather than relying on `click`'s own wait, so that a
   // failure says what the machine list was actually showing. The bare click reports

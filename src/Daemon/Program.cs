@@ -73,6 +73,14 @@ public static class Program
                 return 0;
 
             case CommandKind.Agent:
+                // Before anything else, and before a line is printed: if this process
+                // was given a console of its own, the agent proper runs in a copy that
+                // has none, and this one leaves so its window goes with it.
+                if (AgentConsole.HandOffIfOurs(args))
+                {
+                    return 0;
+                }
+
                 return await RunAgentAsync().ConfigureAwait(false);
 
             case CommandKind.Login:
@@ -367,12 +375,6 @@ public static class Program
 
     private static async Task<int> RunAgentAsync()
     {
-        // Started before anything is printed, so a console the scheduled task created
-        // for us goes away rather than lingering on the desktop all session. It looks
-        // for the window on a thread of its own, because the window may not exist yet
-        // and the agent must not wait on one.
-        ConsoleWindow.HideIfOurs();
-
         using ILoggerFactory loggers = AgentLogging.Create();
         ILogger logger = loggers.CreateLogger("Agent");
 

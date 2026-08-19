@@ -9,6 +9,7 @@ using OneRemoteCli.Daemon.Pty;
 using OneRemoteCli.Daemon.Wrapper;
 using OneRemoteCli.E2E.Host;
 using OneRemoteCli.Hub.Auth;
+using OneRemoteCli.Hub.Ops;
 using OneRemoteCli.Hub.Push;
 using OneRemoteCli.Hub.Relay;
 using OneRemoteCli.Protocol.Hub;
@@ -78,6 +79,12 @@ builder.Services.AddSingleton<IAccessTokenValidator>(sp => new NameTokenValidato
     sp.GetRequiredService<IOptions<EntraOptions>>().Value.RequiredScope));
 builder.Services.AddSingleton<PushSubscriptionStore>();
 builder.Services.AddSingleton<IPushNotifier, DroppingNotifier>();
+
+// The relay counts usage for the operator channel, so the hub cannot be constructed
+// without a recorder. An unconfigured deployment gets the one that counts nothing,
+// which is exactly what the real hub does when no Telegram chat is configured; what
+// the channel reports is the hub tests' business, not the browser's.
+builder.Services.AddSingleton<IUsageRecorder, NullUsageRecorder>();
 
 builder.Services.AddSignalR(RelayLiveness.Apply).AddMessagePackProtocol();
 

@@ -4,7 +4,7 @@
 
 You start `claude` on a long refactor, leave your desk, and twenty minutes later it is sitting on *"Do you want me to apply these changes? (y/n)"* — and has been for nineteen of them.
 
-1RemoteCLI attaches your phone to a terminal session already running on your Windows machine. Read the output, answer the prompt, send Ctrl+C, walk away again. Your phone buzzes when a session needs you.
+1RemoteCLI attaches your phone to a terminal session already running on your Windows machine. It can also load recent GitHub Copilot or Claude Code conversations through their public Agent Client Protocol (ACP) servers, so you can read and continue a typed chat from your phone. Your phone buzzes when a session needs you.
 
 ```powershell
 1remote claude          # exactly like running claude, but now visible from your phone
@@ -46,6 +46,7 @@ Then open the app on your phone and tap the session. Full walkthrough: **[docs/g
 flowchart LR
     subgraph pc["Your Windows PC"]
         w["1remote claude<br/>wrapper + ConPTY"] <-->|named pipe| a["1remote agent<br/>one per machine"]
+        c["Copilot / Claude Code<br/>ACP server"] <-->|NDJSON over stdio| a
     end
     a <-->|"WebSocket / TLS"| h["Hub<br/>Azure App Service"]
     h <-->|"WebSocket / TLS"| p["Phone<br/>PWA"]

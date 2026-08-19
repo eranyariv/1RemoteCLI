@@ -113,6 +113,40 @@ public sealed class SessionAwaitingInputNotification
     public string? Hint { get; set; }
 }
 
+/// <summary>Agent to hub. Explicit attention state, used by structured chat sessions.</summary>
+[MessagePackObject]
+public sealed class SessionAttentionNotification
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public bool AwaitingInput { get; set; }
+
+    [Key(2)]
+    public string? Hint { get; set; }
+}
+
+/// <summary>Agent to hub. A typed transcript snapshot or replacement delta.</summary>
+[MessagePackObject]
+public sealed class ChatTranscriptNotification
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public long Seq { get; set; }
+
+    [Key(2)]
+    public ChatTranscriptKind Kind { get; set; }
+
+    [Key(3)]
+    public ChatEvent[] Events { get; set; } = [];
+
+    [Key(4)]
+    public string? TargetConnectionId { get; set; }
+}
+
 /// <summary>
 /// Agent or client to hub. Supplies a fresh access token for a live connection.
 /// <para>
@@ -208,6 +242,31 @@ public sealed class SetSessionTypeRequestedNotification
 
     [Key(1)]
     public CliType CliType { get; set; }
+}
+
+/// <summary>Hub to agent. Send a structured message to an ACP session.</summary>
+[MessagePackObject]
+public sealed class SendChatMessageNotification
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string Text { get; set; } = string.Empty;
+}
+
+/// <summary>Hub to agent. Resolve an ACP permission request with one advertised option.</summary>
+[MessagePackObject]
+public sealed class RespondChatPermissionNotification
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string RequestId { get; set; } = string.Empty;
+
+    [Key(2)]
+    public string OptionId { get; set; } = string.Empty;
 }
 
 /// <summary>

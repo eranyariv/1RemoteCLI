@@ -39,12 +39,16 @@ If the card says something else:
 
 Tap a machine, then a session. The current screen appears immediately — the agent keeps a live model of the terminal and sends you a snapshot on attach, so you are not waiting for the program to print something before you can see where it is.
 
+Recent Copilot and Claude Code conversations have a **Chat** badge. Opening one shows typed user messages, agent replies, tool calls, and any permission choices raised by a phone-started turn. Type in the composer to continue the conversation; choosing a permission option sends that exact ACP choice back to the agent.
+
 - **Type** — tap the screen; your keyboard comes up. Characters go straight to the program.
 - **Special keys** — the bar above the keyboard has `Esc`, `Tab`, `⏎`, arrows, `^C`, `^D`, `^Z`. **More keys** opens the rest.
 - **Modifiers** — tap `Ctrl` or `Alt` and it applies to the next key you press, the way a phone shift key works. No chording required.
 - **Ctrl+C** is a first-class button because interrupting a runaway program from your phone is half the reason this exists.
 
 Multiple phones can be attached to the same session at once, and so can you at your desk. Everyone sees the same screen and anyone can type. Nobody gets kicked off.
+
+For chats, transcript history can be loaded while the desktop app is open. A permission request already waiting in the desktop app cannot be transferred to the phone, because it belongs to the desktop app's private ACP connection. Permissions raised after you continue the chat from the phone do appear on the phone and generate the normal attention notification.
 
 One thing to expect: attaching reshapes the terminal to your phone's size, so a program running in a wide window at your desk will visibly reflow. That is deliberate — it is the only way the program's own line wrapping fits your screen. When you detach, the previous shape is handed back.
 

@@ -11,26 +11,31 @@ import { Client, PROTOCOL_VERSION, Server } from '../protocol/methods'
 import { ErrorCodes, describeError } from '../protocol/errors'
 import {
   decodeAwaitingInput,
+  decodeChatTranscript,
   decodeError,
   decodeMachineList,
   decodeMachineOffline,
   decodeMachineOnline,
   decodeSessionClosed,
   decodeSessionOpened,
+  decodeSessionAttention,
   decodeSessionUpdated,
   decodeTerminalOutput,
   encodeAttachSession,
   encodeClientHandshake,
   encodeDetachSession,
   encodeInterruptSession,
+  encodeRespondChatPermission,
   encodeRegisterPush,
   encodeResizeTerminal,
   encodeRefreshToken,
   encodeSendInput,
+  encodeSendChatMessage,
   encodeSetSessionName,
   encodeSetSessionPinned,
   encodeSetSessionType,
   type CliType,
+  type ChatTranscript,
   type HubError,
   type MachineInfo,
   type SessionInfo,
@@ -59,6 +64,8 @@ export interface RelayEvents {
   sessionClosed(machineId: string, sessionId: string, exitCode: number): void
   awaitingInput(machineId: string, sessionId: string, hint: string | null): void
   terminalOutput(output: TerminalOutput): void
+  chatTranscript(transcript: ChatTranscript): void
+  attention(machineId: string, sessionId: string, awaitingInput: boolean, hint: string | null): void
   error(error: HubError): void
 }
 
@@ -312,6 +319,12 @@ export class RelayClient {
     })
 
     connection.on(Client.TerminalOutput, (n) => this.emit('terminalOutput', decodeTerminalOutput(n)))
+    connection.on(Client.ChatTranscript, (n) => this.emit('chatTranscript', decodeChatTranscript(n)))
+
+    connection.on(Client.SessionAttention, (n) => {
+      const { machineId, sessionId, awaitingInput, hint } = decodeSessionAttention(n)
+      this.emit('attention', machineId, sessionId, awaitingInput, hint)
+    })
 
     // SignalR checks the token once, at the handshake. The hub therefore has to ask,
     // and this has to answer, or the connection is dropped when the token runs out.
@@ -388,6 +401,21 @@ export class RelayClient {
 
   async interrupt(sessionId: string): Promise<HubError | null> {
     return this.request(Server.InterruptSession, encodeInterruptSession(sessionId))
+  }
+
+  async sendChatMessage(sessionId: string, text: string): Promise<HubError | null> {
+    return this.request(Server.SendChatMessage, encodeSendChatMessage(sessionId, text))
+  }
+
+  async respondChatPermission(
+    sessionId: string,
+    requestId: string,
+    optionId: string,
+  ): Promise<HubError | null> {
+    return this.request(
+      Server.RespondChatPermission,
+      encodeRespondChatPermission(sessionId, requestId, optionId),
+    )
   }
 
   /**

@@ -82,6 +82,9 @@ export function useRelay(signedIn: boolean): Relay {
       client.on('awaitingInput', (machineId, sessionId) =>
         setMachines((m) => sessionAwaitingInput(m, machineId, sessionId, true)),
       ),
+      client.on('attention', (machineId, sessionId, awaiting) =>
+        setMachines((m) => sessionAwaitingInput(m, machineId, sessionId, awaiting)),
+      ),
 
       // Output clears the flag: a session that just wrote something is, by
       // definition, not sitting waiting for you.

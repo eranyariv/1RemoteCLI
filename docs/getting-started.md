@@ -114,6 +114,21 @@ Your machine is in the list, with the sessions under it. Tap one and you are att
 
 Now go and [add it to your home screen and turn on notifications](phone-setup.md) — without that last step you have to remember to check, which defeats the point.
 
+### Continue a Copilot or Claude Code chat
+
+The agent also discovers recent conversations through the tool's public ACP server. GitHub Copilot is the default: install and sign in to Copilot CLI, restart the 1RemoteCLI agent, and recent Copilot chats appear beside terminal sessions. Opening one loads its typed transcript; messages and permission choices go back through ACP rather than through a terminal.
+
+To use Claude Code instead, install Node.js 22 or later and the official adapter, then select it before restarting the agent:
+
+```powershell
+npm install -g @agentclientprotocol/claude-agent-acp
+setx ONEREMOTE_ACP_PROVIDER claude
+```
+
+Only one ACP provider is selected per machine. Remove `ONEREMOTE_ACP_PROVIDER` or set it to `copilot` to return to GitHub Copilot. `ONEREMOTE_ACP=0` disables chat discovery.
+
+An important boundary: 1RemoteCLI can answer permissions raised by a turn you started from the phone. It cannot take over a permission prompt that is already waiting inside the desktop app, because that request belongs to the desktop app's private ACP connection. You can still load that conversation and continue it from the phone after the desktop-owned turn finishes.
+
 ## 6. The settings window
 
 Double-click the tray icon, or right-click it and choose **Settings…**. Everything the
@@ -196,6 +211,9 @@ its session will be an empty terminal.
 | `ONEREMOTE_LOG_LEVEL` | `trace`, `debug`, `info`, `warn`, `error`. |
 | `ONEREMOTE_LOG_DIR` | Where log files go. Defaults to `%LOCALAPPDATA%\1RemoteCLI\logs`. |
 | `ONEREMOTE_UPDATE_CHECK` | Set to `0` to stop the agent looking for new releases. |
+| `ONEREMOTE_ACP` | Set to `0` to disable structured chat discovery. |
+| `ONEREMOTE_ACP_PROVIDER` | `copilot` (default) or `claude`. One provider per machine. |
+| `ONEREMOTE_ACP_EXECUTABLE` | Override the selected provider's executable path. Mainly for testing or non-standard installs. |
 
 ## Windows blocked the download
 

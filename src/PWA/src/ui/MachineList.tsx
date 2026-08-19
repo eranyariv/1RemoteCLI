@@ -180,7 +180,11 @@ function SessionRow({
               ) : null}
             </span>
             <span className="mt-0.5 flex items-baseline gap-2">
-              {session.cliType === 'Generic' ? null : (
+              {session.kind === 'AgentChat' ? (
+                <span className="shrink-0 rounded bg-violet-500/15 px-1.5 py-0.5 text-[11px] font-medium text-violet-300">
+                  Chat
+                </span>
+              ) : session.cliType === 'Generic' ? null : (
                 <span className="shrink-0 rounded bg-slate-700/60 px-1.5 py-0.5 text-[11px] font-medium text-slate-300">
                   {labelFor(session.cliType)}
                 </span>
@@ -192,7 +196,7 @@ function SessionRow({
           </span>
 
           <span className="shrink-0 text-xs tabular-nums text-slate-500">
-            {uptime(session.startedAt, now)}
+            {session.kind === 'AgentChat' ? 'recent' : uptime(session.startedAt, now)}
           </span>
         </button>
 

@@ -5,12 +5,14 @@ import fixture from './wire.fixture.json'
 import { PROTOCOL_VERSION } from './methods'
 import {
   decodeAwaitingInput,
+  decodeChatTranscript,
   decodeError,
   decodeMachineList,
   decodeMachineOffline,
   decodeMachineOnline,
   decodeSessionClosed,
   decodeSessionOpened,
+  decodeSessionAttention,
   decodeSessionUpdated,
   decodeTerminalOutput,
   decodeTokenExpiring,
@@ -18,8 +20,10 @@ import {
   encodeClientHandshake,
   encodeDetachSession,
   encodeInterruptSession,
+  encodeRespondChatPermission,
   encodeResizeTerminal,
   encodeSendInput,
+  encodeSendChatMessage,
   encodeSetSessionName,
   encodeSetSessionPinned,
   encodeSetSessionType,
@@ -101,6 +105,14 @@ describe('decoding what the hub sends', () => {
 
     expect(session.cliType).toBe('ClaudeCode')
     expect(expected('machineList').machines[0].sessions[0].cliType).toBe(3)
+  })
+
+  it('distinguishes structured agent chats from terminals', () => {
+    const sessions = decodeMachineList(wire('machineList'))[0].sessions
+
+    expect(sessions[0].kind).toBe('Terminal')
+    expect(sessions[1].kind).toBe('AgentChat')
+    expect(sessions[1].program).toBe('GitHub Copilot')
   })
 
   it('calls a session Generic when the type is missing or unknown', () => {
@@ -221,6 +233,35 @@ describe('decoding what the hub sends', () => {
     expect(awaiting.hint).toBe(want.hint)
   })
 
+  it('reads explicit attention state', () => {
+    const attention = decodeSessionAttention(wire('sessionAttention'))
+    const want = expected('sessionAttention')
+
+    expect(attention.machineId).toBe(want.machineId)
+    expect(attention.sessionId).toBe(want.sessionId)
+    expect(attention.awaitingInput).toBe(true)
+    expect(attention.hint).toBe(want.hint)
+  })
+
+  it('reads typed transcript events and permission options', () => {
+    const transcript = decodeChatTranscript(wire('chatTranscript'))
+    const want = expected('chatTranscript')
+
+    expect(transcript.sessionId).toBe(want.sessionId)
+    expect(transcript.seq).toBe(want.seq)
+    expect(transcript.kind).toBe('Snapshot')
+    expect(transcript.events.map((event) => event.kind)).toEqual([
+      'UserMessage',
+      'ToolCall',
+      'Permission',
+    ])
+    expect(transcript.events[2].permissionRequestId).toBe('req-1')
+    expect(transcript.events[2].options).toEqual([
+      { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+      { optionId: 'reject-once', name: 'Deny', kind: 'reject_once' },
+    ])
+  })
+
   it('reads a token expiry', () => {
     const expiresAt = decodeTokenExpiring(wire('tokenExpiring'))
 
@@ -291,6 +332,20 @@ describe('encoding what we send the hub', () => {
     const want = shape('interruptSessionRequest')
 
     expect(encodeInterruptSession(want[0] as string)).toEqual(want)
+  })
+
+  it('sends a structured chat message', () => {
+    const want = shape('sendChatMessageRequest')
+
+    expect(encodeSendChatMessage(want[0] as string, want[1] as string)).toEqual(want)
+  })
+
+  it('sends a permission response', () => {
+    const want = shape('respondChatPermissionRequest')
+
+    expect(
+      encodeRespondChatPermission(want[0] as string, want[1] as string, want[2] as string),
+    ).toEqual(want)
   })
 
   it('sends a type correction as the name the hub validates', () => {

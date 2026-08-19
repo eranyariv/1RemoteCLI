@@ -305,6 +305,36 @@ public sealed class RelayHub(
         return Task.CompletedTask;
     }
 
+    /// <summary>A typed ACP transcript frame, fanned out only to clients watching the chat.</summary>
+    public async Task ChatTranscript(ChatTranscriptNotification notification)
+    {
+        if (notification is null || string.IsNullOrWhiteSpace(notification.SessionId))
+        {
+            return;
+        }
+
+        SessionAddress? address = _registry.AddressOf(Context.ConnectionId, notification.SessionId);
+        if (address is null)
+        {
+            return;
+        }
+
+        IReadOnlyList<string> watchers = _registry.ClientsAttachedTo(
+            address.UserKey,
+            address.MachineId,
+            address.SessionId);
+
+        if (notification.TargetConnectionId is { Length: > 0 } target)
+        {
+            watchers = watchers.Contains(target, StringComparer.Ordinal) ? [target] : [];
+        }
+
+        if (watchers.Count > 0)
+        {
+            await Clients.Clients(watchers).SendAsync(HubMethods.Client.ChatTranscript, notification);
+        }
+    }
+
     /// <summary>The agent's idle heuristic fired. Every client of this user hears it, attached or not.</summary>
     public async Task<ErrorNotification?> SessionAwaitingInput(SessionAwaitingInputNotification notification)
     {
@@ -338,6 +368,48 @@ public sealed class RelayHub(
         // someone about a prompt already on their screen is how a user learns that
         // these notifications do not mean anything.
         if (address.AttachedClients == 0)
+        {
+            _push.Enqueue(
+                address.UserKey,
+                PushPayload.AwaitingInput(
+                    Name(address.MachineName, address.MachineId),
+                    Name(address.SessionName, notification.SessionId),
+                    notification.Hint,
+                    PushPayload.DeepLink(address.MachineId, notification.SessionId)));
+        }
+
+        return null;
+    }
+
+    /// <summary>Explicit attention state from a structured chat provider.</summary>
+    public async Task<ErrorNotification?> SessionAttention(SessionAttentionNotification notification)
+    {
+        if (notification is null || string.IsNullOrWhiteSpace(notification.SessionId))
+        {
+            return Error(ErrorCodes.InvalidRequest, "SessionAttention needs a session id.");
+        }
+
+        SessionAddress? address = _registry.MarkAwaitingInput(
+            Context.ConnectionId,
+            notification.SessionId,
+            notification.AwaitingInput);
+
+        if (address is null)
+        {
+            return Error(ErrorCodes.SessionNotFound, "No such session on this machine.", notification.SessionId);
+        }
+
+        await Clients.Clients(_registry.ClientsOf(address.UserKey)).SendAsync(
+            HubMethods.Client.SessionAttention,
+            new ClientSessionAttentionNotification
+            {
+                MachineId = address.MachineId,
+                SessionId = notification.SessionId,
+                AwaitingInput = notification.AwaitingInput,
+                Hint = notification.Hint,
+            });
+
+        if (notification.AwaitingInput && address.AttachedClients == 0)
         {
             _push.Enqueue(
                 address.UserKey,
@@ -509,7 +581,8 @@ public sealed class RelayHub(
         return ForwardAsync(
             request.SessionId,
             HubMethods.Agent.SendInput,
-            target => new SendInputNotification { SessionId = target.SessionId, Data = request.Data });
+            target => new SendInputNotification { SessionId = target.SessionId, Data = request.Data },
+            SessionKind.Terminal);
     }
 
     /// <summary>Reshapes the real pseudoconsole. The phone is authoritative while attached.</summary>
@@ -535,7 +608,8 @@ public sealed class RelayHub(
                 SessionId = target.SessionId,
                 Cols = request.Cols,
                 Rows = request.Rows,
-            });
+            },
+            SessionKind.Terminal);
     }
 
     /// <summary>Ctrl+C. The single most time-critical action in the product.</summary>
@@ -550,7 +624,60 @@ public sealed class RelayHub(
         return ForwardAsync(
             request.SessionId,
             HubMethods.Agent.InterruptSession,
-            target => new InterruptSessionNotification { SessionId = target.SessionId });
+            target => new InterruptSessionNotification { SessionId = target.SessionId },
+            SessionKind.Terminal);
+    }
+
+    /// <summary>Sends one user message to the attached ACP session.</summary>
+    public Task<ErrorNotification?> SendChatMessage(SendChatMessageRequest request)
+    {
+        if (request is null ||
+            string.IsNullOrWhiteSpace(request.SessionId) ||
+            string.IsNullOrWhiteSpace(request.Text))
+        {
+            return Task.FromResult<ErrorNotification?>(
+                Error(ErrorCodes.InvalidRequest, "SendChatMessage needs a session id and text."));
+        }
+
+        string text = request.Text.Trim();
+        if (text.Length > 20_000)
+        {
+            return Task.FromResult<ErrorNotification?>(
+                Error(ErrorCodes.InvalidRequest, "A chat message is limited to 20,000 characters.", request.SessionId));
+        }
+
+        return ForwardAsync(
+            request.SessionId,
+            HubMethods.Agent.SendChatMessage,
+            target => new SendChatMessageNotification { SessionId = target.SessionId, Text = text },
+            SessionKind.AgentChat);
+    }
+
+    /// <summary>Selects an option from a pending ACP permission request.</summary>
+    public Task<ErrorNotification?> RespondChatPermission(RespondChatPermissionRequest request)
+    {
+        if (request is null ||
+            string.IsNullOrWhiteSpace(request.SessionId) ||
+            string.IsNullOrWhiteSpace(request.RequestId) ||
+            string.IsNullOrWhiteSpace(request.OptionId))
+        {
+            return Task.FromResult<ErrorNotification?>(
+                Error(
+                    ErrorCodes.InvalidRequest,
+                    "RespondChatPermission needs a session, request, and option.",
+                    request?.SessionId));
+        }
+
+        return ForwardAsync(
+            request.SessionId,
+            HubMethods.Agent.RespondChatPermission,
+            target => new RespondChatPermissionNotification
+            {
+                SessionId = target.SessionId,
+                RequestId = request.RequestId,
+                OptionId = request.OptionId,
+            },
+            SessionKind.AgentChat);
     }
 
     /// <summary>
@@ -583,7 +710,8 @@ public sealed class RelayHub(
             {
                 SessionId = target.SessionId,
                 CliType = request.CliType,
-            });
+            },
+            SessionKind.Terminal);
     }
 
     /// <summary>
@@ -687,7 +815,8 @@ public sealed class RelayHub(
     private async Task<ErrorNotification?> ForwardAsync<TNotification>(
         string sessionId,
         string method,
-        Func<RelayTarget, TNotification> build)
+        Func<RelayTarget, TNotification> build,
+        SessionKind? requiredKind = null)
     {
         if (!_registry.TryResolveAttached(
                 Context.ConnectionId,
@@ -696,6 +825,16 @@ public sealed class RelayHub(
                 out ErrorNotification? error))
         {
             return error;
+        }
+
+        if (requiredKind is not null && target!.Kind != requiredKind)
+        {
+            return Error(
+                ErrorCodes.InvalidRequest,
+                requiredKind == SessionKind.AgentChat
+                    ? "That action requires an agent chat."
+                    : "That action requires a terminal session.",
+                sessionId);
         }
 
         await Clients.Client(target!.AgentConnectionId).SendAsync(method, build(target));

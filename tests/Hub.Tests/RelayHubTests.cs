@@ -158,6 +158,124 @@ public sealed class RelayHubTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ChatMessagesAndPermissionResponsesReachTheAttachedAgent()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        Channel<SendChatMessageNotification> messages =
+            Listen<SendChatMessageNotification>(agent, HubMethods.Agent.SendChatMessage);
+        Channel<RespondChatPermissionNotification> permissions =
+            Listen<RespondChatPermissionNotification>(agent, HubMethods.Agent.RespondChatPermission);
+        await OpenSessionAsync(agent, "chat-1", "GitHub Copilot", SessionKind.AgentChat);
+
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        await AttachAsync(client, "machine-a", "chat-1");
+
+        Assert.Null(await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SendChatMessage,
+            new SendChatMessageRequest { SessionId = "chat-1", Text = "  continue  " }));
+        Assert.Null(await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.RespondChatPermission,
+            new RespondChatPermissionRequest
+            {
+                SessionId = "chat-1",
+                RequestId = "request-1",
+                OptionId = "allow-once",
+            }));
+
+        SendChatMessageNotification message = await Next(messages);
+        Assert.Equal("chat-1", message.SessionId);
+        Assert.Equal("continue", message.Text);
+
+        RespondChatPermissionNotification permission = await Next(permissions);
+        Assert.Equal("request-1", permission.RequestId);
+        Assert.Equal("allow-once", permission.OptionId);
+    }
+
+    [Fact]
+    public async Task ChatCommandsRequireAnAttachment()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "chat-1", "GitHub Copilot", SessionKind.AgentChat);
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+
+        ErrorNotification? message = await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SendChatMessage,
+            new SendChatMessageRequest { SessionId = "chat-1", Text = "continue" });
+        ErrorNotification? permission = await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.RespondChatPermission,
+            new RespondChatPermissionRequest
+            {
+                SessionId = "chat-1",
+                RequestId = "request-1",
+                OptionId = "allow-once",
+            });
+
+        Assert.Equal(ErrorCodes.NotAttached, message!.Code);
+        Assert.Equal(ErrorCodes.NotAttached, permission!.Code);
+    }
+
+    [Fact]
+    public async Task SessionKindsCannotBeDrivenThroughTheWrongProtocol()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "terminal-1", "pwsh");
+        await OpenSessionAsync(agent, "chat-1", "GitHub Copilot", SessionKind.AgentChat);
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+
+        await AttachAsync(client, "machine-a", "terminal-1");
+        ErrorNotification? chat = await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SendChatMessage,
+            new SendChatMessageRequest { SessionId = "terminal-1", Text = "continue" });
+
+        await AttachAsync(client, "machine-a", "chat-1");
+        ErrorNotification? input = await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SendInput,
+            new SendInputRequest { SessionId = "chat-1", Data = "dir\r"u8.ToArray() });
+
+        Assert.Equal(ErrorCodes.InvalidRequest, chat!.Code);
+        Assert.Equal(ErrorCodes.InvalidRequest, input!.Code);
+    }
+
+    [Fact]
+    public async Task ChatTranscriptsReachWatchersAndNobodyElse()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "chat-1", "GitHub Copilot", SessionKind.AgentChat);
+
+        HubConnection watcher = await ConnectClientAsync(AliceTenant, AliceObject);
+        Channel<ChatTranscriptNotification> watched =
+            Listen<ChatTranscriptNotification>(watcher, HubMethods.Client.ChatTranscript);
+        await AttachAsync(watcher, "machine-a", "chat-1");
+
+        HubConnection bystander = await ConnectClientAsync(AliceTenant, AliceObject);
+        Channel<ChatTranscriptNotification> ignored =
+            Listen<ChatTranscriptNotification>(bystander, HubMethods.Client.ChatTranscript);
+
+        await agent.InvokeAsync(
+            HubMethods.Server.ChatTranscript,
+            new ChatTranscriptNotification
+            {
+                SessionId = "chat-1",
+                Seq = 7,
+                Kind = ChatTranscriptKind.Delta,
+                Events =
+                [
+                    new ChatEvent
+                    {
+                        EventId = "answer",
+                        Kind = ChatEventKind.AgentMessage,
+                        Text = "Done",
+                    },
+                ],
+            });
+
+        ChatTranscriptNotification transcript = await Next(watched);
+        Assert.Equal(7, transcript.Seq);
+        Assert.Equal("Done", Assert.Single(transcript.Events).Text);
+        await AssertSilent(ignored);
+    }
+
+    [Fact]
     public async Task OutputReachesTheWatcherAndNobodyElse()
     {
         HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
@@ -804,10 +922,17 @@ public sealed class RelayHubTests : IAsyncLifetime
         return connection;
     }
 
-    private static async Task OpenSessionAsync(HubConnection agent, string sessionId, string program) =>
+    private static async Task OpenSessionAsync(
+        HubConnection agent,
+        string sessionId,
+        string program,
+        SessionKind kind = SessionKind.Terminal) =>
         Assert.Null(await agent.InvokeAsync<ErrorNotification?>(
             HubMethods.Server.SessionOpened,
-            new AgentSessionOpenedNotification { Session = NewSession(sessionId, program) }));
+            new AgentSessionOpenedNotification
+            {
+                Session = NewSession(sessionId, program, kind),
+            }));
 
     private static async Task AttachAsync(HubConnection client, string machineId, string sessionId) =>
         Assert.Null(await client.InvokeAsync<ErrorNotification?>(
@@ -838,7 +963,10 @@ public sealed class RelayHubTests : IAsyncLifetime
             HubMethods.Server.SetSessionPinned,
             new SetSessionPinnedRequest { MachineId = machineId, SessionId = sessionId, Pinned = pinned }));
 
-    private static SessionInfo NewSession(string sessionId, string program) => new()
+    private static SessionInfo NewSession(
+        string sessionId,
+        string program,
+        SessionKind kind = SessionKind.Terminal) => new()
     {
         SessionId = sessionId,
         Program = program,
@@ -847,6 +975,7 @@ public sealed class RelayHubTests : IAsyncLifetime
         Cols = 120,
         Rows = 30,
         StartedAt = DateTimeOffset.UtcNow,
+        Kind = kind,
     };
 
     private static Channel<T> Listen<T>(HubConnection connection, string method)

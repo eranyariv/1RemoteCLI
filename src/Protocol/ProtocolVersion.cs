@@ -15,9 +15,11 @@ public static class ProtocolVersion
     /// <see cref="Hub.SessionInfo.CliType"/>. Both are additive: a version 1 peer
     /// never invokes the new methods, and its decoder stops reading before the new
     /// field. That is why <see cref="MinimumSupported"/> did not move with it.
+    /// Version 3 adds ACP-backed agent-chat sessions and their typed transcript.
+    /// Terminal messages and the existing fields remain unchanged.
     /// </para>
     /// </summary>
-    public const int Current = 2;
+    public const int Current = 3;
 
     /// <summary>Oldest version this build still accepts from a peer.</summary>
     public const int MinimumSupported = 1;

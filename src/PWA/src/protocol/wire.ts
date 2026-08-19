@@ -20,6 +20,9 @@
 
 /** Matches `TerminalOutputKind`. Enums travel as their names, not their numbers. */
 export type TerminalOutputKind = 'Delta' | 'Snapshot'
+export type SessionKind = 'Terminal' | 'AgentChat'
+export type ChatTranscriptKind = 'Delta' | 'Snapshot'
+export type ChatEventKind = 'UserMessage' | 'AgentMessage' | 'ToolCall' | 'Permission'
 
 /**
  * Matches `CliType`. Which program a session is hosting, as far as the agent could
@@ -51,6 +54,7 @@ export interface SessionInfo {
    */
   customName: string | null
   pinned: boolean
+  kind: SessionKind
 }
 
 export interface MachineInfo {
@@ -68,6 +72,30 @@ export interface TerminalOutput {
   seq: number
   kind: TerminalOutputKind
   data: Uint8Array
+}
+
+export interface ChatPermissionOption {
+  optionId: string
+  name: string
+  kind: string
+}
+
+export interface ChatEvent {
+  eventId: string
+  kind: ChatEventKind
+  text: string
+  title: string | null
+  status: string | null
+  toolKind: string | null
+  permissionRequestId: string | null
+  options: ChatPermissionOption[]
+}
+
+export interface ChatTranscript {
+  sessionId: string
+  seq: number
+  kind: ChatTranscriptKind
+  events: ChatEvent[]
 }
 
 export interface HubError {
@@ -158,6 +186,7 @@ export function decodeSession(value: unknown): SessionInfo {
     // has to land on "not renamed, not pinned" rather than on the string "undefined".
     customName: typeof s[10] === 'string' && s[10].length > 0 ? s[10] : null,
     pinned: bool(s[11]),
+    kind: s[12] === 'AgentChat' ? 'AgentChat' : 'Terminal',
   }
 }
 
@@ -240,6 +269,54 @@ export function decodeTerminalOutput(value: unknown): TerminalOutput {
   }
 }
 
+function decodePermissionOption(value: unknown): ChatPermissionOption {
+  const option = tuple(value, 'ChatPermissionOption')
+  return { optionId: str(option[0]), name: str(option[1]), kind: str(option[2]) }
+}
+
+function decodeChatEvent(value: unknown): ChatEvent {
+  const event = tuple(value, 'ChatEvent')
+  const kinds: readonly ChatEventKind[] = ['UserMessage', 'AgentMessage', 'ToolCall', 'Permission']
+  const kind = kinds.includes(event[1] as ChatEventKind)
+    ? (event[1] as ChatEventKind)
+    : 'ToolCall'
+
+  return {
+    eventId: str(event[0]),
+    kind,
+    text: str(event[2]),
+    title: typeof event[3] === 'string' ? event[3] : null,
+    status: typeof event[4] === 'string' ? event[4] : null,
+    toolKind: typeof event[5] === 'string' ? event[5] : null,
+    permissionRequestId: typeof event[6] === 'string' ? event[6] : null,
+    options: Array.isArray(event[7]) ? event[7].map(decodePermissionOption) : [],
+  }
+}
+
+/** `ChatTranscriptNotification` */
+export function decodeChatTranscript(value: unknown): ChatTranscript {
+  const transcript = tuple(value, 'ChatTranscriptNotification')
+  return {
+    sessionId: str(transcript[0]),
+    seq: num(transcript[1]),
+    kind: transcript[2] === 'Snapshot' ? 'Snapshot' : 'Delta',
+    events: Array.isArray(transcript[3]) ? transcript[3].map(decodeChatEvent) : [],
+  }
+}
+
+/** `ClientSessionAttentionNotification` */
+export function decodeSessionAttention(
+  value: unknown,
+): { machineId: string; sessionId: string; awaitingInput: boolean; hint: string | null } {
+  const attention = tuple(value, 'ClientSessionAttentionNotification')
+  return {
+    machineId: str(attention[0]),
+    sessionId: str(attention[1]),
+    awaitingInput: bool(attention[2]),
+    hint: typeof attention[3] === 'string' ? attention[3] : null,
+  }
+}
+
 /** `TokenExpiringNotification` */
 export function decodeTokenExpiring(value: unknown): Date {
   return instant(tuple(value, 'TokenExpiringNotification')[0])
@@ -291,6 +368,18 @@ export function encodeResizeTerminal(sessionId: string, cols: number, rows: numb
 
 export function encodeInterruptSession(sessionId: string): unknown[] {
   return [sessionId]
+}
+
+export function encodeSendChatMessage(sessionId: string, text: string): unknown[] {
+  return [sessionId, text]
+}
+
+export function encodeRespondChatPermission(
+  sessionId: string,
+  requestId: string,
+  optionId: string,
+): unknown[] {
+  return [sessionId, requestId, optionId]
 }
 
 /**

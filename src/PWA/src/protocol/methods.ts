@@ -16,6 +16,8 @@ export const Server = {
   SendInput: 'SendInput',
   ResizeTerminal: 'ResizeTerminal',
   InterruptSession: 'InterruptSession',
+  SendChatMessage: 'SendChatMessage',
+  RespondChatPermission: 'RespondChatPermission',
   SetSessionType: 'SetSessionType',
   SetSessionName: 'SetSessionName',
   SetSessionPinned: 'SetSessionPinned',
@@ -33,9 +35,11 @@ export const Client = {
   SessionClosed: 'SessionClosed',
   TerminalOutput: 'TerminalOutput',
   SessionAwaitingInput: 'SessionAwaitingInput',
+  SessionAttention: 'SessionAttention',
+  ChatTranscript: 'ChatTranscript',
   TokenExpiring: 'TokenExpiring',
   Error: 'Error',
 } as const
 
 /** Must match `ProtocolVersion.Current`. */
-export const PROTOCOL_VERSION = 2
+export const PROTOCOL_VERSION = 3

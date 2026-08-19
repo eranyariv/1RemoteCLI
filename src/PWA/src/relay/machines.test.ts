@@ -29,6 +29,7 @@ function session(id: string, overrides: Partial<SessionInfo> = {}): SessionInfo 
     cliType: 'PowerShell',
     customName: null,
     pinned: false,
+    kind: 'Terminal',
     ...overrides,
   }
 }

@@ -22,6 +22,9 @@ import { SignInScreen } from './ui/SignInScreen'
 const TerminalView = lazy(() =>
   import('./ui/TerminalView').then((module) => ({ default: module.TerminalView })),
 )
+const ChatView = lazy(() =>
+  import('./ui/ChatView').then((module) => ({ default: module.ChatView })),
+)
 
 /**
  * The session named in the URL, taken out of the address bar as it is read.
@@ -236,13 +239,23 @@ export default function App() {
             </div>
           }
         >
-          <TerminalView
-            client={relay.client}
-            connected={relay.status === 'connected'}
-            machine={showing.machine}
-            session={showing.session}
-            onClose={closeSession}
-          />
+          {showing.session.kind === 'AgentChat' ? (
+            <ChatView
+              client={relay.client}
+              connected={relay.status === 'connected'}
+              machine={showing.machine}
+              session={showing.session}
+              onClose={closeSession}
+            />
+          ) : (
+            <TerminalView
+              client={relay.client}
+              connected={relay.status === 'connected'}
+              machine={showing.machine}
+              session={showing.session}
+              onClose={closeSession}
+            />
+          )}
         </Suspense>
       ) : null}
     </div>

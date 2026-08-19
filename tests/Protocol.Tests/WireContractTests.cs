@@ -95,6 +95,8 @@ public sealed class WireContractTests
         Assert.Contains("sessionClosed", covered);
         Assert.Contains("terminalOutput", covered);
         Assert.Contains("sessionAwaitingInput", covered);
+        Assert.Contains("sessionAttention", covered);
+        Assert.Contains("chatTranscript", covered);
         Assert.Contains("tokenExpiring", covered);
         Assert.Contains("error", covered);
     }
@@ -130,6 +132,16 @@ public sealed class WireContractTests
                             DisplayName = "Claude Code",
                             AwaitingInput = true,
                             CliType = CliType.ClaudeCode,
+                        },
+                        new SessionInfo
+                        {
+                            SessionId = "chat-123",
+                            Program = "GitHub Copilot",
+                            Cwd = @"C:\Projects\1RemoteCLI",
+                            StartedAt = Instant,
+                            DisplayName = "Issue 3",
+                            CliType = CliType.CopilotCli,
+                            Kind = SessionKind.AgentChat,
                         },
                     ],
                 },
@@ -230,6 +242,65 @@ public sealed class WireContractTests
             Hint = "Do you want to proceed?",
         });
 
+        Add(messages, "sessionAttention", new ClientSessionAttentionNotification
+        {
+            MachineId = "5d41402abc4b2a76b9719d911017c592",
+            SessionId = "chat-123",
+            AwaitingInput = true,
+            Hint = "Approve running the test suite",
+        });
+
+        Add(messages, "chatTranscript", new ChatTranscriptNotification
+        {
+            SessionId = "chat-123",
+            Seq = 42,
+            Kind = ChatTranscriptKind.Snapshot,
+            Events =
+            [
+                new ChatEvent
+                {
+                    EventId = "user-1",
+                    Kind = ChatEventKind.UserMessage,
+                    Text = "Fix the tests",
+                },
+                new ChatEvent
+                {
+                    EventId = "tool-1",
+                    Kind = ChatEventKind.ToolCall,
+                    Title = "Run tests",
+                    Text = "dotnet test",
+                    Status = "pending",
+                    ToolKind = "shell",
+                },
+                new ChatEvent
+                {
+                    EventId = "permission:req-1",
+                    Kind = ChatEventKind.Permission,
+                    Text = "Approval required",
+                    Title = "Run tests",
+                    Status = "pending",
+                    ToolKind = "tool-1",
+                    PermissionRequestId = "req-1",
+                    Options =
+                    [
+                        new ChatPermissionOption
+                        {
+                            OptionId = "allow-once",
+                            Name = "Allow once",
+                            Kind = "allow_once",
+                        },
+                        new ChatPermissionOption
+                        {
+                            OptionId = "reject-once",
+                            Name = "Deny",
+                            Kind = "reject_once",
+                        },
+                    ],
+                },
+            ],
+            TargetConnectionId = "phone-connection",
+        });
+
         Add(messages, "tokenExpiring", new TokenExpiringNotification { ExpiresAt = Instant });
 
         Add(messages, "error", new ErrorNotification
@@ -273,6 +344,19 @@ public sealed class WireContractTests
         });
 
         Add(messages, "interruptSessionRequest", new InterruptSessionRequest { SessionId = "ff00ff00" });
+
+        Add(messages, "sendChatMessageRequest", new SendChatMessageRequest
+        {
+            SessionId = "chat-123",
+            Text = "Continue from the phone",
+        });
+
+        Add(messages, "respondChatPermissionRequest", new RespondChatPermissionRequest
+        {
+            SessionId = "chat-123",
+            RequestId = "req-1",
+            OptionId = "allow-once",
+        });
 
         // The enum on a *request* matters more than on a notification: the hub
         // validates what arrives, and a client that sent the ordinal instead of the

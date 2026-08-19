@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http.Connections.Client;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using OneRemoteCli.Daemon.Agent;
+using OneRemoteCli.Daemon.Chat;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using OneRemoteCli.Protocol;
@@ -30,7 +31,7 @@ namespace OneRemoteCli.Daemon.Hub;
 /// being collapsed into a fresh snapshot. Task 3.3 covers it.
 /// </para>
 /// </summary>
-public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
+public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposable
 {
     /// <summary>Backoff bounds for reconnecting. Short enough to feel instant, capped so a dead hub is cheap.</summary>
     private static readonly TimeSpan MinimumRetry = TimeSpan.FromSeconds(2);
@@ -44,6 +45,7 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     private readonly SessionRegistry _sessions;
     private readonly Func<CancellationToken, Task<string?>> _tokenProvider;
     private readonly ILogger _logger;
+    private AcpProvider? _chat;
 
     /// <summary>Last message logged, so a hub that is down for an hour does not produce an hour of identical lines.</summary>
     private int? _lastComplaint;
@@ -155,6 +157,12 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     /// a burst of transitions cannot deliver them out of order.
     /// </summary>
     public event Action? StateChanged;
+
+    public void AttachChatProvider(AcpProvider provider)
+    {
+        _chat = provider ?? throw new ArgumentNullException(nameof(provider));
+        provider.AttachSink(this);
+    }
 
     private void RaiseStateChanged()
     {
@@ -451,6 +459,42 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
                 notification.SessionId,
                 () => _sessions.InterruptAsync(notification.SessionId)).ConfigureAwait(false));
 
+        _connection.On<SendChatMessageNotification>(
+            HubMethods.Agent.SendChatMessage,
+            notification =>
+            {
+                try
+                {
+                    _chat?.StartPrompt(notification.SessionId, notification.Text);
+                }
+                catch (Exception ex)
+                {
+                    _logger.Failed(ex, "Sending a chat message");
+                }
+            });
+
+        _connection.On<RespondChatPermissionNotification>(
+            HubMethods.Agent.RespondChatPermission,
+            async notification =>
+            {
+                if (_chat is null)
+                {
+                    return;
+                }
+
+                try
+                {
+                    await _chat.RespondPermissionAsync(
+                        notification.SessionId,
+                        notification.RequestId,
+                        notification.OptionId).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.Failed(ex, "Responding to a chat approval");
+                }
+            });
+
         _connection.On<SetSessionTypeRequestedNotification>(
             HubMethods.Agent.SetSessionTypeRequested,
             async notification => await OnSetSessionTypeAsync(notification).ConfigureAwait(false));
@@ -524,6 +568,22 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
     {
         if (!_sessions.TryGet(notification.SessionId, out TerminalSession session))
         {
+            if (_chat?.TryGet(notification.SessionId, out _) == true)
+            {
+                try
+                {
+                    await _chat.AttachAsync(
+                        notification.SessionId,
+                        notification.ClientConnectionId).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.Failed(ex, "Loading a chat transcript");
+                }
+
+                return;
+            }
+
             _logger.Refused("Attach", "session_not_found", notification.SessionId);
             return;
         }
@@ -672,11 +732,109 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
                     new AgentSessionOpenedNotification { Session = Describe(session) },
                     cancellationToken).ConfigureAwait(false);
             }
+
+            if (_chat is not null)
+            {
+                foreach (AcpSession session in _chat.Snapshot())
+                {
+                    await TryInvokeAsync(
+                        HubMethods.Server.SessionOpened,
+                        new AgentSessionOpenedNotification { Session = Describe(session) },
+                        cancellationToken).ConfigureAwait(false);
+                }
+            }
         }
+
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Once(1900, () => _logger.Failed(ex, "Registering this machine"));
         }
+    }
+
+    public async ValueTask OnChatOpenedAsync(
+        AcpSession session,
+        CancellationToken cancellationToken = default)
+    {
+        await TryInvokeAsync(
+            HubMethods.Server.SessionOpened,
+            new AgentSessionOpenedNotification { Session = Describe(session) },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask OnChatUpdatedAsync(
+        AcpSession session,
+        CancellationToken cancellationToken = default)
+    {
+        await TryInvokeAsync(
+            HubMethods.Server.SessionUpdated,
+            new AgentSessionUpdatedNotification { Session = Describe(session) },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask OnChatClosedAsync(
+        AcpSession session,
+        CancellationToken cancellationToken = default)
+    {
+        await TryInvokeAsync(
+            HubMethods.Server.SessionClosed,
+            new AgentSessionClosedNotification { SessionId = session.SessionId, ExitCode = 0 },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask OnChatTranscriptAsync(
+        AcpSession session,
+        ChatTranscriptKind kind,
+        ChatEvent[] events,
+        string? targetConnectionId = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected)
+        {
+            return;
+        }
+
+        try
+        {
+            await _connection.SendAsync(
+                HubMethods.Server.ChatTranscript,
+                new ChatTranscriptNotification
+                {
+                    SessionId = session.SessionId,
+                    Seq = session.Seq,
+                    Kind = kind,
+                    Events = events,
+                    TargetConnectionId = targetConnectionId,
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            if (!_stopping)
+            {
+                Once(1304, () => _logger.Failed(ex, "Relaying a chat transcript"));
+            }
+        }
+    }
+
+    public async ValueTask OnChatAttentionAsync(
+        AcpSession session,
+        bool awaitingInput,
+        string? hint,
+        CancellationToken cancellationToken = default)
+    {
+        await TryInvokeAsync(
+            HubMethods.Server.SessionAttention,
+            new SessionAttentionNotification
+            {
+                SessionId = session.SessionId,
+                AwaitingInput = awaitingInput,
+                Hint = hint,
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -797,6 +955,19 @@ public sealed class AgentHubClient : ISessionSink, IAsyncDisposable
         StartedAt = session.StartedUtc,
         DisplayName = session.DisplayName,
         CliType = session.CliType,
+        Kind = SessionKind.Terminal,
+    };
+
+    private static SessionInfo Describe(AcpSession session) => new()
+    {
+        SessionId = session.SessionId,
+        Program = session.Program,
+        Cwd = session.Cwd,
+        StartedAt = session.UpdatedAt,
+        DisplayName = session.Title,
+        CliType = session.CliType,
+        AwaitingInput = session.AwaitingInput,
+        Kind = SessionKind.AgentChat,
     };
 
     private static string AgentVersion => ProductVersion.Current;

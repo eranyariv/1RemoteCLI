@@ -36,7 +36,11 @@ public sealed record SessionAddress(
 public sealed record Attachment(string MachineId, string SessionId, string? AgentConnectionId);
 
 /// <summary>The agent connection a client request should be forwarded to.</summary>
-public sealed record RelayTarget(string AgentConnectionId, string MachineId, string SessionId);
+public sealed record RelayTarget(
+    string AgentConnectionId,
+    string MachineId,
+    string SessionId,
+    SessionKind Kind);
 
 /// <summary>
 /// A session after the user changed what they call it, with everything needed to
@@ -409,6 +413,31 @@ public sealed class RelayRegistry
         }
     }
 
+    /// <summary>Resolves a session owned by an agent connection without changing it.</summary>
+    public SessionAddress? AddressOf(string connectionId, string sessionId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+
+        lock (_gate)
+        {
+            RegisteredMachine? machine = MachineOf(connectionId, out string? userKey);
+            if (machine is null || userKey is null ||
+                !machine.Sessions.TryGetValue(sessionId, out SessionInfo? session))
+            {
+                return null;
+            }
+
+            return new SessionAddress(
+                userKey,
+                machine.MachineId,
+                sessionId,
+                machine.DisplayName,
+                NameOf(session),
+                CountWatchers(userKey, machine.MachineId, sessionId));
+        }
+    }
+
     // Client side.
 
     /// <summary>Marks a connection as a client of this user.</summary>
@@ -565,7 +594,11 @@ public sealed class RelayRegistry
             }
 
             attached = new AttachResult(
-                new RelayTarget(machine!.ConnectionId!, machineId, sessionId),
+                new RelayTarget(
+                    machine!.ConnectionId!,
+                    machineId,
+                    sessionId,
+                    machine.Sessions[sessionId].Kind),
                 displaced);
 
             error = null;
@@ -633,7 +666,11 @@ public sealed class RelayRegistry
                 return false;
             }
 
-            target = new RelayTarget(machine!.ConnectionId!, slot.MachineId, sessionId);
+            target = new RelayTarget(
+                machine!.ConnectionId!,
+                slot.MachineId,
+                sessionId,
+                machine.Sessions[sessionId].Kind);
             error = null;
             return true;
         }

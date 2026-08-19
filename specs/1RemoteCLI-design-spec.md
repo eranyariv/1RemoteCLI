@@ -17,14 +17,14 @@ Modern development increasingly runs through long-lived, interactive terminal ag
 
 ### 1.1 Design principles
 
-1. **Attach, don't spawn.** v1 can only attach to sessions you started yourself at the keyboard. Nothing can be launched from the phone. This eliminates remote code execution as an attack surface rather than trying to contain it.
-2. **The screen is the state.** A terminal's meaningful state is its visible screen, not its output history. The agent runs a headless VT emulator and sends a *screen snapshot*, not a replay of bytes.
+1. **Attach, don't spawn.** A phone can attach to a wrapped terminal or continue a recent agent conversation that already exists in the selected local ACP provider. It cannot create a new process or a new agent conversation.
+2. **Use the provider's state model.** A terminal's meaningful state is its visible screen, so the agent sends a VT snapshot rather than replaying bytes. An ACP conversation's state is its typed transcript, so the agent sends replaceable transcript events rather than flattening it into terminal text.
 3. **Boring infrastructure.** One process per machine, one hub instance, no database, no message broker. The system should be comprehensible in an afternoon.
 4. **The user is the security boundary.** One Microsoft identity owns machines, sessions, and clients. Cross-user access is structurally impossible, not merely checked.
 
 ### 1.2 Scope
 
-**In scope for v1:** attaching to running sessions from a phone, full interactive control, reconnection across network changes, push notification when a session needs attention, multiple machines per user.
+**In scope for v1:** attaching to running terminal sessions from a phone, continuing recent GitHub Copilot or Claude Code conversations through ACP, full interactive control, reconnection across network changes, push notification when a session needs attention, multiple machines per user.
 
 **Out of scope for v1:** launching processes remotely, file transfer, scrollback history on mobile, sharing a machine with another person, session persistence across a closed desk terminal, end-to-end encryption.
 
@@ -81,6 +81,7 @@ On each Windows machine:
 │   │   • machine identity + session registry        │                       │
 │   │   • headless VT emulator, one per session      │──── WSS ──► Relay hub │
 │   │   • idle/prompt detection                      │                       │
+│   │   • ACP chat discovery + typed transcripts     │                       │
 │   └────────────────────────────────────────────────┘                       │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -96,6 +97,8 @@ The agent is therefore an ordinary Win32 executable running as the interactive u
 Remote spawn means arbitrary executables, arbitrary arguments, and an arbitrary working directory, chosen from a phone. Whoever phishes the Microsoft account owns every paired machine. Containing that requires an allowlist, per-machine consent, audit logging, and a second factor — significant machinery guarding a capability that the primary use case does not need. The motivating scenario is *"I started Claude Code and then walked away"*, which attach-only serves completely.
 
 **Constraint:** Windows cannot retroactively attach a pseudoconsole to a process that is already running under a different console. A session must be *born* under the wrapper to be attachable; an existing Windows Terminal tab cannot be adopted.
+
+ACP conversations are the deliberate exception to the ConPTY constraint. The selected provider owns their persisted history and exposes it through `session/list` and `session/load`; the tray agent starts the provider's local stdio server and can therefore load and continue an existing conversation without adopting its desktop window.
 
 ### 2.3 Component and binary inventory
 
@@ -434,6 +437,24 @@ Two rules keep the fast path honest:
 * **Numbering happens before sending, not after.** Output produced while the hub is unreachable still consumes a sequence number and still enters the tail. Otherwise a client resuming across a hub outage would receive an unbroken run of sequence numbers with the outage's output missing from it — a screen that is wrong while claiming to be continuous, which is worse than any repaint. A long outage simply evicts its way out of the tail and the reattach is answered with a snapshot.
 * **A reshape disqualifies replay.** If the attaching client's geometry differs from the session's, the missed frames were produced for a screen of another shape and replaying them would place wrapped lines where they used to belong. That failure looks plausible rather than obviously broken, so the agent repaints instead.
 
+### 4.5.1 Structured ACP chat sessions
+
+The tray agent can expose recent conversations from one selected Agent Client Protocol provider alongside wrapped terminals. GitHub Copilot is the default and is launched as `copilot --acp --stdio`. Setting `ONEREMOTE_ACP_PROVIDER=claude` selects the official `claude-agent-acp` adapter instead. Both speak ACP v1 as JSON-RPC 2.0 over newline-delimited JSON on stdio, support `session/list`, `session/load`, `session/prompt`, `session/update`, and standard `session/request_permission`, and use the same persisted conversation store as their desktop experience.
+
+Discovery is intentionally bounded to the 20 most recently updated conversations from the last 14 days. ACP lists resumable history rather than a trustworthy "currently open" bit; exposing the whole store would turn the machine list into an archive browser. The provider process is local, inherits the interactive user's credentials, and is restarted with backoff if it exits or a refresh fails. `ONEREMOTE_ACP=0` disables discovery, and `ONEREMOTE_ACP_EXECUTABLE` overrides the selected executable for non-standard installs.
+
+An ACP session is a `SessionInfo` with `kind = AgentChat`. Attaching calls `session/load`, reconstructs a typed transcript from `session/update` notifications, and sends a targeted snapshot only to the attaching phone. Later updates are replacement deltas keyed by stable event id:
+
+- consecutive `user_message_chunk` and `agent_message_chunk` frames become user and agent message events;
+- `tool_call` and `tool_call_update` replace one tool event as its status changes;
+- `session/request_permission` becomes a permission card containing exactly the options the provider advertised.
+
+The phone can send a prompt only after attaching. The hub resolves that attachment inside the authenticated user's partition and never accepts a user identity as a parameter, preserving the same routing invariant as terminal input. A real concurrency spike established that a second Copilot ACP process can load and prompt a session while the first remains connected; the phone therefore continues the same persisted conversation rather than creating a parallel one.
+
+Permission ownership has one unavoidable boundary. A reverse RPC request belongs to the stdio connection on which the provider issued it. 1RemoteCLI can display, push-notify, and answer permissions raised by turns started through its own ACP process. It cannot observe or answer a transient permission already waiting on the desktop app's private connection. The persisted transcript can still be loaded, and the conversation can be continued after that desktop-owned turn completes; the UI and documentation must not claim that an already-open desktop approval can migrate between connections.
+
+ACP turns count as active work for update safety. An agent restart or self-update is deferred until no prompt is in flight, so installing a release cannot terminate a provider halfway through a tool call or leave a permission request with no process to answer.
+
 ### 4.6 Reconnection
 
 Connections are expected to fail. A phone walks into a lift, a laptop suspends, the hub restarts on deploy. None of these are errors worth reporting to anyone; all of them are handled by retrying.
@@ -475,7 +496,7 @@ Everything is reconstructed by agents and clients reconnecting after a restart. 
 
 React + Vite + Tailwind, `@xterm/xterm` with `@xterm/addon-fit` and `@xterm/addon-web-links`, and a service worker for installability and Web Push.
 
-**Screens.** A machine list (online/offline, session counts); a session list per machine (program, CLI type, working directory, uptime, "waiting for input" badge); and the terminal view.
+**Screens.** A machine list (online/offline, session counts); a session list per machine (program, CLI type, session kind, working directory, uptime, "waiting for input" badge); the terminal view; and a structured chat view with user and agent messages, tool status, permission choices, and a message composer.
 
 **Knowing what a session is running.** Each session carries a `cliType`, worked out by the agent from the command line it was asked to wrap — `claude`, `pwsh`, `gh copilot` — and shipped as a field on `SessionInfo`. It exists so the phone can offer the right buttons: a terminal on a phone is mostly a screen you cannot type into comfortably, and the difference between a usable session and a frustrating one is whether `/compact` and `Shift+Tab` are one tap away rather than a dozen against autocorrect.
 
@@ -593,17 +614,17 @@ Length-prefixed MessagePack frames over the named pipe.
 
 `kind` is `"delta"` or `"snapshot"`; a snapshot resets the client's terminal before it is applied.
 
-Also: `SessionClosed { sessionId, exitCode }`, `SessionUpdated { session }`, `SessionAwaitingInput { sessionId, hint }`, `RefreshToken { token }`.
+Also: `SessionClosed { sessionId, exitCode }`, `SessionUpdated { session }`, `SessionAwaitingInput { sessionId, hint }`, `SessionAttention { sessionId, awaitingInput, hint }`, `ChatTranscript { sessionId, seq, kind, events[], targetConnectionId? }`, `RefreshToken { token }`.
 
 `SessionUpdated` is deliberately not a second `SessionOpened`, even though the registry's add is an upsert and would store the right thing. An open is counted in the usage figures, and being told twice what a session is should not look like having started it twice.
 
-**Hub → agent**: `AttachRequested { sessionId, clientConnectionId, cols, rows, lastSeq? }`, `DetachRequested { sessionId, clientConnectionId }`, `SendInput { sessionId, data }`, `ResizeTerminal { sessionId, cols, rows }`, `InterruptSession { sessionId }`, `SetSessionTypeRequested { sessionId, cliType }`, `TokenExpiring { expiresAt }`.
+**Hub → agent**: `AttachRequested { sessionId, clientConnectionId, cols, rows, lastSeq? }`, `DetachRequested { sessionId, clientConnectionId }`, `SendInput { sessionId, data }`, `ResizeTerminal { sessionId, cols, rows }`, `InterruptSession { sessionId }`, `SendChatMessage { sessionId, text }`, `RespondChatPermission { sessionId, requestId, optionId }`, `SetSessionTypeRequested { sessionId, cliType }`, `TokenExpiring { expiresAt }`.
 
 ### 5.3 Client ↔ hub
 
-**Client → hub**: `ListMachines {}`, `AttachSession { machineId, sessionId, cols, rows, lastSeq? }`, `DetachSession { sessionId }`, `SendInput { sessionId, data }`, `ResizeTerminal { sessionId, cols, rows }`, `InterruptSession { sessionId }`, `SetSessionType { sessionId, cliType }`, `SetSessionName { machineId, sessionId, name? }`, `SetSessionPinned { machineId, sessionId, pinned }`, `RegisterPush { endpoint, keys }`, `RefreshToken { token }`.
+**Client → hub**: `ListMachines {}`, `AttachSession { machineId, sessionId, cols, rows, lastSeq? }`, `DetachSession { sessionId }`, `SendInput { sessionId, data }`, `ResizeTerminal { sessionId, cols, rows }`, `InterruptSession { sessionId }`, `SendChatMessage { sessionId, text }`, `RespondChatPermission { sessionId, requestId, optionId }`, `SetSessionType { sessionId, cliType }`, `SetSessionName { machineId, sessionId, name? }`, `SetSessionPinned { machineId, sessionId, pinned }`, `RegisterPush { endpoint, keys }`, `RefreshToken { token }`.
 
-**Hub → client**: `MachineList { machines[] }`, `MachineOnline / MachineOffline { machineId }`, `SessionOpened / SessionUpdated / SessionClosed { machineId, session }`, `TerminalOutput { sessionId, seq, kind, data }`, `SessionAwaitingInput { machineId, sessionId }`, `TokenExpiring { expiresAt }`, `Error { code, message, sessionId? }`.
+**Hub → client**: `MachineList { machines[] }`, `MachineOnline / MachineOffline { machineId }`, `SessionOpened / SessionUpdated / SessionClosed { machineId, session }`, `TerminalOutput { sessionId, seq, kind, data }`, `ChatTranscript { sessionId, seq, kind, events[] }`, `SessionAwaitingInput { machineId, sessionId }`, `SessionAttention { machineId, sessionId, awaitingInput, hint }`, `TokenExpiring { expiresAt }`, `Error { code, message, sessionId? }`.
 
 `SetSessionType` is resolved through the caller's own attachment, like every other client → agent message, so the type can only be corrected from the session you are watching. Resolving it by ownership instead would be more convenient and would add a second way for a client message to reach a machine, which is the invariant that keeps "how could this possibly reach the wrong machine" a one-place question.
 
@@ -636,6 +657,8 @@ Like every other display name, a custom name is never logged, at any level, and 
 Version 2 added `cliType` and its two messages. The minimum supported version stayed at 1, because both changes are additive: `[Key(n)]` serialises as a positional array, so a version 1 agent simply sends a shorter session and a version 1 client reads a longer one and ignores the tail. A field inserted anywhere but the end would shift every later field with no error anywhere — the machine list would quietly start showing the agent version in the OS column — which is why appending is the only permitted way to evolve one of these messages, and why `wire.fixture.json` pins the layout against bytes the C# serializer actually produced.
 
 `customName` and `pinned` were appended to `SessionInfo` on the same terms, along with `SetSessionName` and `SetSessionPinned`, and the version stayed at 2 for the same reason: a client that has never heard of either reads a longer session and ignores the tail, and one that has reads a shorter one from an older hub and lands on "nobody renamed it". Neither is a new capability the other end has to have — the two methods are answered entirely inside the hub — so there is nothing an older peer could fail to honour.
+
+Version 3 adds `SessionInfo.kind = Terminal | AgentChat`, typed transcript and explicit attention notifications, and the chat message and permission-response methods. The minimum supported version remains 1: the kind field is appended at key 12 and an older client therefore treats the session as a terminal, while a newer client defaults a missing or unknown kind to `Terminal`. Version 3 peers are required for the chat methods themselves; the wire fixture contains all transcript event shapes and both client requests so the browser's hand-written positional decoder stays pinned to the C# serializer.
 
 ---
 
@@ -674,7 +697,7 @@ Web Push with VAPID, via `Lib.Net.Http.WebPush`. Hand-rolling RFC 8291's ECDH an
 
 **Who gets woken.** The PWA subscribes through the service worker and offers the subscription to the hub with `RegisterPush`, which stores it against `UserKey` — never against the connection, since a phone gets a new connection every time it wakes. Subscriptions are keyed by endpoint within the user, because the endpoint is the browser's own identity for the subscription and re-registering must replace rather than accumulate; keyed any other way, an overnight phone would end up buzzing once per reconnect.
 
-**When.** On `SessionAwaitingInput` and on `SessionClosed`, and in both cases only when that user has **no client attached to that session**. Buzzing about the terminal already open in the user's hand is how a person learns to ignore notifications, which costs the ones that matter. The attached-client count is read inside the same lock as the routing decision — a second query could see a different answer if somebody attached in the gap — and so `SessionAddress` carries it out of the registry alongside the machine and session names.
+**When.** On terminal `SessionAwaitingInput`, structured-chat `SessionAttention(awaitingInput = true)`, and `SessionClosed`, and in every case only when that user has **no client attached to that session**. A chat permission uses the provider's explicit title rather than the terminal prompt heuristic. Buzzing about the session already open in the user's hand is how a person learns to ignore notifications, which costs the ones that matter. The attached-client count is read inside the same lock as the routing decision — a second query could see a different answer if somebody attached in the gap — and so `SessionAddress` carries it out of the registry alongside the machine and session names.
 
 **Naming.** A session is named by its own display name if the agent gave it one, otherwise by its program. Never by its session id: "claude is waiting" is the whole message, where the id would mean nothing to somebody reading a lock screen.
 

@@ -9,6 +9,7 @@ using OneRemoteCli.Daemon.Agent;
 using OneRemoteCli.Daemon.Auth;
 using Microsoft.Extensions.Logging;
 using OneRemoteCli.Daemon.Cli;
+using OneRemoteCli.Daemon.Chat;
 using OneRemoteCli.Daemon.Diagnostics;
 using OneRemoteCli.Daemon.Hub;
 using OneRemoteCli.Daemon.Install;
@@ -504,6 +505,9 @@ public static class Program
             },
             loggers.CreateLogger("Hub"));
 
+        await using var chats = new AcpProvider(loggers.CreateLogger("Chat").Update);
+        hub.AttachChatProvider(chats);
+
         await using var host = new AgentHost(
             identity,
             sessions,
@@ -560,7 +564,7 @@ public static class Program
                 Path.Combine(Path.GetTempPath(), "1remotecli-update"),
                 AgentUpdate.StepsFor(downloads, tag),
                 cancellationToken),
-            () => host.Sessions.Count,
+            () => host.Sessions.Count + chats.ActiveTurns,
             () =>
             {
                 requestRestart();
@@ -574,6 +578,7 @@ public static class Program
         // The hub loop runs alongside the pipe server rather than gating it: a machine
         // with no internet must still be able to run local sessions.
         Task relay = hub.RunAsync(stopping.Token);
+        Task chatDiscovery = chats.RunAsync(stopping.Token);
 
         // Detached, and never awaited for its result: an agent that stopped relaying
         // because a version check failed would be a far worse bug than the one this
@@ -584,6 +589,7 @@ public static class Program
         {
             await host.RunAsync(stopping.Token).ConfigureAwait(false);
             await relay.ConfigureAwait(false);
+            await chatDiscovery.ConfigureAwait(false);
             await checking.ConfigureAwait(false);
             return 0;
         }

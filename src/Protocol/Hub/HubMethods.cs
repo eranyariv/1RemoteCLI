@@ -24,6 +24,8 @@ public static class HubMethods
 
         public const string TerminalOutput = "TerminalOutput";
         public const string SessionAwaitingInput = "SessionAwaitingInput";
+        public const string SessionAttention = "SessionAttention";
+        public const string ChatTranscript = "ChatTranscript";
 
         // Client.
         public const string ClientHandshake = "ClientHandshake";
@@ -33,6 +35,8 @@ public static class HubMethods
         public const string SendInput = "SendInput";
         public const string ResizeTerminal = "ResizeTerminal";
         public const string InterruptSession = "InterruptSession";
+        public const string SendChatMessage = "SendChatMessage";
+        public const string RespondChatPermission = "RespondChatPermission";
         public const string SetSessionType = "SetSessionType";
 
         /// <summary>
@@ -63,6 +67,8 @@ public static class HubMethods
         public const string SendInput = "SendInput";
         public const string ResizeTerminal = "ResizeTerminal";
         public const string InterruptSession = "InterruptSession";
+        public const string SendChatMessage = "SendChatMessage";
+        public const string RespondChatPermission = "RespondChatPermission";
         public const string SetSessionTypeRequested = "SetSessionTypeRequested";
         public const string TokenExpiring = "TokenExpiring";
         public const string Error = "Error";
@@ -82,6 +88,8 @@ public static class HubMethods
         public const string SessionClosed = "SessionClosed";
         public const string TerminalOutput = "TerminalOutput";
         public const string SessionAwaitingInput = "SessionAwaitingInput";
+        public const string SessionAttention = "SessionAttention";
+        public const string ChatTranscript = "ChatTranscript";
         public const string TokenExpiring = "TokenExpiring";
         public const string Error = "Error";
     }

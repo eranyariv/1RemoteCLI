@@ -12,6 +12,74 @@ public enum TerminalOutputKind : byte
     Snapshot = 1,
 }
 
+/// <summary>The representation and input semantics a session uses.</summary>
+public enum SessionKind : byte
+{
+    Terminal = 0,
+    AgentChat = 1,
+}
+
+/// <summary>Whether a transcript frame replaces the view or updates it.</summary>
+public enum ChatTranscriptKind : byte
+{
+    Delta = 0,
+    Snapshot = 1,
+}
+
+/// <summary>The small stable set of things an agent transcript can display.</summary>
+public enum ChatEventKind : byte
+{
+    UserMessage = 0,
+    AgentMessage = 1,
+    ToolCall = 2,
+    Permission = 3,
+}
+
+/// <summary>One choice offered by an ACP permission request.</summary>
+[MessagePackObject]
+public sealed class ChatPermissionOption
+{
+    [Key(0)]
+    public string OptionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string Name { get; set; } = string.Empty;
+
+    [Key(2)]
+    public string Kind { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// One replaceable transcript item. Re-sending an <see cref="EventId"/> updates it.
+/// </summary>
+[MessagePackObject]
+public sealed class ChatEvent
+{
+    [Key(0)]
+    public string EventId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public ChatEventKind Kind { get; set; }
+
+    [Key(2)]
+    public string Text { get; set; } = string.Empty;
+
+    [Key(3)]
+    public string? Title { get; set; }
+
+    [Key(4)]
+    public string? Status { get; set; }
+
+    [Key(5)]
+    public string? ToolKind { get; set; }
+
+    [Key(6)]
+    public string? PermissionRequestId { get; set; }
+
+    [Key(7)]
+    public ChatPermissionOption[] Options { get; set; } = [];
+}
+
 /// <summary>
 /// A machine registered by an agent. Machines are always scoped to the signing-in
 /// user; the hub never accepts a user identifier from a request parameter.
@@ -102,4 +170,10 @@ public sealed class SessionInfo
     /// <summary>Lifted above the rest of the list on every one of this user's devices.</summary>
     [Key(11)]
     public bool Pinned { get; set; }
+
+    /// <summary>
+    /// Appended so older clients continue treating every session as a terminal.
+    /// </summary>
+    [Key(12)]
+    public SessionKind Kind { get; set; }
 }

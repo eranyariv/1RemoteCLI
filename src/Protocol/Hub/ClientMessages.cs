@@ -86,6 +86,31 @@ public sealed class InterruptSessionRequest
     public string SessionId { get; set; } = string.Empty;
 }
 
+/// <summary>Client to hub. Sends a message to an attached agent-chat session.</summary>
+[MessagePackObject]
+public sealed class SendChatMessageRequest
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string Text { get; set; } = string.Empty;
+}
+
+/// <summary>Client to hub. Selects one option from a pending chat permission request.</summary>
+[MessagePackObject]
+public sealed class RespondChatPermissionRequest
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string RequestId { get; set; } = string.Empty;
+
+    [Key(2)]
+    public string OptionId { get; set; } = string.Empty;
+}
+
 /// <summary>
 /// Client to hub. Corrects the session's CLI type when detection guessed wrong.
 /// <para>
@@ -249,6 +274,23 @@ public sealed class ClientSessionAwaitingInputNotification
     public string SessionId { get; set; } = string.Empty;
 
     [Key(2)]
+    public string? Hint { get; set; }
+}
+
+/// <summary>Hub to client. Explicitly sets or clears a session's attention state.</summary>
+[MessagePackObject]
+public sealed class ClientSessionAttentionNotification
+{
+    [Key(0)]
+    public string MachineId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(2)]
+    public bool AwaitingInput { get; set; }
+
+    [Key(3)]
     public string? Hint { get; set; }
 }
 

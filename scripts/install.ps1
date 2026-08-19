@@ -466,18 +466,26 @@ also clears it, since the agent starts from a logon task.
                     the direct attempts, because when the direct launch works its
                     output is visible and a task's is not.
 
-                    A task of its own rather than the agent's, because the agent's does
+                    A task of its own rather than the agent's, because the agent's may
                     not exist yet: registering it is what `install` is being run to do.
-                    Nothing of the command's output survives -- a task reports only an
-                    exit code -- so success is judged by whether the logon task it was
-                    supposed to create is there afterwards.
+                    None of the command's output survives -- a task reports only an
+                    exit code -- so that exit code is the evidence, read back off the
+                    bootstrap task once it has stopped running. The agent's logon task
+                    being present is required too, but cannot stand alone: on an
+                    upgrade it is already there before any of this starts, and would
+                    report success for a run that never happened.
                 #>
                 $bootstrap = '1RemoteCLI First Run'
                 $created = $false
 
-                # Must match AgentTask.TaskName, which is what `install` registers and
-                # therefore the only evidence available that it got that far.
+                # Must match AgentTask.TaskName. Corroborates the exit code: `install`
+                # is not finished in any useful sense until this exists.
                 $agentTask = '1RemoteCLI Agent'
+
+                # schtasks reports 0x41301 while a task is still going and 0x41303 for
+                # one that has not started yet, so neither is a verdict.
+                $running = 267009
+                $neverRun = 267011
 
                 try {
                     Write-Step "Windows refused to start it from here; asking Task Scheduler instead"
@@ -499,12 +507,17 @@ also clears it, since the agent starts from a logon task.
                     }
 
                     if ($created) {
-                        # Judged by the logon task appearing, since a task reports only
-                        # an exit code and `install` does its work through side effects.
-                        foreach ($wait in 1..30) {
-                            Start-Sleep -Seconds 2
+                        foreach ($wait in 1..60) {
+                            Start-Sleep -Seconds 1
 
-                            if (Test-ScheduledTask $agentTask) { $viaTask = $true; break }
+                            $info = Get-ScheduledTaskInfo -TaskName $bootstrap -ErrorAction SilentlyContinue
+                            if (-not $info) { continue }
+
+                            $code = $info.LastTaskResult
+                            if ($code -eq $running -or $code -eq $neverRun) { continue }
+
+                            $viaTask = ($code -eq 0) -and (Test-ScheduledTask $agentTask)
+                            break
                         }
                     }
                 }

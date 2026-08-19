@@ -66,13 +66,45 @@ public static class SelfCheck
         }
         finally
         {
+            Remove(scratch);
+        }
+    }
+
+    /// <summary>
+    /// Removes the scratch directory, giving a transient lock a moment to clear.
+    /// <para>
+    /// The checks write real shortcuts through the shell, and something — the shell
+    /// itself, or a scanner reacting to a newly written file — can still be holding
+    /// the directory when the run finishes. That surfaces as an
+    /// <see cref="IOException"/>, and this used to give up on the first one, which
+    /// left the directory behind for good. Seen twice in a row on a developer machine
+    /// and then not once in ten further runs, so it is worth waiting out rather than
+    /// worth failing over.
+    /// </para>
+    /// </summary>
+    private static void Remove(string scratch)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
             try
             {
                 Directory.Delete(scratch, recursive: true);
+
+                return;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // A leftover temp directory is not worth failing a self-check over.
+                if (attempt == 4)
+                {
+                    // A leftover temp directory is not worth failing a self-check over.
+                    return;
+                }
+
+                Thread.Sleep(100);
             }
         }
     }

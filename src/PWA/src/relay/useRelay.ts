@@ -11,12 +11,19 @@ import {
   sessionOpened,
   type Machines,
 } from './machines'
+import {
+  remove as removeProject,
+  replaceAll as replaceAllProjects,
+  upsert as upsertProject,
+  type Projects,
+} from './projects'
 
 export interface Relay {
   status: RelayStatus
   /** Set when the status needs explaining — a refusal, or why we are offline. */
   detail: string | null
   machines: Machines
+  projects: Projects
   /**
    * Whether the hub has ever told us what machines exist.
    *
@@ -48,6 +55,7 @@ export function useRelay(signedIn: boolean): Relay {
   const [status, setStatus] = useState<RelayStatus>('connecting')
   const [detail, setDetail] = useState<string | null>(null)
   const [machines, setMachines] = useState<Machines>([])
+  const [projects, setProjects] = useState<Projects>([])
   const [loaded, setLoaded] = useState(false)
   const [lastError, setLastError] = useState<HubError | null>(null)
 
@@ -102,6 +110,11 @@ export function useRelay(signedIn: boolean): Relay {
       ),
 
       client.on('error', setLastError),
+
+      client.on('projects', (list) => setProjects(replaceAllProjects(list))),
+      client.on('projectCreated', (project) => setProjects((p) => upsertProject(p, project))),
+      client.on('projectUpdated', (project) => setProjects((p) => upsertProject(p, project))),
+      client.on('projectDeleted', (projectId) => setProjects((p) => removeProject(p, projectId))),
     ]
 
     return () => {
@@ -113,6 +126,7 @@ export function useRelay(signedIn: boolean): Relay {
     if (!signedIn) {
       setStatus('signed-out')
       setMachines([])
+      setProjects([])
       setLoaded(false)
       void client.stop()
       return
@@ -148,6 +162,7 @@ export function useRelay(signedIn: boolean): Relay {
   const refresh = useCallback(async () => {
     if (client.connected) {
       await client.refreshMachines()
+      await client.refreshProjects()
     } else {
       await client.start()
     }
@@ -156,7 +171,7 @@ export function useRelay(signedIn: boolean): Relay {
   const dismissError = useCallback(() => setLastError(null), [])
 
   return useMemo(
-    () => ({ status, detail, machines, loaded, lastError, client, refresh, dismissError }),
-    [status, detail, machines, loaded, lastError, client, refresh, dismissError],
+    () => ({ status, detail, machines, projects, loaded, lastError, client, refresh, dismissError }),
+    [status, detail, machines, projects, loaded, lastError, client, refresh, dismissError],
   )
 }

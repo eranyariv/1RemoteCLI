@@ -545,6 +545,179 @@ public sealed class RelayRegistryTests
     }
 
     [Fact]
+    public void MovesASessionToAProject()
+    {
+        var registry = new RelayRegistry();
+
+        registry.Connect(Alice, "agent-a");
+        registry.RegisterMachine(Alice, "agent-a", Request("machine-a"));
+        registry.AddSession("agent-a", Session("session-1"));
+        registry.Connect(Alice, "client-a");
+        registry.RegisterClient(Alice, "client-a");
+
+        Assert.True(registry.TryMoveSession(
+            "client-a", "machine-a", "session-1", "project-1", out LabelledSession? result, out _));
+
+        Assert.Equal("project-1", result!.Session.ProjectId);
+        Assert.Equal("project-1", Assert.Single(Assert.Single(registry.ListMachines(Alice)).Sessions).ProjectId);
+    }
+
+    [Fact]
+    public void MovesASessionBackToGeneralWithNull()
+    {
+        var registry = new RelayRegistry();
+
+        registry.Connect(Alice, "agent-a");
+        registry.RegisterMachine(Alice, "agent-a", Request("machine-a"));
+        registry.AddSession("agent-a", Session("session-1"));
+        registry.Connect(Alice, "client-a");
+        registry.RegisterClient(Alice, "client-a");
+
+        registry.TryMoveSession("client-a", "machine-a", "session-1", "project-1", out _, out _);
+        registry.TryMoveSession("client-a", "machine-a", "session-1", null, out _, out _);
+
+        Assert.Null(Assert.Single(Assert.Single(registry.ListMachines(Alice)).Sessions).ProjectId);
+    }
+
+    [Fact]
+    public void KeepsAProjectAssignmentAcrossTheAgentDisconnecting()
+    {
+        // Exactly like a rename surviving a reconnect - the label lives at the hub,
+        // not on the agent, so a wifi blip must not silently move a session back to
+        // General.
+        var registry = new RelayRegistry();
+
+        registry.Connect(Alice, "agent-a");
+        registry.RegisterMachine(Alice, "agent-a", Request("machine-a"));
+        registry.AddSession("agent-a", Session("session-1"));
+        registry.Connect(Alice, "client-a");
+        registry.RegisterClient(Alice, "client-a");
+
+        registry.TryMoveSession("client-a", "machine-a", "session-1", "project-1", out _, out _);
+
+        registry.Disconnect("agent-a");
+        registry.Connect(Alice, "agent-b");
+        registry.RegisterMachine(Alice, "agent-b", Request("machine-a"));
+        registry.AddSession("agent-b", Session("session-1"));
+
+        Assert.Equal("project-1", Assert.Single(Assert.Single(registry.ListMachines(Alice)).Sessions).ProjectId);
+    }
+
+    [Fact]
+    public void WillNotMoveASessionInAnotherUsersPartition()
+    {
+        var registry = new RelayRegistry();
+
+        registry.Connect(Alice, "agent-a");
+        registry.RegisterMachine(Alice, "agent-a", Request("machine-a"));
+        registry.AddSession("agent-a", Session("session-1"));
+
+        registry.Connect(Bob, "client-b");
+        registry.RegisterClient(Bob, "client-b");
+
+        Assert.False(registry.TryMoveSession(
+            "client-b", "machine-a", "session-1", "project-1", out LabelledSession? result, out ErrorNotification? error));
+
+        Assert.Null(result);
+        Assert.Equal(ErrorCodes.MachineNotFound, error!.Code);
+    }
+
+    /// <summary>
+    /// Deleting a project reassigns every session under it back to General, on every
+    /// machine the user owns - the sweep <see cref="RelayRegistry.ClearProjectAssignments"/>
+    /// exists for, driven by <c>RelayHub.DeleteProject</c>.
+    /// </summary>
+    [Fact]
+    public void ClearingAProjectMovesEveryAssignedSessionBackToGeneral()
+    {
+        var registry = new RelayRegistry();
+
+        registry.Connect(Alice, "agent-a");
+        registry.RegisterMachine(Alice, "agent-a", Request("machine-a"));
+        registry.AddSession("agent-a", Session("session-1"));
+        registry.AddSession("agent-a", Session("session-2"));
+        registry.Connect(Alice, "client-a");
+        registry.RegisterClient(Alice, "client-a");
+
+        registry.TryMoveSession("client-a", "machine-a", "session-1", "project-1", out _, out _);
+        registry.TryMoveSession("client-a", "machine-a", "session-2", "project-2", out _, out _);
+
+        IReadOnlyList<LabelledSession> affected = registry.ClearProjectAssignments(Alice, "project-1");
+
+        Assert.Equal(["session-1"], affected.Select(a => a.Session.SessionId));
+
+        SessionInfo[] sessions = [.. Assert.Single(registry.ListMachines(Alice)).Sessions];
+        Assert.Null(sessions.Single(s => s.SessionId == "session-1").ProjectId);
+        Assert.Equal("project-2", sessions.Single(s => s.SessionId == "session-2").ProjectId);
+    }
+
+    /// <summary>
+    /// The sweep must reach machines that are offline right now, or a deleted
+    /// project would resurface the instant that agent reconnects and re-announces.
+    /// </summary>
+    [Fact]
+    public void ClearingAProjectSweepsOfflineMachinesToo()
+    {
+        var registry = new RelayRegistry();
+
+        registry.Connect(Alice, "agent-a");
+        registry.RegisterMachine(Alice, "agent-a", Request("machine-a"));
+        registry.AddSession("agent-a", Session("session-1"));
+        registry.Connect(Alice, "client-a");
+        registry.RegisterClient(Alice, "client-a");
+
+        registry.TryMoveSession("client-a", "machine-a", "session-1", "project-1", out _, out _);
+        registry.Disconnect("agent-a");
+
+        IReadOnlyList<LabelledSession> affected = registry.ClearProjectAssignments(Alice, "project-1");
+        Assert.Empty(affected); // the session is gone from the online list, but the label is still cleared
+
+        registry.Connect(Alice, "agent-b");
+        registry.RegisterMachine(Alice, "agent-b", Request("machine-a"));
+        registry.AddSession("agent-b", Session("session-1"));
+
+        Assert.Null(Assert.Single(Assert.Single(registry.ListMachines(Alice)).Sessions).ProjectId);
+    }
+
+    [Fact]
+    public void ClearingAProjectNeverTouchesAnotherUsersSessions()
+    {
+        var registry = new RelayRegistry();
+
+        registry.Connect(Alice, "agent-a");
+        registry.RegisterMachine(Alice, "agent-a", Request("machine-a"));
+        registry.AddSession("agent-a", Session("session-1"));
+        registry.Connect(Alice, "client-a");
+        registry.RegisterClient(Alice, "client-a");
+        registry.TryMoveSession("client-a", "machine-a", "session-1", "project-1", out _, out _);
+
+        Assert.Empty(registry.ClearProjectAssignments(Bob, "project-1"));
+        Assert.Equal("project-1", Assert.Single(Assert.Single(registry.ListMachines(Alice)).Sessions).ProjectId);
+    }
+
+    /// <summary>
+    /// The backstop for the sweep above: a session that reports a project id that no
+    /// longer resolves to a real project self-corrects to General instead of staying
+    /// stuck pointing at nothing.
+    /// </summary>
+    [Fact]
+    public void CorrectingAStaleProjectClearsItBackToGeneral()
+    {
+        var registry = new RelayRegistry();
+
+        registry.Connect(Alice, "agent-a");
+        registry.RegisterMachine(Alice, "agent-a", Request("machine-a"));
+        registry.AddSession("agent-a", Session("session-1"));
+        registry.Connect(Alice, "client-a");
+        registry.RegisterClient(Alice, "client-a");
+        registry.TryMoveSession("client-a", "machine-a", "session-1", "stale-project", out _, out _);
+
+        registry.CorrectStaleProject(Alice, "machine-a", "session-1");
+
+        Assert.Null(Assert.Single(Assert.Single(registry.ListMachines(Alice)).Sessions).ProjectId);
+    }
+
+    [Fact]
     public void IgnoresAnUnknownConnection()
     {
         var registry = new RelayRegistry();

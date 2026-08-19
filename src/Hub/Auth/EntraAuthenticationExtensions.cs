@@ -14,6 +14,15 @@ public static class EntraAuthenticationExtensions
     /// <summary>Paths where a token may arrive as a query parameter. See below.</summary>
     private const string HubPathPrefix = "/hub";
 
+    /// <summary>
+    /// Matches <c>/projects/{id}/icon</c> — the other place a token has to travel in
+    /// the query string, for the same reason as <see cref="HubPathPrefix"/>: it is
+    /// loaded by an <c>&lt;img&gt;</c> tag, which cannot attach an Authorization header
+    /// either.
+    /// </summary>
+    private static readonly System.Text.RegularExpressions.Regex ProjectIconPath =
+        new(@"^/projects/[^/]+/icon$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
     public static IServiceCollection AddEntraAuthentication(
         this IServiceCollection services,
         IConfiguration configuration)
@@ -55,9 +64,11 @@ public static class EntraAuthenticationExtensions
                     {
                         // Browsers cannot set an Authorization header on a WebSocket
                         // handshake, so SignalR passes the token in the query string.
-                        // Accepted only on the hub path, so a token cannot end up in
-                        // the access log of an ordinary page request.
-                        if (context.Request.Path.StartsWithSegments(HubPathPrefix) &&
+                        // Accepted only on the hub path (plus the project icon path,
+                        // loaded by a plain <img> tag for the same reason), so a token
+                        // cannot end up in the access log of an ordinary page request.
+                        if ((context.Request.Path.StartsWithSegments(HubPathPrefix) ||
+                                ProjectIconPath.IsMatch(context.Request.Path.Value ?? string.Empty)) &&
                             context.Request.Query.TryGetValue("access_token", out Microsoft.Extensions.Primitives.StringValues token))
                         {
                             context.Token = token;

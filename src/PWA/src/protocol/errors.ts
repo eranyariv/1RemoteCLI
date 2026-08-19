@@ -18,6 +18,9 @@ export const ErrorCodes = {
   IdentityChanged: 'identity_changed',
   InvalidRequest: 'invalid_request',
   InternalError: 'internal_error',
+  ProjectNotFound: 'project_not_found',
+  DuplicateProjectName: 'duplicate_project_name',
+  CannotDeleteGeneralProject: 'cannot_delete_general_project',
 } as const
 
 /**
@@ -49,6 +52,12 @@ export function describeError(code: string, fallback?: string): string {
       return fallback ?? 'The hub rejected that request.'
     case ErrorCodes.InternalError:
       return 'The hub hit an unexpected problem. Try again in a moment.'
+    case ErrorCodes.ProjectNotFound:
+      return 'That project no longer exists.'
+    case ErrorCodes.DuplicateProjectName:
+      return 'You already have a project with that name.'
+    case ErrorCodes.CannotDeleteGeneralProject:
+      return 'The General project cannot be deleted.'
     default:
       return fallback ?? 'Something went wrong talking to the hub.'
   }

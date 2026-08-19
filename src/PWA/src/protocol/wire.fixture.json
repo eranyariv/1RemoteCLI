@@ -4,7 +4,7 @@
   "messages": {
     "machineList": {
       "type": "MachineListNotification",
-      "base64": "kZKW2SA1ZDQxNDAyYWJjNGIyYTc2Yjk3MTlkOTExMDE3YzU5MqREZXNrvE1pY3Jvc29mdCBXaW5kb3dzIDEwLjAuMjYxMDCnMS4yLjMuNMOSnaxhYWIwZjFlMmMzZDSmY2xhdWRlkqgtLXJlc3VtZaRsYXN0tkM6XFByb2plY3RzXDFSZW1vdGVDTEl4HpLW/2ZHI6fMtKtDbGF1ZGUgQ29kZcOqQ2xhdWRlQ29kZcDCqFRlcm1pbmFsnahjaGF0LTEyM65HaXRIdWIgQ29waWxvdJC2QzpcUHJvamVjdHNcMVJlbW90ZUNMSQAAktb/Zkcjp8y0p0lzc3VlIDPCqkNvcGlsb3RDbGnAwqlBZ2VudENoYXSW2SAwY2MxNzViOWMwZjFiNmE4MzFjMzk5ZTI2OTc3MjY2MaZMYXB0b3C8TWljcm9zb2Z0IFdpbmRvd3MgMTAuMC4yMjYzMacxLjIuMy40wpA=",
+      "base64": "kZKW2SA1ZDQxNDAyYWJjNGIyYTc2Yjk3MTlkOTExMDE3YzU5MqREZXNrvE1pY3Jvc29mdCBXaW5kb3dzIDEwLjAuMjYxMDCnMS4yLjMuNMOSnqxhYWIwZjFlMmMzZDSmY2xhdWRlkqgtLXJlc3VtZaRsYXN0tkM6XFByb2plY3RzXDFSZW1vdGVDTEl4HpLW/2ZHI6fMtKtDbGF1ZGUgQ29kZcOqQ2xhdWRlQ29kZcDCqFRlcm1pbmFswJ6oY2hhdC0xMjOuR2l0SHViIENvcGlsb3SQtkM6XFByb2plY3RzXDFSZW1vdGVDTEkAAJLW/2ZHI6fMtKdJc3N1ZSAzwqpDb3BpbG90Q2xpwMKpQWdlbnRDaGF0wJbZIDBjYzE3NWI5YzBmMWI2YTgzMWMzOTllMjY5NzcyNjYxpkxhcHRvcLxNaWNyb3NvZnQgV2luZG93cyAxMC4wLjIyNjMxpzEuMi4zLjTCkA==",
       "decoded": {
         "machines": [
           {
@@ -30,7 +30,8 @@
                 "cliType": 3,
                 "customName": null,
                 "pinned": false,
-                "kind": 0
+                "kind": 0,
+                "projectId": null
               },
               {
                 "sessionId": "chat-123",
@@ -45,7 +46,8 @@
                 "cliType": 4,
                 "customName": null,
                 "pinned": false,
-                "kind": 1
+                "kind": 1,
+                "projectId": null
               }
             ]
           },
@@ -83,7 +85,7 @@
     },
     "sessionOpened": {
       "type": "ClientSessionOpenedNotification",
-      "base64": "ktkgNWQ0MTQwMmFiYzRiMmE3NmI5NzE5ZDkxMTAxN2M1OTKdqGZmMDBmZjAwpHB3c2iQrUM6XFVzZXJzXGVyYW5QGJLW/2ZHI6fMtMDCqlBvd2VyU2hlbGzAwqhUZXJtaW5hbA==",
+      "base64": "ktkgNWQ0MTQwMmFiYzRiMmE3NmI5NzE5ZDkxMTAxN2M1OTKeqGZmMDBmZjAwpHB3c2iQrUM6XFVzZXJzXGVyYW5QGJLW/2ZHI6fMtMDCqlBvd2VyU2hlbGzAwqhUZXJtaW5hbMA=",
       "decoded": {
         "machineId": "5d41402abc4b2a76b9719d911017c592",
         "session": {
@@ -99,13 +101,14 @@
           "cliType": 2,
           "customName": null,
           "pinned": false,
-          "kind": 0
+          "kind": 0,
+          "projectId": null
         }
       }
     },
     "sessionUpdated": {
       "type": "ClientSessionUpdatedNotification",
-      "base64": "ktkgNWQ0MTQwMmFiYzRiMmE3NmI5NzE5ZDkxMTAxN2M1OTKdqGZmMDBmZjAwpHB3c2iQrUM6XFVzZXJzXGVyYW5QGJLW/2ZHI6fMtMDCqkNvcGlsb3RDbGmqVGhlIGRlcGxvecOoVGVybWluYWw=",
+      "base64": "ktkgNWQ0MTQwMmFiYzRiMmE3NmI5NzE5ZDkxMTAxN2M1OTKeqGZmMDBmZjAwpHB3c2iQrUM6XFVzZXJzXGVyYW5QGJLW/2ZHI6fMtMDCqkNvcGlsb3RDbGmqVGhlIGRlcGxvecOoVGVybWluYWzA",
       "decoded": {
         "machineId": "5d41402abc4b2a76b9719d911017c592",
         "session": {
@@ -121,7 +124,8 @@
           "cliType": 4,
           "customName": "The deploy",
           "pinned": true,
-          "kind": 0
+          "kind": 0,
+          "projectId": null
         }
       }
     },
@@ -333,6 +337,172 @@
         "machineId": "5d41402abc4b2a76b9719d911017c592",
         "sessionId": "ff00ff00",
         "pinned": true
+      }
+    },
+    "sessionOpenedWithProject": {
+      "type": "ClientSessionOpenedNotification",
+      "base64": "ktkgNWQ0MTQwMmFiYzRiMmE3NmI5NzE5ZDkxMTAxN2M1OTKeqGZmMDBmZjAwpHB3c2iQrUM6XFVzZXJzXGVyYW5QGJLW/2ZHI6fMtMDCqlBvd2VyU2hlbGzAwqhUZXJtaW5hbNkgODI3N2UwOTEwZDc1MDE5NWI0NDg3OTc2MTZlMDkxYWQ=",
+      "decoded": {
+        "machineId": "5d41402abc4b2a76b9719d911017c592",
+        "session": {
+          "sessionId": "ff00ff00",
+          "program": "pwsh",
+          "args": [],
+          "cwd": "C:\\Users\\eran",
+          "cols": 80,
+          "rows": 24,
+          "startedAt": "2024-05-17T09:30:15\u002B03:00",
+          "displayName": null,
+          "awaitingInput": false,
+          "cliType": 2,
+          "customName": null,
+          "pinned": false,
+          "kind": 0,
+          "projectId": "8277e0910d750195b448797616e091ad"
+        }
+      }
+    },
+    "listProjectsRequest": {
+      "type": "ListProjectsRequest",
+      "base64": "kA==",
+      "decoded": {}
+    },
+    "createProjectRequest": {
+      "type": "CreateProjectRequest",
+      "base64": "lKoxUmVtb3RlQ0xJ2SFSZW1vdGUgQ0xJIHNlc3Npb25zIGZyb20gYSBwaG9uZS6\u002BaHR0cHM6Ly8xcmVtb3RlY2xpLmV4YW1wbGUuY29t2SdodHRwczovL2dpdGh1Yi5jb20vZXJhbnlhcml2LzFSZW1vdGVDTEk=",
+      "decoded": {
+        "name": "1RemoteCLI",
+        "description": "Remote CLI sessions from a phone.",
+        "siteUrl": "https://1remotecli.example.com",
+        "repoUrl": "https://github.com/eranyariv/1RemoteCLI"
+      }
+    },
+    "updateProjectRequest": {
+      "type": "UpdateProjectRequest",
+      "base64": "ldkgODI3N2UwOTEwZDc1MDE5NWI0NDg3OTc2MTZlMDkxYWSqMVJlbW90ZUNMSdkhUmVtb3RlIENMSSBzZXNzaW9ucyBmcm9tIGEgcGhvbmUuvmh0dHBzOi8vMXJlbW90ZWNsaS5leGFtcGxlLmNvbdknaHR0cHM6Ly9naXRodWIuY29tL2VyYW55YXJpdi8xUmVtb3RlQ0xJ",
+      "decoded": {
+        "projectId": "8277e0910d750195b448797616e091ad",
+        "name": "1RemoteCLI",
+        "description": "Remote CLI sessions from a phone.",
+        "siteUrl": "https://1remotecli.example.com",
+        "repoUrl": "https://github.com/eranyariv/1RemoteCLI"
+      }
+    },
+    "deleteProjectRequest": {
+      "type": "DeleteProjectRequest",
+      "base64": "kdkgODI3N2UwOTEwZDc1MDE5NWI0NDg3OTc2MTZlMDkxYWQ=",
+      "decoded": {
+        "projectId": "8277e0910d750195b448797616e091ad"
+      }
+    },
+    "setSessionProjectRequest": {
+      "type": "SetSessionProjectRequest",
+      "base64": "k9kgNWQ0MTQwMmFiYzRiMmE3NmI5NzE5ZDkxMTAxN2M1OTKoZmYwMGZmMDDZIDgyNzdlMDkxMGQ3NTAxOTViNDQ4Nzk3NjE2ZTA5MWFk",
+      "decoded": {
+        "machineId": "5d41402abc4b2a76b9719d911017c592",
+        "sessionId": "ff00ff00",
+        "projectId": "8277e0910d750195b448797616e091ad"
+      }
+    },
+    "setSessionProjectClearRequest": {
+      "type": "SetSessionProjectRequest",
+      "base64": "k9kgNWQ0MTQwMmFiYzRiMmE3NmI5NzE5ZDkxMTAxN2M1OTKoZmYwMGZmMDDA",
+      "decoded": {
+        "machineId": "5d41402abc4b2a76b9719d911017c592",
+        "sessionId": "ff00ff00",
+        "projectId": null
+      }
+    },
+    "projectList": {
+      "type": "ProjectListNotification",
+      "base64": "kZKYp2dlbmVyYWynR2VuZXJhbMDAwMMAktb/Zkcjp8y0mNkgODI3N2UwOTEwZDc1MDE5NWI0NDg3OTc2MTZlMDkxYWSqMVJlbW90ZUNMSdkhUmVtb3RlIENMSSBzZXNzaW9ucyBmcm9tIGEgcGhvbmUuvmh0dHBzOi8vMXJlbW90ZWNsaS5leGFtcGxlLmNvbdknaHR0cHM6Ly9naXRodWIuY29tL2VyYW55YXJpdi8xUmVtb3RlQ0xJwgKS1v9mRyOnzLQ=",
+      "decoded": {
+        "projects": [
+          {
+            "projectId": "general",
+            "name": "General",
+            "description": null,
+            "siteUrl": null,
+            "repoUrl": null,
+            "isGeneral": true,
+            "iconVersion": 0,
+            "createdAt": "2024-05-17T09:30:15\u002B03:00"
+          },
+          {
+            "projectId": "8277e0910d750195b448797616e091ad",
+            "name": "1RemoteCLI",
+            "description": "Remote CLI sessions from a phone.",
+            "siteUrl": "https://1remotecli.example.com",
+            "repoUrl": "https://github.com/eranyariv/1RemoteCLI",
+            "isGeneral": false,
+            "iconVersion": 2,
+            "createdAt": "2024-05-17T09:30:15\u002B03:00"
+          }
+        ]
+      }
+    },
+    "projectResult": {
+      "type": "ProjectResult",
+      "base64": "kpjZIDgyNzdlMDkxMGQ3NTAxOTViNDQ4Nzk3NjE2ZTA5MWFkqjFSZW1vdGVDTEnZIVJlbW90ZSBDTEkgc2Vzc2lvbnMgZnJvbSBhIHBob25lLr5odHRwczovLzFyZW1vdGVjbGkuZXhhbXBsZS5jb23ZJ2h0dHBzOi8vZ2l0aHViLmNvbS9lcmFueWFyaXYvMVJlbW90ZUNMScIAktb/Zkcjp8y0wA==",
+      "decoded": {
+        "project": {
+          "projectId": "8277e0910d750195b448797616e091ad",
+          "name": "1RemoteCLI",
+          "description": "Remote CLI sessions from a phone.",
+          "siteUrl": "https://1remotecli.example.com",
+          "repoUrl": "https://github.com/eranyariv/1RemoteCLI",
+          "isGeneral": false,
+          "iconVersion": 0,
+          "createdAt": "2024-05-17T09:30:15\u002B03:00"
+        },
+        "error": null
+      }
+    },
+    "projectResultError": {
+      "type": "ProjectResult",
+      "base64": "ksC2ZHVwbGljYXRlX3Byb2plY3RfbmFtZQ==",
+      "decoded": {
+        "project": null,
+        "error": "duplicate_project_name"
+      }
+    },
+    "projectCreated": {
+      "type": "ProjectCreatedNotification",
+      "base64": "kZjZIDgyNzdlMDkxMGQ3NTAxOTViNDQ4Nzk3NjE2ZTA5MWFkqjFSZW1vdGVDTEnZIVJlbW90ZSBDTEkgc2Vzc2lvbnMgZnJvbSBhIHBob25lLr5odHRwczovLzFyZW1vdGVjbGkuZXhhbXBsZS5jb23ZJ2h0dHBzOi8vZ2l0aHViLmNvbS9lcmFueWFyaXYvMVJlbW90ZUNMScIAktb/Zkcjp8y0",
+      "decoded": {
+        "project": {
+          "projectId": "8277e0910d750195b448797616e091ad",
+          "name": "1RemoteCLI",
+          "description": "Remote CLI sessions from a phone.",
+          "siteUrl": "https://1remotecli.example.com",
+          "repoUrl": "https://github.com/eranyariv/1RemoteCLI",
+          "isGeneral": false,
+          "iconVersion": 0,
+          "createdAt": "2024-05-17T09:30:15\u002B03:00"
+        }
+      }
+    },
+    "projectUpdated": {
+      "type": "ProjectUpdatedNotification",
+      "base64": "kZjZIDgyNzdlMDkxMGQ3NTAxOTViNDQ4Nzk3NjE2ZTA5MWFkqjFSZW1vdGVDTEnZIVJlbW90ZSBDTEkgc2Vzc2lvbnMgZnJvbSBhIHBob25lLr5odHRwczovLzFyZW1vdGVjbGkuZXhhbXBsZS5jb23ZJ2h0dHBzOi8vZ2l0aHViLmNvbS9lcmFueWFyaXYvMVJlbW90ZUNMScICktb/Zkcjp8y0",
+      "decoded": {
+        "project": {
+          "projectId": "8277e0910d750195b448797616e091ad",
+          "name": "1RemoteCLI",
+          "description": "Remote CLI sessions from a phone.",
+          "siteUrl": "https://1remotecli.example.com",
+          "repoUrl": "https://github.com/eranyariv/1RemoteCLI",
+          "isGeneral": false,
+          "iconVersion": 2,
+          "createdAt": "2024-05-17T09:30:15\u002B03:00"
+        }
+      }
+    },
+    "projectDeleted": {
+      "type": "ProjectDeletedNotification",
+      "base64": "kdkgODI3N2UwOTEwZDc1MDE5NWI0NDg3OTc2MTZlMDkxYWQ=",
+      "decoded": {
+        "projectId": "8277e0910d750195b448797616e091ad"
       }
     }
   }

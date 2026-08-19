@@ -15,8 +15,11 @@ public static class ProtocolVersion
     /// <see cref="Hub.SessionInfo.CliType"/>. Both are additive: a version 1 peer
     /// never invokes the new methods, and its decoder stops reading before the new
     /// field. That is why <see cref="MinimumSupported"/> did not move with it.
-    /// Version 3 adds ACP-backed agent-chat sessions and their typed transcript.
-    /// Terminal messages and the existing fields remain unchanged.
+    /// Version 3 adds ACP-backed agent-chat sessions and their typed transcript,
+    /// plus projects: <c>ListProjects</c>/<c>CreateProject</c>/<c>UpdateProject</c>/
+    /// <c>DeleteProject</c>/<c>SetSessionProject</c>, their notifications, and
+    /// appended <see cref="Hub.SessionInfo.ProjectId"/>. Additive for the same
+    /// reason as version 2, so <see cref="MinimumSupported"/> stays put again.
     /// </para>
     /// </summary>
     public const int Current = 3;

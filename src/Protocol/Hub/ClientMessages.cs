@@ -194,7 +194,92 @@ public sealed class PushKeys
     public string Auth { get; set; } = string.Empty;
 }
 
+/// <summary>Client to hub. Lists this user's projects.</summary>
+[MessagePackObject]
+public sealed class ListProjectsRequest
+{
+}
+
+/// <summary>Client to hub. Creates a new project.</summary>
+[MessagePackObject]
+public sealed class CreateProjectRequest
+{
+    [Key(0)]
+    public string Name { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string? Description { get; set; }
+
+    [Key(2)]
+    public string? SiteUrl { get; set; }
+
+    [Key(3)]
+    public string? RepoUrl { get; set; }
+}
+
+/// <summary>
+/// Client to hub. Edits an existing project's fields (not its icon, which is
+/// uploaded over a separate HTTP endpoint — see <c>docs/deployment.md</c>).
+/// <para>
+/// Works on the reserved General project too: the issue only requires it to be
+/// non-deletable, not immutable.
+/// </para>
+/// </summary>
+[MessagePackObject]
+public sealed class UpdateProjectRequest
+{
+    [Key(0)]
+    public string ProjectId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string Name { get; set; } = string.Empty;
+
+    [Key(2)]
+    public string? Description { get; set; }
+
+    [Key(3)]
+    public string? SiteUrl { get; set; }
+
+    [Key(4)]
+    public string? RepoUrl { get; set; }
+}
+
+/// <summary>
+/// Client to hub. Deletes a project. Rejected for the General project. Any
+/// session still assigned to the deleted project is reassigned back to General.
+/// </summary>
+[MessagePackObject]
+public sealed class DeleteProjectRequest
+{
+    [Key(0)]
+    public string ProjectId { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Client to hub. Moves a live session to a different project.
+/// <para>
+/// Not routed through the caller's attachment, for the same reason as
+/// <see cref="SetSessionNameRequest"/>: moving is done from the list, and the
+/// hub answers it out of the caller's own partition without ever crossing to
+/// the machine.
+/// </para>
+/// </summary>
+[MessagePackObject]
+public sealed class SetSessionProjectRequest
+{
+    [Key(0)]
+    public string MachineId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string SessionId { get; set; } = string.Empty;
+
+    /// <summary>Null moves the session back to General.</summary>
+    [Key(2)]
+    public string? ProjectId { get; set; }
+}
+
 // Hub to client (spec section 5.3).
+
 
 /// <summary>Hub to client. The full picture, sent on attach of the client itself.</summary>
 [MessagePackObject]
@@ -307,4 +392,59 @@ public sealed class ErrorNotification
 
     [Key(2)]
     public string? SessionId { get; set; }
+}
+
+/// <summary>
+/// Hub to client, direct RPC return of <see cref="ListProjects"/>.
+/// <see cref="HubMethods.Server.ListProjects"/>.
+/// </summary>
+[MessagePackObject]
+public sealed class ProjectListNotification
+{
+    [Key(0)]
+    public ProjectInfo[] Projects { get; set; } = [];
+}
+
+/// <summary>
+/// Hub to client, the direct RPC return of <c>CreateProject</c>/<c>UpdateProject</c>.
+/// <para>
+/// Carries either the created/updated project or an error, never both. Used as a
+/// direct return in addition to the broadcast notifications below: the caller
+/// needs the hub-generated id (or the failure) immediately, e.g. to chain an icon
+/// upload, which a broadcast alone cannot give it deterministically.
+/// </para>
+/// </summary>
+[MessagePackObject]
+public sealed class ProjectResult
+{
+    [Key(0)]
+    public ProjectInfo? Project { get; set; }
+
+    /// <summary>One of the stable strings in <see cref="ErrorCodes"/>, set only on failure.</summary>
+    [Key(1)]
+    public string? Error { get; set; }
+}
+
+/// <summary>Hub to client. Broadcast to every device of the user after a successful create.</summary>
+[MessagePackObject]
+public sealed class ProjectCreatedNotification
+{
+    [Key(0)]
+    public ProjectInfo Project { get; set; } = new();
+}
+
+/// <summary>Hub to client. Broadcast to every device of the user after a successful update (including icon changes).</summary>
+[MessagePackObject]
+public sealed class ProjectUpdatedNotification
+{
+    [Key(0)]
+    public ProjectInfo Project { get; set; } = new();
+}
+
+/// <summary>Hub to client. A project was deleted; its sessions have already been reassigned to General.</summary>
+[MessagePackObject]
+public sealed class ProjectDeletedNotification
+{
+    [Key(0)]
+    public string ProjectId { get; set; } = string.Empty;
 }

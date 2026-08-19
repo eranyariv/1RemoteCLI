@@ -23,6 +23,11 @@ export const Server = {
   SetSessionPinned: 'SetSessionPinned',
   RegisterPush: 'RegisterPush',
   RefreshToken: 'RefreshToken',
+  ListProjects: 'ListProjects',
+  CreateProject: 'CreateProject',
+  UpdateProject: 'UpdateProject',
+  DeleteProject: 'DeleteProject',
+  SetSessionProject: 'SetSessionProject',
 } as const
 
 /** Methods the hub invokes on this client. */
@@ -39,6 +44,9 @@ export const Client = {
   ChatTranscript: 'ChatTranscript',
   TokenExpiring: 'TokenExpiring',
   Error: 'Error',
+  ProjectCreated: 'ProjectCreated',
+  ProjectUpdated: 'ProjectUpdated',
+  ProjectDeleted: 'ProjectDeleted',
 } as const
 
 /** Must match `ProtocolVersion.Current`. */

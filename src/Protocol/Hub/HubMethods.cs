@@ -55,6 +55,14 @@ public static class HubMethods
 
         public const string RegisterPush = "RegisterPush";
 
+        public const string ListProjects = "ListProjects";
+        public const string CreateProject = "CreateProject";
+        public const string UpdateProject = "UpdateProject";
+        public const string DeleteProject = "DeleteProject";
+
+        /// <inheritdoc cref="SetSessionName"/>
+        public const string SetSessionProject = "SetSessionProject";
+
         // Both.
         public const string RefreshToken = "RefreshToken";
     }
@@ -92,5 +100,9 @@ public static class HubMethods
         public const string ChatTranscript = "ChatTranscript";
         public const string TokenExpiring = "TokenExpiring";
         public const string Error = "Error";
+
+        public const string ProjectCreated = "ProjectCreated";
+        public const string ProjectUpdated = "ProjectUpdated";
+        public const string ProjectDeleted = "ProjectDeleted";
     }
 }

@@ -36,4 +36,13 @@ public static class ErrorCodes
 
     /// <summary>Unexpected server-side failure.</summary>
     public const string InternalError = "internal_error";
+
+    /// <summary>The named project is not registered, or not registered to this user.</summary>
+    public const string ProjectNotFound = "project_not_found";
+
+    /// <summary>Another of this user's projects already has this name.</summary>
+    public const string DuplicateProjectName = "duplicate_project_name";
+
+    /// <summary>The reserved General project cannot be deleted.</summary>
+    public const string CannotDeleteGeneralProject = "cannot_delete_general_project";
 }

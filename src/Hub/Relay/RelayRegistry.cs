@@ -101,11 +101,18 @@ public sealed class SessionLabel
 
     public bool Pinned { get; set; }
 
+    /// <summary>
+    /// The project this session is grouped under. Null means General - the same
+    /// null-means-default convention as <see cref="Name"/>, and read by the same
+    /// re-application on reconnect that keeps a rename alive across one.
+    /// </summary>
+    public string? ProjectId { get; set; }
+
     /// <summary>When this was last written. Decides which label goes first when the cap bites.</summary>
     public DateTimeOffset TouchedAt { get; set; }
 
     /// <summary>A label that says nothing is not worth keeping.</summary>
-    public bool IsEmpty => Name is null && !Pinned;
+    public bool IsEmpty => Name is null && !Pinned && ProjectId is null;
 }
 
 /// <summary>
@@ -490,6 +497,65 @@ public sealed class RelayRegistry
             out result,
             out error);
 
+    /// <summary>Moves a session to a different project, or back to General with null.</summary>
+    public bool TryMoveSession(
+        string clientConnectionId,
+        string machineId,
+        string sessionId,
+        string? projectId,
+        out LabelledSession? result,
+        out ErrorNotification? error) =>
+        TryEditLabel(
+            clientConnectionId,
+            machineId,
+            sessionId,
+            label => label.ProjectId = projectId,
+            out result,
+            out error);
+
+    /// <summary>
+    /// Reassigns every session under this project, on every machine this user owns -
+    /// online or not - back to General, and reports which of them are live right now
+    /// so the caller can tell the user's other devices.
+    /// <para>
+    /// Sweeps offline machines too, deliberately: their labels are exactly the ones
+    /// that would otherwise resurface a deleted project the moment that agent
+    /// reconnects and re-announces its sessions. See <c>RelayHub</c>'s defensive
+    /// check on <c>SessionOpened</c>/<c>SessionUpdated</c> for the backstop this is
+    /// meant to make redundant, not rely on.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<LabelledSession> ClearProjectAssignments(string userKey, string projectId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(userKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
+
+        lock (_gate)
+        {
+            if (!_partitions.TryGetValue(userKey, out UserPartition? partition))
+            {
+                return [];
+            }
+
+            List<LabelledSession> affected = [];
+            DateTimeOffset now = _time.GetUtcNow();
+
+            foreach (RegisteredMachine machine in partition.Machines.Values)
+            {
+                foreach (string sessionId in machine.ClearProjectAssignments(projectId, now))
+                {
+                    if (machine.Sessions.TryGetValue(sessionId, out SessionInfo? session))
+                    {
+                        machine.ApplyLabel(session);
+                        affected.Add(new LabelledSession(userKey, machine.MachineId, session));
+                    }
+                }
+            }
+
+            return affected;
+        }
+    }
+
     /// <summary>Everything this user owns. Never reaches into another partition.</summary>
     public MachineInfo[] ListMachines(string userKey)
     {
@@ -778,6 +844,41 @@ public sealed class RelayRegistry
         }
     }
 
+    /// <summary>
+    /// Hub-internal correction, not a user action: clears a session's label back to
+    /// General when the project it names has been deleted out from under it. See
+    /// <c>RelayHub</c>'s self-check on <c>SessionOpened</c>/<c>SessionUpdated</c>,
+    /// which is the only caller.
+    /// <para>
+    /// Resolved directly by user key and machine id rather than through a client's
+    /// own connection like <see cref="TryEditLabel"/>, because the caller here is
+    /// reacting to an agent's announcement, not a client's request - there is no
+    /// client connection to resolve from.
+    /// </para>
+    /// </summary>
+    public void CorrectStaleProject(string userKey, string machineId, string sessionId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(userKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(machineId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+
+        lock (_gate)
+        {
+            if (!_partitions.TryGetValue(userKey, out UserPartition? partition) ||
+                !partition.Machines.TryGetValue(machineId, out RegisteredMachine? machine))
+            {
+                return;
+            }
+
+            machine.EditLabel(sessionId, label => label.ProjectId = null, _time.GetUtcNow());
+
+            if (machine.Sessions.TryGetValue(sessionId, out SessionInfo? session))
+            {
+                machine.ApplyLabel(session);
+            }
+        }
+    }
+
     /// <summary>Caller must hold the gate.</summary>
     private int CountWatchers(string userKey, string machineId, string sessionId) =>
         _partitions.TryGetValue(userKey, out UserPartition? partition)
@@ -970,6 +1071,7 @@ public sealed class RegisteredMachine(string machineId)
 
         session.CustomName = label?.Name;
         session.Pinned = label?.Pinned ?? false;
+        session.ProjectId = label?.ProjectId;
     }
 
     /// <summary>Changes a session's label, creating it on first use and dropping it once it says nothing.</summary>
@@ -997,6 +1099,46 @@ public sealed class RegisteredMachine(string machineId)
     }
 
     internal void ForgetLabel(string sessionId) => _labels.Remove(sessionId);
+
+    /// <summary>
+    /// Clears one project's assignment from every label that carries it on this
+    /// machine, and reports which session ids changed.
+    /// <para>
+    /// Caller must hold the registry's gate, like every other internal method here.
+    /// </para>
+    /// </summary>
+    internal IReadOnlyList<string> ClearProjectAssignments(string projectId, DateTimeOffset now)
+    {
+        List<string>? changed = null;
+
+        foreach ((string sessionId, SessionLabel label) in _labels)
+        {
+            if (label.ProjectId != projectId)
+            {
+                continue;
+            }
+
+            label.ProjectId = null;
+            label.TouchedAt = now;
+            (changed ??= []).Add(sessionId);
+        }
+
+        if (changed is null)
+        {
+            return [];
+        }
+
+        // A label that now says nothing is not worth keeping, same rule as EditLabel.
+        foreach (string sessionId in changed)
+        {
+            if (_labels.TryGetValue(sessionId, out SessionLabel? label) && label.IsEmpty)
+            {
+                _labels.Remove(sessionId);
+            }
+        }
+
+        return changed;
+    }
 
     /// <summary>
     /// Makes room, orphans first.

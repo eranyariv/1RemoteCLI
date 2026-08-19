@@ -30,6 +30,7 @@ function session(id: string, overrides: Partial<SessionInfo> = {}): SessionInfo 
     customName: null,
     pinned: false,
     kind: 'Terminal',
+    projectId: null,
     ...overrides,
   }
 }

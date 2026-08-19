@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using OneRemoteCli.Hub.Projects;
 using OneRemoteCli.Protocol;
 using OneRemoteCli.Protocol.Hub;
 
@@ -35,6 +36,10 @@ public sealed class RelayHubTests : IAsyncLifetime
 
     private WebApplicationFactory<Program> _factory = null!;
     private readonly List<HubConnection> _connections = [];
+    private readonly string _projectStatePath =
+        Path.Combine(Path.GetTempPath(), $"relay-hub-projects-{Guid.NewGuid():N}.json");
+    private readonly string _projectIconRoot =
+        Path.Combine(Path.GetTempPath(), $"relay-hub-project-icons-{Guid.NewGuid():N}");
 
     public Task InitializeAsync()
     {
@@ -46,6 +51,18 @@ public sealed class RelayHubTests : IAsyncLifetime
                     .AddScheme<AuthenticationSchemeOptions, HeaderIdentityHandler>(
                         HeaderIdentityHandler.SchemeName,
                         _ => { });
+
+                // ProjectStore, unlike the (already-shared) operator state, is
+                // asserted on directly by name and by count in the tests below.
+                // Left at its default path it would read and write a real file
+                // shared across every run of this suite, so a second run would see
+                // the first run's projects and fail on the very first duplicate
+                // name. Scoped to this test class's lifetime instead.
+                services.Configure<ProjectsOptions>(options =>
+                {
+                    options.StatePath = _projectStatePath;
+                    options.IconRoot = _projectIconRoot;
+                });
             }));
 
         // Forces the server to start so Server.BaseAddress and CreateHandler work.
@@ -62,6 +79,13 @@ public sealed class RelayHubTests : IAsyncLifetime
         }
 
         _factory.Dispose();
+
+        File.Delete(_projectStatePath);
+
+        if (Directory.Exists(_projectIconRoot))
+        {
+            Directory.Delete(_projectIconRoot, recursive: true);
+        }
     }
 
     [Fact]
@@ -613,6 +637,361 @@ public sealed class RelayHubTests : IAsyncLifetime
 
         await PinAsync(phone, "machine-a", "session-1", pinned: false);
         Assert.False((await Next(updates)).Session.Pinned);
+    }
+
+    // Projects: end-to-end CRUD, ownership isolation, General invariants, moving a
+    // live session, and the delete-time sweep with its reconnect backstop.
+
+    [Fact]
+    public async Task ANewUserAlwaysHasAGeneralProject()
+    {
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+
+        ProjectListNotification list = await client.InvokeAsync<ProjectListNotification>(
+            HubMethods.Server.ListProjects);
+
+        ProjectInfo general = Assert.Single(list.Projects);
+        Assert.True(general.IsGeneral);
+        Assert.Equal("General", general.Name);
+    }
+
+    [Fact]
+    public async Task CreatingAProjectReturnsItAndReachesEveryDevice()
+    {
+        HubConnection phone = await ConnectClientAsync(AliceTenant, AliceObject);
+        HubConnection laptop = await ConnectClientAsync(AliceTenant, AliceObject);
+        Channel<ProjectCreatedNotification> created =
+            Listen<ProjectCreatedNotification>(laptop, HubMethods.Client.ProjectCreated);
+
+        ProjectResult result = await phone.InvokeAsync<ProjectResult>(
+            HubMethods.Server.CreateProject,
+            new CreateProjectRequest { Name = "Website", Description = "The public site" });
+
+        Assert.Null(result.Error);
+        Assert.Equal("Website", result.Project!.Name);
+        Assert.False(result.Project.IsGeneral);
+
+        ProjectCreatedNotification notification = await Next(created);
+        Assert.Equal(result.Project.ProjectId, notification.Project.ProjectId);
+    }
+
+    [Fact]
+    public async Task CreatingAProjectWithANameAlreadyTakenIsRefused()
+    {
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+
+        await client.InvokeAsync<ProjectResult>(
+            HubMethods.Server.CreateProject, new CreateProjectRequest { Name = "Website" });
+
+        ProjectResult duplicate = await client.InvokeAsync<ProjectResult>(
+            HubMethods.Server.CreateProject, new CreateProjectRequest { Name = "WEBSITE" });
+
+        Assert.Null(duplicate.Project);
+        Assert.Equal(ErrorCodes.DuplicateProjectName, duplicate.Error);
+    }
+
+    [Fact]
+    public async Task UpdatingAProjectReachesEveryDevice()
+    {
+        HubConnection phone = await ConnectClientAsync(AliceTenant, AliceObject);
+        HubConnection laptop = await ConnectClientAsync(AliceTenant, AliceObject);
+        Channel<ProjectUpdatedNotification> updated =
+            Listen<ProjectUpdatedNotification>(laptop, HubMethods.Client.ProjectUpdated);
+
+        ProjectResult created = await phone.InvokeAsync<ProjectResult>(
+            HubMethods.Server.CreateProject, new CreateProjectRequest { Name = "Website" });
+
+        ProjectResult result = await phone.InvokeAsync<ProjectResult>(
+            HubMethods.Server.UpdateProject,
+            new UpdateProjectRequest
+            {
+                ProjectId = created.Project!.ProjectId,
+                Name = "Website v2",
+                SiteUrl = "https://example.com",
+            });
+
+        Assert.Null(result.Error);
+        Assert.Equal("Website v2", result.Project!.Name);
+
+        ProjectUpdatedNotification notification = await Next(updated);
+        Assert.Equal("Website v2", notification.Project.Name);
+        Assert.Equal("https://example.com", notification.Project.SiteUrl);
+    }
+
+    [Fact]
+    public async Task GeneralCanBeRenamedButNotDeleted()
+    {
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        ProjectListNotification list = await client.InvokeAsync<ProjectListNotification>(
+            HubMethods.Server.ListProjects);
+        string generalId = Assert.Single(list.Projects).ProjectId;
+
+        ProjectResult renamed = await client.InvokeAsync<ProjectResult>(
+            HubMethods.Server.UpdateProject,
+            new UpdateProjectRequest { ProjectId = generalId, Name = "Everything" });
+
+        Assert.Null(renamed.Error);
+        Assert.Equal("Everything", renamed.Project!.Name);
+        Assert.True(renamed.Project.IsGeneral);
+
+        ErrorNotification? refused = await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.DeleteProject, new DeleteProjectRequest { ProjectId = generalId });
+
+        Assert.Equal(ErrorCodes.CannotDeleteGeneralProject, refused!.Code);
+    }
+
+    [Fact]
+    public async Task BobCannotSeeEditOrDeleteAlicesProjects()
+    {
+        HubConnection alice = await ConnectClientAsync(AliceTenant, AliceObject);
+        ProjectResult created = await alice.InvokeAsync<ProjectResult>(
+            HubMethods.Server.CreateProject, new CreateProjectRequest { Name = "Alice's project" });
+
+        HubConnection bob = await ConnectClientAsync(BobTenant, BobObject);
+
+        ProjectListNotification bobsList = await bob.InvokeAsync<ProjectListNotification>(
+            HubMethods.Server.ListProjects);
+        Assert.Single(bobsList.Projects); // only Bob's own General, never Alice's
+
+        ProjectResult editAttempt = await bob.InvokeAsync<ProjectResult>(
+            HubMethods.Server.UpdateProject,
+            new UpdateProjectRequest { ProjectId = created.Project!.ProjectId, Name = "mine now" });
+
+        Assert.Null(editAttempt.Project);
+        Assert.Equal(ErrorCodes.ProjectNotFound, editAttempt.Error);
+
+        ErrorNotification? deleteAttempt = await bob.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.DeleteProject, new DeleteProjectRequest { ProjectId = created.Project.ProjectId });
+
+        Assert.Equal(ErrorCodes.ProjectNotFound, deleteAttempt!.Code);
+    }
+
+    [Fact]
+    public async Task ANewSessionDefaultsToGeneral()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "session-1", "pwsh");
+
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        MachineListNotification list = await client.InvokeAsync<MachineListNotification>(
+            HubMethods.Server.ListMachines);
+
+        Assert.Null(Assert.Single(Assert.Single(list.Machines).Sessions).ProjectId);
+    }
+
+    [Fact]
+    public async Task MovingASessionReachesEveryDevice()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "session-1", "pwsh");
+
+        HubConnection phone = await ConnectClientAsync(AliceTenant, AliceObject);
+        ProjectResult project = await phone.InvokeAsync<ProjectResult>(
+            HubMethods.Server.CreateProject, new CreateProjectRequest { Name = "Website" });
+
+        HubConnection laptop = await ConnectClientAsync(AliceTenant, AliceObject);
+        Channel<ClientSessionUpdatedNotification> updates =
+            Listen<ClientSessionUpdatedNotification>(laptop, HubMethods.Client.SessionUpdated);
+
+        Assert.Null(await phone.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SetSessionProject,
+            new SetSessionProjectRequest
+            {
+                MachineId = "machine-a",
+                SessionId = "session-1",
+                ProjectId = project.Project!.ProjectId,
+            }));
+
+        ClientSessionUpdatedNotification update = await Next(updates);
+        Assert.Equal(project.Project.ProjectId, update.Session.ProjectId);
+    }
+
+    [Fact]
+    public async Task MovingASessionToAProjectThatDoesNotExistIsRefused()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "session-1", "pwsh");
+
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+
+        ErrorNotification? refused = await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SetSessionProject,
+            new SetSessionProjectRequest
+            {
+                MachineId = "machine-a",
+                SessionId = "session-1",
+                ProjectId = "does-not-exist",
+            });
+
+        Assert.Equal(ErrorCodes.ProjectNotFound, refused!.Code);
+    }
+
+    [Fact]
+    public async Task MovingASessionBackToGeneralWithNullClearsTheProject()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "session-1", "pwsh");
+
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        ProjectResult project = await client.InvokeAsync<ProjectResult>(
+            HubMethods.Server.CreateProject, new CreateProjectRequest { Name = "Website" });
+
+        await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SetSessionProject,
+            new SetSessionProjectRequest
+            {
+                MachineId = "machine-a",
+                SessionId = "session-1",
+                ProjectId = project.Project!.ProjectId,
+            });
+
+        await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SetSessionProject,
+            new SetSessionProjectRequest { MachineId = "machine-a", SessionId = "session-1", ProjectId = null });
+
+        MachineListNotification list = await client.InvokeAsync<MachineListNotification>(
+            HubMethods.Server.ListMachines);
+        Assert.Null(Assert.Single(Assert.Single(list.Machines).Sessions).ProjectId);
+    }
+
+    /// <summary>
+    /// A project assignment survives the agent reconnecting, exactly like a rename -
+    /// the label lives at the hub, not on the agent.
+    /// </summary>
+    [Fact]
+    public async Task AProjectAssignmentSurvivesTheAgentReconnecting()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "session-1", "pwsh");
+
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        ProjectResult project = await client.InvokeAsync<ProjectResult>(
+            HubMethods.Server.CreateProject, new CreateProjectRequest { Name = "Website" });
+
+        await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SetSessionProject,
+            new SetSessionProjectRequest
+            {
+                MachineId = "machine-a",
+                SessionId = "session-1",
+                ProjectId = project.Project!.ProjectId,
+            });
+
+        await agent.DisposeAsync();
+
+        HubConnection again = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(again, "session-1", "pwsh");
+
+        MachineListNotification list = await client.InvokeAsync<MachineListNotification>(
+            HubMethods.Server.ListMachines);
+        Assert.Equal(
+            project.Project.ProjectId,
+            Assert.Single(Assert.Single(list.Machines).Sessions).ProjectId);
+    }
+
+    /// <summary>
+    /// Deleting a project reassigns its live sessions back to General and tells
+    /// every device both what happened to the sessions and that the project is gone.
+    /// </summary>
+    [Fact]
+    public async Task DeletingAProjectReassignsItsLiveSessionsAndAnnouncesBoth()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "session-1", "pwsh");
+
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        ProjectResult project = await client.InvokeAsync<ProjectResult>(
+            HubMethods.Server.CreateProject, new CreateProjectRequest { Name = "Website" });
+
+        await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SetSessionProject,
+            new SetSessionProjectRequest
+            {
+                MachineId = "machine-a",
+                SessionId = "session-1",
+                ProjectId = project.Project!.ProjectId,
+            });
+
+        HubConnection phone = await ConnectClientAsync(AliceTenant, AliceObject);
+        Channel<ClientSessionUpdatedNotification> sessionUpdates =
+            Listen<ClientSessionUpdatedNotification>(phone, HubMethods.Client.SessionUpdated);
+        Channel<ProjectDeletedNotification> projectDeletes =
+            Listen<ProjectDeletedNotification>(phone, HubMethods.Client.ProjectDeleted);
+
+        Assert.Null(await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.DeleteProject, new DeleteProjectRequest { ProjectId = project.Project.ProjectId }));
+
+        Assert.Null((await Next(sessionUpdates)).Session.ProjectId);
+        Assert.Equal(project.Project.ProjectId, (await Next(projectDeletes)).ProjectId);
+
+        MachineListNotification list = await client.InvokeAsync<MachineListNotification>(
+            HubMethods.Server.ListMachines);
+        Assert.Null(Assert.Single(Assert.Single(list.Machines).Sessions).ProjectId);
+    }
+
+    /// <summary>
+    /// The backstop: a machine offline at delete time still carries the old project
+    /// id in its label and re-announces it verbatim on reconnect. The hub corrects it
+    /// on arrival rather than trusting the sweep to have already reached it.
+    /// </summary>
+    [Fact]
+    public async Task ASessionThatReannouncesADeletedProjectSelfCorrectsToGeneral()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "session-1", "pwsh");
+
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        ProjectResult project = await client.InvokeAsync<ProjectResult>(
+            HubMethods.Server.CreateProject, new CreateProjectRequest { Name = "Website" });
+
+        await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SetSessionProject,
+            new SetSessionProjectRequest
+            {
+                MachineId = "machine-a",
+                SessionId = "session-1",
+                ProjectId = project.Project!.ProjectId,
+            });
+
+        // The agent drops off the network before the delete's sweep can reach it.
+        await agent.DisposeAsync();
+
+        Assert.Null(await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.DeleteProject, new DeleteProjectRequest { ProjectId = project.Project.ProjectId }));
+
+        // It reconnects and re-announces the same session, still labelled with the
+        // now-deleted project id, exactly as it was the moment it went offline.
+        HubConnection again = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(again, "session-1", "pwsh");
+
+        MachineListNotification list = await client.InvokeAsync<MachineListNotification>(
+            HubMethods.Server.ListMachines);
+        Assert.Null(Assert.Single(Assert.Single(list.Machines).Sessions).ProjectId);
+    }
+
+    [Fact]
+    public async Task AnUnknownProjectIdInARequestIsRefusedRatherThanCrashing()
+    {
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+
+        ProjectResult refused = await client.InvokeAsync<ProjectResult>(
+            HubMethods.Server.UpdateProject,
+            new UpdateProjectRequest { ProjectId = "does-not-exist", Name = "New name" });
+
+        Assert.Null(refused.Project);
+        Assert.Equal(ErrorCodes.ProjectNotFound, refused.Error);
+    }
+
+    [Fact]
+    public async Task ANameThatIsBlankIsRefused()
+    {
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+
+        ProjectResult refused = await client.InvokeAsync<ProjectResult>(
+            HubMethods.Server.CreateProject, new CreateProjectRequest { Name = "   " });
+
+        Assert.Null(refused.Project);
+        Assert.Equal(ErrorCodes.InvalidRequest, refused.Error);
     }
 
     [Fact]

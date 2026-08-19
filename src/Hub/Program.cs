@@ -1,13 +1,16 @@
 using System.Security.Claims;
 using Lib.Net.Http.WebPush;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.Extensions.Options;
 using OneRemoteCli.Hub.Auth;
 using OneRemoteCli.Hub.Ops;
+using OneRemoteCli.Hub.Projects;
 using OneRemoteCli.Hub.Push;
 using OneRemoteCli.Hub.Relay;
 using OneRemoteCli.Protocol;
+using OneRemoteCli.Protocol.Hub;
 
 // Generating the VAPID keypair is a one-off setup chore, but it lives here rather
 // than in a script because getting the encoding wrong — padded base64, or a
@@ -130,6 +133,14 @@ builder.Services.AddHostedService(services => services.GetRequiredService<Weekly
 builder.Services.AddHostedService<OperatorCommandService>();
 builder.Services.AddHostedService<ClientSecretWatch>();
 
+// Projects (issue #110). The hub's second piece of durable state, after the
+// operator state above - see ProjectStore for why a file rather than a database.
+// Session-to-project assignment itself lives in the registry's existing session
+// labels alongside CustomName/Pinned, not here: this store only holds the project
+// definitions themselves (name, description, urls, icon).
+builder.Services.Configure<ProjectsOptions>(builder.Configuration.GetSection(ProjectsOptions.Section));
+builder.Services.AddSingleton<ProjectStore>();
+
 builder.Services
     .AddSignalR(RelayLiveness.Apply)
     // MessagePack rather than JSON because terminal output is binary. JSON would
@@ -182,6 +193,119 @@ app.MapGet("/push/vapid", (IOptions<VapidOptions> options) =>
 app.MapGet("/whoami", [Authorize] (ClaimsPrincipal user) => Results.Ok(new WhoAmIResponse(
     UserKey: UserKey.From(user),
     Username: UserKey.PreferredUsername(user))));
+
+// Project icons (issue #110). Deliberately plain, authenticated HTTP next to the
+// SignalR hub rather than messages on it: an upload is a binary blob up to
+// ProjectStore.MaxIconBytes, and pushing that through MessagePack would bloat the
+// one payload every client refreshes on every list load. Ownership is enforced the
+// same way every other per-user lookup in this hub is - by resolving the caller's
+// own user key and never accepting one as a parameter - so a guessed project id
+// from another account's icon can find nothing to read, replace, or clear.
+//
+// A successful upload or clear still needs to reach every other device this user
+// has open, exactly like an edit made through UpdateProject - otherwise a phone
+// showing the project list would carry a stale icon until its next reconnect. So
+// these two mutating endpoints broadcast the same ProjectUpdatedNotification
+// RelayHub.UpdateProject sends, via the same IHubContext/RelayRegistry pairing the
+// hub itself would use if this were a hub method instead of a file upload.
+app.MapPost("/projects/{projectId}/icon", [Authorize] async (
+    string projectId,
+    HttpRequest request,
+    ProjectStore projects,
+    RelayRegistry registry,
+    IHubContext<RelayHub> hub,
+    ClaimsPrincipal user) =>
+{
+    string? userKey = UserKey.From(user);
+    if (userKey is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    string? contentType = request.ContentType;
+    if (string.IsNullOrWhiteSpace(contentType))
+    {
+        return Results.BadRequest(new { error = ErrorCodes.InvalidRequest });
+    }
+
+    // Read with an independent cap rather than trusting Content-Length, which a
+    // client can misreport; this is what actually bounds memory use per upload.
+    byte[] bytes;
+    using (var buffer = new MemoryStream())
+    {
+        byte[] chunk = new byte[81_920];
+        long total = 0;
+        int read;
+
+        while ((read = await request.Body.ReadAsync(chunk)) > 0)
+        {
+            total += read;
+
+            if (total > ProjectStore.MaxIconBytes)
+            {
+                return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+            }
+
+            buffer.Write(chunk, 0, read);
+        }
+
+        bytes = buffer.ToArray();
+    }
+
+    if (!projects.TrySetIcon(userKey, projectId, bytes, contentType, out ProjectInfo? project, out string? error))
+    {
+        return error == ErrorCodes.ProjectNotFound
+            ? Results.NotFound()
+            : Results.BadRequest(new { error });
+    }
+
+    await hub.Clients.Clients(registry.ClientsOf(userKey)).SendAsync(
+        HubMethods.Client.ProjectUpdated,
+        new ProjectUpdatedNotification { Project = project! });
+
+    return Results.Ok(new ProjectIconResponse(project!.IconVersion));
+});
+
+app.MapGet("/projects/{projectId}/icon", [Authorize] (
+    string projectId,
+    ProjectStore projects,
+    ClaimsPrincipal user) =>
+{
+    string? userKey = UserKey.From(user);
+    if (userKey is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    return projects.TryReadIcon(userKey, projectId, out byte[]? bytes, out string? contentType)
+        ? Results.File(bytes!, contentType!)
+        : Results.NotFound();
+});
+
+app.MapDelete("/projects/{projectId}/icon", [Authorize] async (
+    string projectId,
+    ProjectStore projects,
+    RelayRegistry registry,
+    IHubContext<RelayHub> hub,
+    ClaimsPrincipal user) =>
+{
+    string? userKey = UserKey.From(user);
+    if (userKey is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    if (!projects.TryClearIcon(userKey, projectId, out ProjectInfo? project, out string? error))
+    {
+        return Results.NotFound();
+    }
+
+    await hub.Clients.Clients(registry.ClientsOf(userKey)).SendAsync(
+        HubMethods.Client.ProjectUpdated,
+        new ProjectUpdatedNotification { Project = project! });
+
+    return Results.Ok(new ProjectIconResponse(project!.IconVersion));
+});
 
 // Must match EntraAuthenticationExtensions.HubPathPrefix, the only path where a token
 // is accepted from the query string.
@@ -274,6 +398,8 @@ internal sealed record VapidKeyResponse(string Key);
 internal sealed record HealthResponse(string Status, string Version, DateTimeOffset UtcNow);
 
 internal sealed record WhoAmIResponse(string? UserKey, string? Username);
+
+internal sealed record ProjectIconResponse(int IconVersion);
 
 /// <summary>Exposed so tests can host this exact application.</summary>
 public partial class Program;

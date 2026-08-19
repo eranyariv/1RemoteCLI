@@ -551,6 +551,31 @@ The same detection distinguishes the cases that look alike and are not: an iPhon
 
 Only same-origin `GET`s are intercepted. The hub is a WebSocket to another origin and the identity provider is a redirect to a third; a service worker that intercepts an auth redirect is a very confusing thing to debug.
 
+### 4.9 Projects (issue #110)
+
+Sessions accumulate with nothing above them: ten machines, thirty sessions, one flat list. Projects are the grouping layer, and the design keeps to the same shape as everything above it — per-user, hub-owned, and no new concept for the agent to learn.
+
+**The agent stays unaware of projects entirely.** A project is something a user does to their own view of their own sessions; it is not a property of the program that is running. Teaching the wrapper or the pipe protocol about it would mean every one of §4.1–§4.7's invariants (identity from the connection, not the caller; the agent as the sole writer of session state) needs a second answer for "and what about projects", for a feature that never needs the desk side to know it exists.
+
+**Data model.** A project is `{ projectId, name, description?, siteUrl?, repoUrl?, isGeneral, iconVersion, createdAt }` (`ProjectInfo`, `src/Protocol/Models.cs`). `SessionInfo` gains one appended field, `projectId` (`string?`) — `null` means General, exactly as `customName == null` means "use the agent's own name" (§5.3). Every user gets exactly one project with `isGeneral == true` and the reserved id `"general"`, seeded the first time `ListProjects` is ever asked for that user and never deletable; its name and description can still be changed like any other project's, since the issue does not require the reserved *name* "General" to be immutable and forcing it would be a restriction nobody asked for. Uniqueness is per-user and case-insensitive, checked against every other project **and** against the literal name "General", so nobody can create a second project that collides with the reserved one by name while it happens to be renamed to something else.
+
+**Where the assignment lives versus where the definition lives — two different stores, on purpose:**
+
+- **A session's project assignment is a label, exactly like `customName`/`pinned` (§5.3's "Session names and pins")** — held in the registry's per-machine map, not on the persisted project or the session record. It survives an agent reconnect the same way a rename does: the agent re-announces every open session by the same `sessionId`, and the label is re-applied. It does **not** survive the session itself ending, which matches "sessions die with the wrapper" (§9) and needs no durable store of its own.
+- **Project *definitions*** — name, description, URLs, icon — are the hub's first real persistent store, `ProjectStore` (`src/Hub/Projects/ProjectStore.cs`), following `OperatorStateStore`'s already-proven shape (§4.6, `docs/operator-channel.md`): one JSON file under the App Service data volume, read at startup, tolerant of a corrupt file (start that user's projects from empty rather than refuse to boot), written whole-file and atomically (temp file, then rename, never a partial write on disk). Unlike the operator channel's 30-second flush timer, a project mutation flushes to disk immediately — creates, renames and deletes are rare and user-initiated, and silently losing one on a crash a few seconds later would be a bad experience for a feature this small. `docs/deployment.md` describes the file and its rollback behaviour.
+
+**Icons are files, not wire payloads.** A project icon is stored on disk beside the JSON state (`Hub/Projects/ProjectStore.cs`'s icon root, one subdirectory per user) and served through two small authenticated HTTP endpoints next to the existing `/whoami`/`/push/vapid` pattern (`Program.cs`): `POST/GET/DELETE /projects/{projectId}/icon`. Ownership is enforced the same way every other per-user lookup in the hub is — the caller's `UserKey` is resolved from their token and never accepted as a parameter, so a guessed project id under another account's icon endpoint finds nothing to read, replace, or clear. Uploads are capped at 512 KB and restricted to `png`/`jpeg`/`webp` content types, checked server-side regardless of what the client claims to have sent; the PWA downscales to a square client-side before uploading, but the cap and content-type check are the actual security boundary, not the courtesy. `iconVersion` is an integer bumped on every successful upload (and reset to 0 on clear) and rides in `ProjectInfo` purely so the client can cache-bust an `<img>` tag with `?v=`; `iconVersion == 0` means "no custom icon", and the PWA falls back to the app's own `icon-192.png` — which is what "default app icon" (issue #110) means for General and for any project nobody has customised. A successful upload or clear still needs to reach every other device the user has open, exactly like an edit through `UpdateProject`, so both endpoints broadcast the same `ProjectUpdatedNotification` the hub method would, via the same `IHubContext`/`RelayRegistry` pairing.
+
+**Stats are computed client-side, not on the hub.** The PWA already holds the full machine/session list; the project tiles group that list by `projectId ?? "general"` to answer "how many sessions, across how many machines" (`relay/projects.ts`'s `projectStats`). There is no hub-computed counter and no new fan-out message for it — it is always exactly as fresh as the session list the app already maintains, and a hub that had to keep per-project counts in sync with every session open/close/move would be a second source of truth for numbers the client can derive for free.
+
+**Moving a session** is a hub-answered client method, `SetSessionProject { machineId, sessionId, projectId }` (`RelayHub.SetSessionProject`), resolved from the caller's own partition the same way `SetSessionName`/`SetSessionPinned` are — not through the session's attachment, because moving is done from the list, where nothing need be attached. It validates the target project exists (skipped when `projectId` is `null`, i.e. "move to General"), edits the label through the same `TryEditLabel` machinery as a rename, and fans out the ordinary `SessionUpdated` to every device.
+
+**Deleting a project** reassigns its live sessions back to General synchronously — `RelayRegistry.ClearProjectAssignments(userKey, projectId)` sweeps every machine the user owns, online or not, clearing any label pointing at the deleted project — and the hub fans out one `SessionUpdated` per affected live session plus a single `ProjectDeletedNotification`. A machine that was offline at delete time still has its on-disk-nowhere, in-memory label cleared the moment it reconnects and re-announces, by the same path a normal `SessionOpened` always went through — but as a defence-in-depth backstop for any path that might otherwise miss it, `RelayHub` also self-corrects: whenever a session is announced or updated whose `projectId` no longer resolves to a real project, the hub clears it back to General there and then (`CorrectStaleProjectIfNeeded`, called from both `SessionOpened` and `SessionUpdated`). Between the sweep and the backstop, a session can never be left pointing at a project that no longer exists.
+
+**Create/update return the record directly** — `ProjectResult { Project?, Error? }` — *and* fan out `ProjectCreatedNotification`/`ProjectUpdatedNotification` to every client of that user. The direct return exists because the caller needs the generated id immediately, most importantly to follow up with an icon upload in the same flow; the fan-out is what keeps every other open device in sync, exactly like the rest of the hub.
+
+**PWA screens and navigation.** The home screen is project tiles (`ui/ProjectTiles.tsx`) rather than the machine list directly: large tiles carrying the icon (versioned URL or the default asset), the name, and the live stats described above, plus an "add project" tile that opens `ui/ProjectEditor.tsx` — one form, reused for both create and update, with name/description/site URL/GitHub URL fields, an icon file picker with client-side canvas downscale, and a delete action disabled for General. Selecting a tile drills into the existing session list (`ui/MachineList.tsx`), now filtered to sessions whose `projectId` (or its absence) matches the selection, with a back affordance in the header — additive to the existing component, not a rewrite, and not a router dependency: `App.tsx` holds a small `view: 'projects' | 'sessions'` plus `selectedProjectId` state. The session row/editor gains a "move to project" control next to rename and pin, backed by the same project list the tiles already loaded.
+
 ---
 
 ## 5. Protocol specification
@@ -650,7 +675,17 @@ Labels are dropped when the session closes. The one path that leaks is a session
 
 Like every other display name, a custom name is never logged, at any level, and never reaches the operator channel or the usage counters.
 
-### 5.4 Versioning
+### 5.4 Projects (issue #110)
+
+**Client → hub**: `ListProjects {}`, `CreateProject { name, description?, siteUrl?, repoUrl? }`, `UpdateProject { projectId, name, description?, siteUrl?, repoUrl? }`, `DeleteProject { projectId }`, `SetSessionProject { machineId, sessionId, projectId? }`.
+
+**Hub → client**: `ProjectListNotification { projects[] }` (answers `ListProjects`, General always first), `ProjectResult { project?, error? }` (answers `CreateProject`/`UpdateProject` directly, so the caller has the generated id without waiting for the fan-out), `ProjectCreatedNotification { project }`, `ProjectUpdatedNotification { project }`, `ProjectDeletedNotification { projectId }` — the latter three reach every client of that user, not just the one that asked, the same way `SessionUpdated` does.
+
+`ListProjects`/`CreateProject`/`UpdateProject`/`DeleteProject` are answered entirely inside the hub, like `SetSessionName`/`SetSessionPinned` — there is no agent-facing message for any of them, and §4.9 explains why the agent has no need to know. `SetSessionProject` is likewise resolved from the caller's own partition rather than through an attachment, exactly like the two existing session-label methods, and its effect surfaces the same way theirs does: an ordinary `SessionUpdated` carrying the session's new `projectId`.
+
+New error codes: `ProjectNotFound` (an unknown or another user's project id), `DuplicateProjectName` (case-insensitive collision, including against "General"), `CannotDeleteGeneralProject`.
+
+### 5.5 Versioning
 
 `RegisterMachine` and the client handshake both carry `protocolVersion`. The hub rejects an unsupported version with a clear `Error` telling the user to update, rather than failing in an obscure way at the first incompatible message.
 
@@ -658,7 +693,7 @@ Version 2 added `cliType` and its two messages. The minimum supported version st
 
 `customName` and `pinned` were appended to `SessionInfo` on the same terms, along with `SetSessionName` and `SetSessionPinned`, and the version stayed at 2 for the same reason: a client that has never heard of either reads a longer session and ignores the tail, and one that has reads a shorter one from an older hub and lands on "nobody renamed it". Neither is a new capability the other end has to have — the two methods are answered entirely inside the hub — so there is nothing an older peer could fail to honour.
 
-Version 3 adds `SessionInfo.kind = Terminal | AgentChat`, typed transcript and explicit attention notifications, and the chat message and permission-response methods. The minimum supported version remains 1: the kind field is appended at key 12 and an older client therefore treats the session as a terminal, while a newer client defaults a missing or unknown kind to `Terminal`. Version 3 peers are required for the chat methods themselves; the wire fixture contains all transcript event shapes and both client requests so the browser's hand-written positional decoder stays pinned to the C# serializer.
+Version 3 adds `SessionInfo.kind = Terminal | AgentChat`, typed transcript and explicit attention notifications, the chat message and permission-response methods, and projects. `kind` is appended at key 12 and `projectId` at key 13. An older client therefore treats every session as a terminal in General, while a newer client defaults a missing or unknown kind to `Terminal` and a missing project to General. Version 3 peers are required for chat and project methods themselves, but the minimum supported version remains 1 because the wire changes are additive. The wire fixture contains all transcript event shapes, project messages and client requests so the browser's hand-written positional decoder stays pinned to the C# serializer.
 
 ---
 
@@ -825,6 +860,8 @@ Run as a property test over generated streams and over recorded real traces from
 
 **Hub.** Authorization is the priority, because this product grants full control of a developer's machine and the hub is the only thing between an attacker and that. Token validation covers expired, wrong-audience, wrong-issuer (including a token from a *different* tenant that is otherwise perfectly valid, which a static issuer validator gets wrong), missing-scope, no-scope-at-all, unsigned, wrong-key, `alg: none`, missing `tid`, and missing `oid`. Isolation covers a client from user A addressing user B's machine **while holding valid ids for it** — one test per hub method, so a regression names the method that broke — an agent registering into another partition, the same machine id in two partitions, a refresh that changes `UserKey` aborting the connection, and a refresh with an unacceptable token being *refused but not fatal*. Plus registry lifecycle tests for agent disconnect, reconnect, and duplicate registration.
 
+Projects (issue #110) get the same treatment rather than a smaller one, since a project is reachable through the identical partitioned methods everything else is: `ProjectStoreTests` covers the store in isolation — General auto-seed and its permanent first position, name/description/URL validation, case-insensitive uniqueness (including against "General"), General being renamable but not deletable, ownership isolation between two users, restart round-trip persistence, corrupt-file recovery, atomic writes, and icon set/read/clear/version-bump/cross-user-denial. `RelayRegistryTests` covers the session-label half — moving a session, moving back to General, a project assignment surviving an agent reconnect, refusing a move into another user's partition, the delete-time sweep reassigning affected sessions while leaving others alone (including sessions on offline machines), and the stale-project self-correction backstop. `RelayHubTests` covers the end-to-end shape — CRUD fan-out to every device, duplicate-name rejection, Bob unable to see/edit/delete Alice's projects, a new session defaulting to General, move validation and fan-out, and a project delete reassigning live sessions and announcing both the session update and the deletion. `AuthorizationTests`'s two structural tests (below) require no changes to cover the five new methods, since they inspect method bodies rather than enumerate a hand-kept list; only the cross-user theory needed one new case added by hand, for `SetSessionProject`.
+
 Two of these are structural rather than behavioural, and they are the ones that will still be working in a year — a test that Bob cannot attach to Alice's session proves today's methods are safe and says nothing about the method somebody adds next month:
 
 | Test | Enforces |
@@ -834,7 +871,7 @@ Two of these are structural rather than behavioural, and they are the ones that 
 
 Both have been verified to fail when the mistake is deliberately introduced. The whole suite runs in CI on every push and pull request to `main`.
 
-**PWA.** Unit tests for the accessory bar's key encoding (sticky modifiers, arrows, `Ctrl+C` → `0x03`), for viewport-to-columns/rows arithmetic, and for the relay client's connection lifecycle.
+**PWA.** Unit tests for the accessory bar's key encoding (sticky modifiers, arrows, `Ctrl+C` → `0x03`), for viewport-to-columns/rows arithmetic, and for the relay client's connection lifecycle. `relay/projects.ts`'s reducers and `projectStats` grouping are covered the same way `relay/machines.ts` already was; `protocol/wire.contract.test.ts` decodes every new project message and the appended `SessionInfo.projectId` from the regenerated fixture, so nothing about the wire shape is asserted by hand.
 
 ### 8.3 End to end, from a browser
 
@@ -916,6 +953,8 @@ Guarded remote spawn from per-machine profiles; detachable sessions that survive
     /Shell                Shortcut read/write, wrapping rules, file picker
     /Install              Autostart registration, Start menu, PATH
   /Hub                    C# — ASP.NET Core 8 + SignalR relay
+    /Projects             Project store, persistence, icon files (issue #110)
+    /Relay                Registry, hub methods, session labels
   /PWA                    React + Vite + Tailwind + xterm.js
 /tests
   /Terminal.Tests         Emulator conformance, property, and fuzz tests

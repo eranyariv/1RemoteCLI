@@ -2,14 +2,17 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 
 import { auth } from './auth/impl'
 import { describeError } from './protocol/errors'
-import type { MachineInfo, SessionInfo } from './protocol/wire'
+import type { MachineInfo, ProjectInfo, SessionInfo } from './protocol/wire'
 import { readDeepLink, withoutDeepLink, type DeepLink } from './push/subscription'
 import { usePushRegistration } from './push/usePush'
 import { useRelay } from './relay/useRelay'
 import { sessionLabel } from './relay/machines'
+import { filterByProject, findProject } from './relay/projects'
 import { Banner, StatusPill, VersionLine } from './ui/Chrome'
 import { MachineList } from './ui/MachineList'
 import { NotificationsCard } from './ui/NotificationsCard'
+import { ProjectEditor } from './ui/ProjectEditor'
+import { ProjectTiles } from './ui/ProjectTiles'
 import { SignInScreen } from './ui/SignInScreen'
 
 /**
@@ -47,6 +50,15 @@ export default function App() {
   const relay = useRelay(signedIn)
   const [opened, setOpened] = useState<DeepLink | null>(takeDeepLink)
 
+  // null = the project tiles (home). Set to a project id to drill into that
+  // project's session list, scoped from the same machine list the home screen
+  // already has — there is no separate fetch for this, just a narrower view of it.
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
+
+  // Undefined closes the sheet. An object with no `project` opens it for create;
+  // one with `project` set opens it pre-filled for that project's edit/delete.
+  const [editorState, setEditorState] = useState<{ project?: ProjectInfo } | null>(null)
+
   // What the terminal was last given. See the note where it is used.
   const lastOpen = useRef<{ machine: MachineInfo; session: SessionInfo } | null>(null)
 
@@ -80,6 +92,17 @@ export default function App() {
 
   const closeSession = useCallback(() => setOpened(null), [])
 
+  // A project can vanish out from under the screen looking at it — deleted from
+  // another device, most likely. Its sessions already came back to General via
+  // their own SessionUpdated; this just walks the screen back with them rather
+  // than leaving it drilled into a project that no longer exists.
+  useEffect(() => {
+    if (!selectedProjectId || relay.projects.length === 0) return
+    if (!findProject(relay.projects, selectedProjectId)) {
+      setSelectedProjectId(null)
+    }
+  }, [selectedProjectId, relay.projects])
+
   // Not applied optimistically. The hub owns the name and answers with a
   // SessionUpdated to every device this user has open, so the moment the row
   // changes is the moment every other screen has changed too.
@@ -90,6 +113,9 @@ export default function App() {
       },
       onPin: (machineId: string, sessionId: string, pinned: boolean) => {
         void relay.client.setSessionPinned(machineId, sessionId, pinned)
+      },
+      onMove: (machineId: string, sessionId: string, projectId: string | null) => {
+        void relay.client.setSessionProject(machineId, sessionId, projectId)
       },
     }),
     [relay.client],
@@ -121,6 +147,9 @@ export default function App() {
 
   const showing = machine && session ? { machine, session } : lastOpen.current
 
+  const selectedProject = selectedProjectId ? findProject(relay.projects, selectedProjectId) : undefined
+  const scopedMachines = selectedProjectId ? filterByProject(relay.machines, selectedProjectId) : relay.machines
+
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-xl flex-col">
       {/*
@@ -130,8 +159,21 @@ export default function App() {
         scroll through.
       */}
       <header className="sticky top-0 z-10 flex items-center gap-1 border-b border-slate-800 bg-slate-950/80 pb-3 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur">
+        {selectedProjectId ? (
+          <button
+            type="button"
+            onClick={() => setSelectedProjectId(null)}
+            aria-label="Back to projects"
+            className="min-h-10 shrink-0 rounded-lg px-2 text-lg text-slate-400 transition active:bg-slate-800"
+          >
+            ‹
+          </button>
+        ) : null}
+
         <div className="min-w-0 flex-1">
-          <h1 className="text-[15px] font-semibold text-slate-100">Machines</h1>
+          <h1 className="truncate text-[15px] font-semibold text-slate-100">
+            {selectedProjectId ? (selectedProject?.name ?? 'Project') : 'Projects'}
+          </h1>
           <StatusPill status={relay.status} />
         </div>
 
@@ -194,11 +236,22 @@ export default function App() {
           />
         ) : null}
 
-        <MachineList
-          machines={relay.machines}
-          actions={sessionActions}
-          onOpenSession={openSession}
-        />
+        {selectedProjectId ? (
+          <MachineList
+            machines={scopedMachines}
+            projects={relay.projects}
+            actions={sessionActions}
+            onOpenSession={openSession}
+          />
+        ) : (
+          <ProjectTiles
+            projects={relay.projects}
+            machines={relay.machines}
+            onOpen={setSelectedProjectId}
+            onEdit={(project) => setEditorState({ project })}
+            onCreate={() => setEditorState({})}
+          />
+        )}
 
         <NotificationsCard onGranted={registerPush} />
 
@@ -257,6 +310,14 @@ export default function App() {
             />
           )}
         </Suspense>
+      ) : null}
+
+      {editorState ? (
+        <ProjectEditor
+          client={relay.client}
+          project={editorState.project}
+          onClose={() => setEditorState(null)}
+        />
       ) : null}
     </div>
   )

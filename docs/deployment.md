@@ -197,7 +197,9 @@ Get-FileHash .\1remote-win-x64.exe -Algorithm SHA256
 
 That is still a genuinely weaker guarantee than a signature: it only proves the file matches the one the workflow built, not who built it. If this ever leaves a small trusted group, buy a certificate.
 
-Being unsigned also costs something at install time, not just at first run. Windows blocks the first launch of a build it has no reputation for, and on a machine managed by an organisation that block comes from the attack surface reduction rule **"Use advanced protection against ransomware"** — reported as `Access is denied`, with a Windows Security popup that blames `powershell.exe`. Every release is a new unknown file, so this recurs on every upgrade. `install.ps1` retries the launch, which clears it once the file has been checked and comes back clean; see [getting started](getting-started.md#windows-blocked-the-install) for what to do when it does not. A certificate would end this class of problem too, since reputation accrues to the publisher rather than to each individual build.
+Being unsigned also costs something at install time, not just at first run. On a machine managed by an organisation the attack surface reduction rule **"Use advanced protection against ransomware"** can refuse the first launch — reported as `Access is denied`, with a Windows Security popup that blames `powershell.exe` rather than the file it stopped.
+
+Through 0.08 that was near-certain on such a machine, and the cause was the packaging rather than the missing signature: see [#101](https://github.com/eranyariv/1RemoteCLI/issues/101) and the note above. `install.ps1` retries the launch, which is enough where the verdict lifts on its own; see [getting started](getting-started.md#windows-blocked-the-install) for what to do when it does not. A certificate would still be worth having — reputation accrues to the publisher rather than to each individual build, so it ends this class of problem rather than one instance of it.
 
 ### Install path and upgrades
 

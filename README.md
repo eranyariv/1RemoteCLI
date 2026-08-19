@@ -12,13 +12,11 @@ You start `claude` on a long refactor, leave your desk, and twenty minutes later
 
 ## Try it
 
-Run this **from inside Copilot CLI or Claude Code**, as a shell command — in Copilot CLI that means prefixing it with `!`:
+In PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.ps1 | iex
 ```
-
-Not from a plain PowerShell window. Windows refuses to run executables it has no reputation for, and these builds are unsigned, so a plain install is likely to fail with `Access is denied` — on a work machine, permanently. A file written by your coding CLI inherits its trust and runs immediately. You already have one of those CLIs installed; putting their sessions on your phone is what this is for.
 
 No account and no token. The script picks the build for your architecture, checks it against the SHA-256 published with the release, and starts the agent — you get a tray icon straight away, no logout needed.
 

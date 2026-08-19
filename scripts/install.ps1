@@ -353,18 +353,25 @@ also clears it, since the agent starts from a logon task.
 
     Write-Step "Installed to $installed"
 
-    # Windows blocks the first launch of a build nobody has run before. On a machine
-    # managed by an organisation the block comes from the attack surface reduction rule
-    # "Use advanced protection against ransomware", which refuses executables it has no
-    # reputation for; it surfaces as "Access is denied" plus a Windows Security popup
-    # naming powershell.exe, and neither says anything about reputation. The verdict is
-    # not permanent -- once the file has been submitted and comes back clean, seconds
-    # later, the same launch is allowed -- so retrying is enough. Observed on a managed
-    # machine: rule C1DB55AB-C21A-4637-BB3F-A12568109D35, event 1121, blocked on the
-    # first attempt of a fresh version and allowed on the next.
-    #
-    # Each blocked attempt costs a couple of seconds inside Windows, so this is bounded
-    # by attempts rather than by a deadline.
+    <#
+        Windows sometimes refuses the first launch. On a machine managed by an
+        organisation that is the attack surface reduction rule "Use advanced
+        protection against ransomware": it surfaces as "Access is denied" plus a
+        Windows Security popup naming powershell.exe, which does not mention the
+        executable it actually stopped. Rule C1DB55AB-C21A-4637-BB3F-A12568109D35,
+        event 1121.
+
+        Up to 0.08 this was self-inflicted and near-certain on such a machine: the
+        release was a compressed single-file bundle, which is a self-extracting
+        high-entropy blob and therefore the shape of a packer. Compression is off
+        from 0.09 and both machines that used to refuse now accept it. What is left
+        here is for the case where something refuses it anyway, where retrying is
+        often enough -- the verdict can lift within seconds, once the file has been
+        submitted and come back clean.
+
+        Each blocked attempt costs a couple of seconds inside Windows, so this is
+        bounded by attempts rather than by a deadline.
+    #>
     $attempts = 6
     $ran = $false
 
@@ -379,17 +386,26 @@ also clears it, since the agent starts from a logon task.
                 throw @"
 Windows would not let '$installed' start, after $attempts attempts: $($_.Exception.Message)
 
-The download is installed and its hash matched the release, so the file is fine. This
-is Windows refusing to run a build it has no reputation for -- these releases are
-unsigned.
+The download is installed and its hash matched the release, so the file is fine.
+Something on this machine is refusing to run it -- on a managed machine, usually the
+attack surface reduction rule "Use advanced protection against ransomware". Windows
+Security > Protection history will name it, and will blame powershell.exe rather than
+the file it stopped.
 
-The fix is to run this same install from inside Copilot CLI or Claude Code, as a shell
-command. Windows judges each file by the process that wrote it, and a build written by
-one of those is trusted immediately.
+Worth trying, in this order:
 
-Waiting sometimes works too -- twenty minutes, not the few seconds tried here -- but on
-some machines it never does. Run scripts\diagnose-launch.ps1 from the repository to see
-which it is, or look in Windows Security > Protection history.
+  Wait. Some machines relent after twenty minutes or so; others never do. Once it is
+  allowed, this finishes the install:
+      & "$installed" install
+
+  Run this same install from inside Copilot CLI or Claude Code, as a shell command.
+  Windows partly judges a file by the process that wrote it, and a trusted writer
+  improves the odds -- though measured carefully it is not reliable on its own.
+
+  Run scripts\diagnose-launch.ps1 from the repository, which reports which protection
+  is refusing it and how long it has been doing so.
+
+If none of that helps, an administrator has to allow it.
 "@
             }
 

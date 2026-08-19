@@ -118,7 +118,7 @@
       <ol class="steps">
         <li>
           <h3>Install it</h3>
-          <p>Run this from inside <strong>Copilot CLI or Claude Code</strong>, as a shell command &mdash; in Copilot CLI, put <code>!</code> in front of it:</p>
+          <p>In PowerShell:</p>
           <div class="cmd">
             <button type="button" data-copy>Copy</button>
             <pre><code>irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.ps1 | iex</code></pre>
@@ -126,13 +126,6 @@
           <p>
             No GitHub account and no token. The script and the build it downloads are both
             public.
-          </p>
-          <p>
-            Not a plain PowerShell window: these builds are unsigned, and Windows refuses to
-            run an executable it has no reputation for &mdash; on a work machine, sometimes
-            permanently. It judges each file by the process that wrote it, so a build
-            downloaded by your coding CLI is trusted from the start. Run upgrades from there
-            too.
           </p>
           <p>
             That picks the build for your architecture, <strong>checks it against the SHA-256

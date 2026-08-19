@@ -13,17 +13,11 @@ Someone has to have deployed a hub and added your Microsoft account to its allow
 
 ## 1. Install it
 
-Run this **from inside Copilot CLI or Claude Code**, as a shell command — in Copilot CLI, prefix it with `!`:
+Run this in PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/eranyariv/1RemoteCLI/main/scripts/install.ps1 | iex
 ```
-
-Not from a plain PowerShell window, and the reason is worth thirty seconds of your time.
-
-These builds are unsigned, and Windows refuses to run an executable it has no reputation for. Measured on two managed machines: on one the refusal lifted after about twenty minutes, on the other it had not lifted after an hour and showed no sign of ever doing so. But Windows decides this per file, according to **which process wrote it** — and a file written by a process your organisation already trusts is runnable immediately, by anything. Your coding CLI is such a process, so installing from inside it sidesteps the block entirely.
-
-If you are on a personal machine with no such protections, a plain PowerShell window works fine. On anything managed by an employer, use the CLI.
 
 The same applies to upgrades: run those from the CLI too, or the new build arrives untrusted and you are back where you started.
 
@@ -216,29 +210,25 @@ If you would rather not trust a hash from the same place as the binary, build it
 
 ## Windows blocked the install
 
-Different problem, and it looks much worse than it is. The install script downloads, checks the hash, copies the file — and then fails on the last line:
+Different problem, and up to version 0.08 it was ours rather than yours. The install script downloads, checks the hash, copies the file — and then fails on the last line:
 
 ```
 Program '1remote.exe' failed to run: Access is denied
 ```
 
-with a Windows Security popup at the same moment. Nothing is wrong with the download. Windows is refusing to run a build it has no reputation for, because it has never seen this exact file before and there is no signature to inherit trust from.
+with a Windows Security popup at the same moment. Nothing is wrong with the download. On a machine managed by an organisation this is the attack surface reduction rule **"Use advanced protection against ransomware"**. Windows Security → **Protection history** names it, and confusingly blames `powershell.exe` rather than the executable it actually stopped.
 
-On a machine managed by an organisation, the refusal usually comes from the attack surface reduction rule **"Use advanced protection against ransomware"**. Windows Security → **Protection history** names it, and confusingly blames `powershell.exe` rather than the executable it actually stopped.
+**If you are on 0.09 or later, this should not happen, and the fix was on our side.** Those builds were published as a *compressed* single-file bundle, which is a self-extracting high-entropy blob — structurally what a packer looks like, which is exactly what a rule aimed at ransomware is watching for. Compression is off from 0.09, and the machine that had refused every previous build installed the next one from an ordinary PowerShell window at the first attempt. The details, and everything that was wrongly blamed first, are in [#101](https://github.com/eranyariv/1RemoteCLI/issues/101).
 
-The verdict is not permanent everywhere, but it is much slower to arrive than you would guess, and on some machines it never arrives at all. Measured on two: one allowed the identical file after about twenty minutes, the other had refused it fourteen times in an hour and was still refusing.
-
-**The reliable fix is to install from inside Copilot CLI or Claude Code**, as described in [Install it](#1-install-it). Windows judges each file by the process that wrote it, so a build downloaded by a trusted process is runnable straight away — the machine that had refused for an hour accepted the very same bytes the moment they were written that way.
-
-If you would rather wait it out, the executable is already in place and this finishes the half-done install:
+If it happens anyway, the executable is already in place and this finishes the half-done install:
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\1RemoteCLI\1remote.exe" install
 ```
 
-Give it half an hour before concluding it will never work. `scripts\diagnose-launch.ps1` in the repository will tell you which protection is refusing it, how long it has been refusing, and whether waiting has any prospect of helping.
+`scripts\diagnose-launch.ps1` in the repository will tell you which protection is refusing it and how long it has been refusing. Two things are worth trying, in this order: wait — some machines relent after twenty minutes or so, others never do — and run the same install from inside Copilot CLI or Claude Code as a shell command, since Windows partly judges a file by the process that wrote it and a trusted writer improves the odds. Measured carefully, that helped but was not reliable on its own: eight identical files, four written by a trusted process and four not, and one of the four untrusted ones ran anyway.
 
-If it is still blocked after that, an administrator has to allow it — or the build has to be signed.
+If it is still blocked after that, an administrator has to allow it — or the build has to be signed, which is [#93](https://github.com/eranyariv/1RemoteCLI/issues/93).
 
 Both this and the SmartScreen warning above have the same root cause: these builds are unsigned. See [deployment](deployment.md#it-is-not-signed).
 

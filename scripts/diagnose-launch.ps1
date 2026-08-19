@@ -210,10 +210,26 @@ else {
         Write-Fact 'refusing for' $span
 
         if ($ransomware) {
-            $rule = "An attack surface reduction rule blocked the launch: 'Use advanced protection against ransomware'. It refuses executables it has no reputation for, and every release is a new file with no reputation."
+            $rule = "An attack surface reduction rule blocked the launch: 'Use advanced protection against ransomware'."
+
+            # From the file's metadata rather than by running it: the whole context
+            # here is that running it is what Windows just refused, and each refused
+            # launch adds an event to the log this report is reading.
+            $fileVersion = try { [version] $file.VersionInfo.FileVersion } catch { $null }
+            $old = $fileVersion -and $fileVersion -lt [version] '0.9.0.0'
+
+            if ($old) {
+                $rule += " This build is $($file.VersionInfo.ProductVersion), and releases up to 0.08 were compressed single-file bundles -- a self-extracting high-entropy blob, which is the shape of a packer and is what this rule objects to. That is almost certainly what is happening here. Upgrading to 0.09 or later fixes it: those are published uncompressed, and both machines that used to refuse then accepted them."
+            }
+            else {
+                $rule += ' Compression was the usual cause of this and was removed in 0.09, so on this build something else is refusing it.'
+            }
 
             if ($startedNow) {
                 Add-Finding 'blocking' "$rule It has stopped: the file ran when this report tried it."
+            }
+            elseif ($old) {
+                Add-Finding 'blocking' $rule
             }
             elseif ($spanMinutes -ge 30) {
                 Add-Finding 'blocking' "$rule Where it lifts on its own it takes about twenty minutes, and this machine has been refusing the same file for $span. Waiting has already been tried here and has not worked, so rescanning, reinstalling or downloading it again will not help either. It needs an administrator to allow it, or a signed build."

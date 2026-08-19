@@ -51,6 +51,8 @@ export interface SessionInfo {
    */
   customName: string | null
   pinned: boolean
+  /** The project this session is grouped under. Null means the user's General project. */
+  projectId: string | null
 }
 
 export interface MachineInfo {
@@ -61,6 +63,29 @@ export interface MachineInfo {
   /** False when the machine is known but its agent is not connected. */
   online: boolean
   sessions: SessionInfo[]
+}
+
+/**
+ * A per-user grouping of sessions. Every user always has one non-deletable
+ * project, {@link ProjectInfo.isGeneral}, that new sessions default into.
+ */
+export interface ProjectInfo {
+  projectId: string
+  name: string
+  description: string | null
+  siteUrl: string | null
+  repoUrl: string | null
+  isGeneral: boolean
+  /** Zero means no custom icon has been uploaded — show the app's own default icon. */
+  iconVersion: number
+  createdAt: Date
+}
+
+/** `ProjectResult` — the direct RPC return of `CreateProject`/`UpdateProject`. */
+export interface ProjectResult {
+  project: ProjectInfo | null
+  /** One of the stable strings in `errors.ts`, set only on failure. */
+  error: string | null
 }
 
 export interface TerminalOutput {
@@ -158,6 +183,10 @@ export function decodeSession(value: unknown): SessionInfo {
     // has to land on "not renamed, not pinned" rather than on the string "undefined".
     customName: typeof s[10] === 'string' && s[10].length > 0 ? s[10] : null,
     pinned: bool(s[11]),
+    // Absent from a hub that predates projects, which decodes as undefined and has
+    // to land on null — the user's General project — rather than on the string
+    // "undefined" reaching a project lookup that will never find it.
+    projectId: typeof s[12] === 'string' && s[12].length > 0 ? s[12] : null,
   }
 }
 
@@ -256,6 +285,49 @@ export function decodeError(value: unknown): HubError {
   }
 }
 
+/** `ProjectInfo`, decoded on its own — it is nested inside every project message below. */
+export function decodeProject(value: unknown): ProjectInfo {
+  const p = tuple(value, 'ProjectInfo')
+
+  return {
+    projectId: str(p[0]),
+    name: str(p[1]),
+    description: typeof p[2] === 'string' ? p[2] : null,
+    siteUrl: typeof p[3] === 'string' ? p[3] : null,
+    repoUrl: typeof p[4] === 'string' ? p[4] : null,
+    isGeneral: bool(p[5]),
+    iconVersion: num(p[6]),
+    createdAt: instant(p[7]),
+  }
+}
+
+/** `ProjectListNotification` — the direct RPC return of `ListProjects`. */
+export function decodeProjectList(value: unknown): ProjectInfo[] {
+  const n = tuple(value, 'ProjectListNotification')
+  return Array.isArray(n[0]) ? n[0].map(decodeProject) : []
+}
+
+/** `ProjectResult` — the direct RPC return of `CreateProject`/`UpdateProject`. */
+export function decodeProjectResult(value: unknown): ProjectResult {
+  const n = tuple(value, 'ProjectResult')
+
+  return {
+    project: n[0] ? decodeProject(n[0]) : null,
+    error: typeof n[1] === 'string' ? n[1] : null,
+  }
+}
+
+/** `ProjectCreatedNotification` / `ProjectUpdatedNotification` — same shape, different meaning. */
+export function decodeProjectNotification(value: unknown): ProjectInfo {
+  const n = tuple(value, 'ProjectCreatedNotification')
+  return decodeProject(n[0])
+}
+
+/** `ProjectDeletedNotification` */
+export function decodeProjectDeleted(value: unknown): string {
+  return str(tuple(value, 'ProjectDeletedNotification')[0])
+}
+
 // Messages we send the hub. Arrays again, for the same reason.
 
 export function encodeClientHandshake(protocolVersion: number, clientVersion: string): unknown[] {
@@ -336,4 +408,45 @@ export function encodeSetSessionPinned(
  */
 export function encodeRegisterPush(endpoint: string, p256dh: string, auth: string): unknown[] {
   return [endpoint, [p256dh, auth]]
+}
+
+/** `CreateProjectRequest` */
+export function encodeCreateProject(
+  name: string,
+  description: string | null,
+  siteUrl: string | null,
+  repoUrl: string | null,
+): unknown[] {
+  return [name, description, siteUrl, repoUrl]
+}
+
+/** `UpdateProjectRequest` */
+export function encodeUpdateProject(
+  projectId: string,
+  name: string,
+  description: string | null,
+  siteUrl: string | null,
+  repoUrl: string | null,
+): unknown[] {
+  return [projectId, name, description, siteUrl, repoUrl]
+}
+
+/** `DeleteProjectRequest` */
+export function encodeDeleteProject(projectId: string): unknown[] {
+  return [projectId]
+}
+
+/**
+ * `SetSessionProjectRequest`
+ *
+ * Carries the machine id, for the same reason as `SetSessionNameRequest`: moving
+ * is done from the list, not from an attachment. Null moves the session back to
+ * the user's General project.
+ */
+export function encodeSetSessionProject(
+  machineId: string,
+  sessionId: string,
+  projectId: string | null,
+): unknown[] {
+  return [machineId, sessionId, projectId]
 }

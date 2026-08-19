@@ -102,4 +102,54 @@ public sealed class SessionInfo
     /// <summary>Lifted above the rest of the list on every one of this user's devices.</summary>
     [Key(11)]
     public bool Pinned { get; set; }
+
+    /// <summary>
+    /// The project this session is grouped under. Null means the user's General
+    /// project — the same null-means-default convention as <see cref="CustomName"/>.
+    /// <para>
+    /// Held by the hub, not the agent — see <c>RelayRegistry</c>'s session labels —
+    /// and appended for the same forward/backward-compatibility reason as every
+    /// other field added after v1.
+    /// </para>
+    /// </summary>
+    [Key(12)]
+    public string? ProjectId { get; set; }
+}
+
+/// <summary>
+/// A per-user grouping of sessions. Every user always has one non-deletable
+/// project, <see cref="IsGeneral"/>, that new sessions default into.
+/// </summary>
+[MessagePackObject]
+public sealed class ProjectInfo
+{
+    [Key(0)]
+    public string ProjectId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string Name { get; set; } = string.Empty;
+
+    [Key(2)]
+    public string? Description { get; set; }
+
+    [Key(3)]
+    public string? SiteUrl { get; set; }
+
+    [Key(4)]
+    public string? RepoUrl { get; set; }
+
+    /// <summary>True only for the reserved, non-deletable General project.</summary>
+    [Key(5)]
+    public bool IsGeneral { get; set; }
+
+    /// <summary>
+    /// Bumped every time a custom icon is uploaded, so a client can cache-bust an
+    /// icon URL with <c>?v=</c>. Zero means no custom icon has ever been uploaded,
+    /// which is the client's cue to show the app's own default icon instead.
+    /// </summary>
+    [Key(6)]
+    public int IconVersion { get; set; }
+
+    [Key(7)]
+    public DateTimeOffset CreatedAt { get; set; }
 }

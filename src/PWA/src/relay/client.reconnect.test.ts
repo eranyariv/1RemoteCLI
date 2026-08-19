@@ -70,8 +70,10 @@ describe('reconnecting', () => {
     reconnected = null
     start.mockClear()
     invoke.mockReset()
-    // The handshake answers with a rejection or nothing; ListMachines answers with a list.
-    invoke.mockImplementation(async (method: string) => (method === Server.ListMachines ? [] : null))
+    // The handshake answers with a rejection or nothing; ListMachines and ListProjects answer with a list.
+    invoke.mockImplementation(async (method: string) =>
+      method === Server.ListMachines || method === Server.ListProjects ? [] : null,
+    )
     getAccessToken.mockClear()
   })
 
@@ -103,7 +105,7 @@ describe('reconnecting', () => {
         // the hub has any record of this connection.
         expect(seen).not.toContain('connected')
       }
-      return method === Server.ListMachines ? [] : null
+      return method === Server.ListMachines || method === Server.ListProjects ? [] : null
     })
 
     await reconnected!()

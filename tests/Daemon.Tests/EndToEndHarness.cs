@@ -17,6 +17,7 @@ using OneRemoteCli.Daemon.Pty;
 using OneRemoteCli.Daemon.Wrapper;
 using OneRemoteCli.Hub.Auth;
 using OneRemoteCli.Hub.Ops;
+using OneRemoteCli.Hub.Projects;
 using OneRemoteCli.Hub.Push;
 using OneRemoteCli.Hub.Relay;
 using OneRemoteCli.Protocol.Hub;
@@ -49,6 +50,14 @@ internal sealed class EndToEndHarness : IAsyncDisposable
     private readonly List<Task> _running = [];
     private readonly string _identityPath =
         Path.Combine(Path.GetTempPath(), $"1remote-e2e-{Guid.NewGuid():n}.json");
+
+    // Projects (issue #110) needs its own scratch state, for the same reason every
+    // other harness-local file does: a shared default path would let one test's
+    // projects collide with another's, and the file must be gone when this harness is.
+    private readonly string _projectStatePath =
+        Path.Combine(Path.GetTempPath(), $"1remote-e2e-projects-{Guid.NewGuid():n}.json");
+    private readonly string _projectIconRoot =
+        Path.Combine(Path.GetTempPath(), $"1remote-e2e-icons-{Guid.NewGuid():n}");
 
     private WebApplication? _hub;
     private AgentHost? _host;
@@ -156,6 +165,17 @@ internal sealed class EndToEndHarness : IAsyncDisposable
         // counts usage for it, an unconfigured deployment counts nothing, and what it
         // reports is covered by the hub's own tests.
         builder.Services.AddSingleton<IUsageRecorder, NullUsageRecorder>();
+
+        // Projects (issue #110). RelayHub takes a ProjectStore constructor
+        // dependency like every other piece of hub state, so it has to be wired here
+        // too, not just in Program.cs — scoped to this harness's own scratch files so
+        // one test's projects can never collide with another's.
+        builder.Services.Configure<ProjectsOptions>(options =>
+        {
+            options.StatePath = _projectStatePath;
+            options.IconRoot = _projectIconRoot;
+        });
+        builder.Services.AddSingleton<ProjectStore>();
 
         builder.Services.AddSignalR(RelayLiveness.Apply).AddMessagePackProtocol();
 
@@ -371,6 +391,25 @@ internal sealed class EndToEndHarness : IAsyncDisposable
         try
         {
             File.Delete(_identityPath);
+        }
+        catch (IOException)
+        {
+        }
+
+        try
+        {
+            File.Delete(_projectStatePath);
+        }
+        catch (IOException)
+        {
+        }
+
+        try
+        {
+            if (Directory.Exists(_projectIconRoot))
+            {
+                Directory.Delete(_projectIconRoot, recursive: true);
+            }
         }
         catch (IOException)
         {

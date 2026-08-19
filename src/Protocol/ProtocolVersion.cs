@@ -16,8 +16,15 @@ public static class ProtocolVersion
     /// never invokes the new methods, and its decoder stops reading before the new
     /// field. That is why <see cref="MinimumSupported"/> did not move with it.
     /// </para>
+    /// <para>
+    /// 3 added projects: <c>ListProjects</c>/<c>CreateProject</c>/<c>UpdateProject</c>/
+    /// <c>DeleteProject</c>/<c>SetSessionProject</c>, their notifications, and
+    /// appended <see cref="Hub.SessionInfo.ProjectId"/>. Additive for the same
+    /// reason as version 2 — the agent is not a party to any of it, so
+    /// <see cref="MinimumSupported"/> stays put again.
+    /// </para>
     /// </summary>
-    public const int Current = 2;
+    public const int Current = 3;
 
     /// <summary>Oldest version this build still accepts from a peer.</summary>
     public const int MinimumSupported = 1;

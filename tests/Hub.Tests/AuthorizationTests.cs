@@ -174,6 +174,7 @@ public sealed class AuthorizationTests : IAsyncLifetime
     [InlineData(HubMethods.Server.ResizeTerminal)]
     [InlineData(HubMethods.Server.InterruptSession)]
     [InlineData(HubMethods.Server.DetachSession)]
+    [InlineData(HubMethods.Server.SetSessionProject)]
     public async Task BobCannotReachAlicesSessionThroughAnyMethod(string method)
     {
         // One case per method rather than one test with five asserts, so a regression
@@ -466,6 +467,12 @@ public sealed class AuthorizationTests : IAsyncLifetime
         },
         HubMethods.Server.InterruptSession => new InterruptSessionRequest { SessionId = "session-1" },
         HubMethods.Server.DetachSession => new DetachSessionRequest { SessionId = "session-1" },
+        HubMethods.Server.SetSessionProject => new SetSessionProjectRequest
+        {
+            MachineId = "machine-a",
+            SessionId = "session-1",
+            ProjectId = null,
+        },
         _ => throw new ArgumentOutOfRangeException(nameof(method), method, "No request shape for this method."),
     };
 

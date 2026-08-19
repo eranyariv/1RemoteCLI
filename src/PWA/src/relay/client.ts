@@ -15,12 +15,18 @@ import {
   decodeMachineList,
   decodeMachineOffline,
   decodeMachineOnline,
+  decodeProjectDeleted,
+  decodeProjectList,
+  decodeProjectNotification,
+  decodeProjectResult,
   decodeSessionClosed,
   decodeSessionOpened,
   decodeSessionUpdated,
   decodeTerminalOutput,
   encodeAttachSession,
   encodeClientHandshake,
+  encodeCreateProject,
+  encodeDeleteProject,
   encodeDetachSession,
   encodeInterruptSession,
   encodeRegisterPush,
@@ -29,10 +35,14 @@ import {
   encodeSendInput,
   encodeSetSessionName,
   encodeSetSessionPinned,
+  encodeSetSessionProject,
   encodeSetSessionType,
+  encodeUpdateProject,
   type CliType,
   type HubError,
   type MachineInfo,
+  type ProjectInfo,
+  type ProjectResult,
   type SessionInfo,
   type TerminalOutput,
 } from '../protocol/wire'
@@ -60,6 +70,10 @@ export interface RelayEvents {
   awaitingInput(machineId: string, sessionId: string, hint: string | null): void
   terminalOutput(output: TerminalOutput): void
   error(error: HubError): void
+  projects(projects: ProjectInfo[]): void
+  projectCreated(project: ProjectInfo): void
+  projectUpdated(project: ProjectInfo): void
+  projectDeleted(projectId: string): void
 }
 
 const CLIENT_VERSION = `pwa/${__APP_VERSION__}`
@@ -212,6 +226,7 @@ export class RelayClient {
     this.attempts = 0
     this.emit('status', 'connected')
     await this.refreshMachines()
+    await this.refreshProjects()
   }
 
   /**
@@ -313,6 +328,14 @@ export class RelayClient {
 
     connection.on(Client.TerminalOutput, (n) => this.emit('terminalOutput', decodeTerminalOutput(n)))
 
+    connection.on(Client.ProjectCreated, (n) =>
+      this.emit('projectCreated', decodeProjectNotification(n)),
+    )
+    connection.on(Client.ProjectUpdated, (n) =>
+      this.emit('projectUpdated', decodeProjectNotification(n)),
+    )
+    connection.on(Client.ProjectDeleted, (n) => this.emit('projectDeleted', decodeProjectDeleted(n)))
+
     // SignalR checks the token once, at the handshake. The hub therefore has to ask,
     // and this has to answer, or the connection is dropped when the token runs out.
     connection.on(Client.TokenExpiring, () => this.refreshToken(connection))
@@ -340,6 +363,7 @@ export class RelayClient {
       // The hub's registry is per connection, so a new connection id means it has
       // never heard of us. Re-listing is the normal path, not a repair.
       await this.refreshMachines()
+      await this.refreshProjects()
     })
 
     connection.onclose(() => {
@@ -359,6 +383,14 @@ export class RelayClient {
 
     const list = await this.connection!.invoke(Server.ListMachines)
     this.emit('machines', decodeMachineList(list))
+  }
+
+  /** Asks for this user's projects. Safe to call at any time. */
+  async refreshProjects(): Promise<void> {
+    if (!this.connected) return
+
+    const list = await this.connection!.invoke(Server.ListProjects)
+    this.emit('projects', decodeProjectList(list))
   }
 
   async attach(
@@ -424,6 +456,62 @@ export class RelayClient {
     return this.request(Server.SetSessionPinned, encodeSetSessionPinned(machineId, sessionId, pinned))
   }
 
+  /**
+   * Moves a live session to a different project, or back to General with null.
+   *
+   * Like a rename, this needs the machine id spelled out: moving is done from the
+   * list, where there is no attachment to read it from.
+   */
+  async setSessionProject(
+    machineId: string,
+    sessionId: string,
+    projectId: string | null,
+  ): Promise<HubError | null> {
+    return this.request(
+      Server.SetSessionProject,
+      encodeSetSessionProject(machineId, sessionId, projectId),
+    )
+  }
+
+  /**
+   * Creates a project and returns it directly, in addition to the
+   * `ProjectCreated` broadcast every device of this user also receives.
+   *
+   * The direct return is what a caller uses to chain an icon upload right away,
+   * which needs the hub-generated id; the broadcast is what keeps every other
+   * screen in sync.
+   */
+  async createProject(
+    name: string,
+    description: string | null,
+    siteUrl: string | null,
+    repoUrl: string | null,
+  ): Promise<ProjectResult> {
+    return this.projectRequest(
+      Server.CreateProject,
+      encodeCreateProject(name, description, siteUrl, repoUrl),
+    )
+  }
+
+  /** Edits a project's fields. Works on the General project too — only deleting it is refused. */
+  async updateProject(
+    projectId: string,
+    name: string,
+    description: string | null,
+    siteUrl: string | null,
+    repoUrl: string | null,
+  ): Promise<ProjectResult> {
+    return this.projectRequest(
+      Server.UpdateProject,
+      encodeUpdateProject(projectId, name, description, siteUrl, repoUrl),
+    )
+  }
+
+  /** Deletes a project. Its live sessions come back reassigned to General via `SessionUpdated`. */
+  async deleteProject(projectId: string): Promise<HubError | null> {
+    return this.request(Server.DeleteProject, encodeDeleteProject(projectId))
+  }
+
   /** Offers this browser's push subscription, so the hub can reach the phone when nothing is connected. */
   async registerPush(registration: PushRegistration): Promise<HubError | null> {
     return this.request(
@@ -457,6 +545,23 @@ export class RelayClient {
       }
       this.emit('error', problem)
       return problem
+    }
+  }
+
+  /**
+   * `CreateProject`/`UpdateProject` answer with `ProjectResult` directly, not the
+   * error-or-nothing shape of every other method — the form calling this wants to
+   * show a duplicate-name rejection inline, not as a passing global banner.
+   */
+  private async projectRequest(method: string, argument: unknown): Promise<ProjectResult> {
+    if (!this.connected) {
+      return { project: null, error: ErrorCodes.MachineOffline }
+    }
+
+    try {
+      return decodeProjectResult(await this.connection!.invoke(method, argument))
+    } catch (error) {
+      return { project: null, error: errorText(error) || ErrorCodes.InternalError }
     }
   }
 

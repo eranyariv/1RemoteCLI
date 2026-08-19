@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using OneRemoteCli.Hub.Auth;
 using OneRemoteCli.Hub.Ops;
+using OneRemoteCli.Hub.Projects;
 using OneRemoteCli.Hub.Push;
 using OneRemoteCli.Protocol;
 using OneRemoteCli.Protocol.Hub;
@@ -35,6 +36,7 @@ public sealed class RelayHub(
     PushSubscriptionStore pushSubscriptions,
     IPushNotifier push,
     IUsageRecorder usage,
+    ProjectStore projects,
     ILogger<RelayHub> logger) : Microsoft.AspNetCore.SignalR.Hub
 {
     private readonly RelayRegistry _registry = registry ?? throw new ArgumentNullException(nameof(registry));
@@ -50,6 +52,8 @@ public sealed class RelayHub(
     // key and a number; nothing here can hand it a machine or session display name,
     // which is what keeps one user's session names out of another human's chat.
     private readonly IUsageRecorder _usage = usage ?? throw new ArgumentNullException(nameof(usage));
+
+    private readonly ProjectStore _projects = projects ?? throw new ArgumentNullException(nameof(projects));
 
     private readonly ILogger<RelayHub> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
@@ -164,6 +168,8 @@ public sealed class RelayHub(
             return Error(ErrorCodes.MachineNotFound, "Register the machine first.");
         }
 
+        CorrectStaleProjectIfNeeded(address, notification.Session);
+
         // The session id goes in so open and close can be paired into a duration; it is
         // hashed on the way in and never comes back out. The session *name*, which is
         // right there on the notification, is not passed and must not be.
@@ -204,6 +210,8 @@ public sealed class RelayHub(
                 "No such session on this machine.",
                 notification.Session.SessionId);
         }
+
+        CorrectStaleProjectIfNeeded(address, notification.Session);
 
         await Clients.Clients(_registry.ClientsOf(address.UserKey)).SendAsync(
             HubMethods.Client.SessionUpdated,
@@ -642,7 +650,163 @@ public sealed class RelayHub(
         return AnnounceLabelAsync(pinned, labelled, error);
     }
 
+    /// <summary>This user's projects, General first. Auto-seeds General on first call.</summary>
+    public Task<ProjectListNotification> ListProjects() =>
+        Task.FromResult(new ProjectListNotification { Projects = _projects.List(RequireUserKey()) });
+
+    /// <summary>Creates a project and tells every one of this user's devices about it.</summary>
+    public async Task<ProjectResult> CreateProject(CreateProjectRequest request)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.Name))
+        {
+            return new ProjectResult { Error = ErrorCodes.InvalidRequest };
+        }
+
+        string userKey = RequireUserKey();
+
+        if (!_projects.TryCreate(
+                userKey,
+                request.Name,
+                request.Description,
+                request.SiteUrl,
+                request.RepoUrl,
+                out ProjectInfo? project,
+                out string? error))
+        {
+            return new ProjectResult { Error = error };
+        }
+
+        await Clients.Clients(_registry.ClientsOf(userKey)).SendAsync(
+            HubMethods.Client.ProjectCreated,
+            new ProjectCreatedNotification { Project = project! });
+
+        return new ProjectResult { Project = project };
+    }
+
+    /// <summary>
+    /// Edits a project's fields, General included - only its id and its
+    /// non-deletability are fixed. Fans out to every device the same as a create.
+    /// </summary>
+    public async Task<ProjectResult> UpdateProject(UpdateProjectRequest request)
+    {
+        if (request is null ||
+            string.IsNullOrWhiteSpace(request.ProjectId) ||
+            string.IsNullOrWhiteSpace(request.Name))
+        {
+            return new ProjectResult { Error = ErrorCodes.InvalidRequest };
+        }
+
+        string userKey = RequireUserKey();
+
+        if (!_projects.TryUpdate(
+                userKey,
+                request.ProjectId,
+                request.Name,
+                request.Description,
+                request.SiteUrl,
+                request.RepoUrl,
+                out ProjectInfo? project,
+                out string? error))
+        {
+            return new ProjectResult { Error = error };
+        }
+
+        await Clients.Clients(_registry.ClientsOf(userKey)).SendAsync(
+            HubMethods.Client.ProjectUpdated,
+            new ProjectUpdatedNotification { Project = project! });
+
+        return new ProjectResult { Project = project };
+    }
+
+    /// <summary>
+    /// Deletes a project (refused for General), reassigns whatever is left in it back
+    /// to General - on every machine this user owns, online or not - and tells every
+    /// device both facts: the project is gone, and each affected session moved.
+    /// </summary>
+    public async Task<ErrorNotification?> DeleteProject(DeleteProjectRequest request)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.ProjectId))
+        {
+            return Error(ErrorCodes.InvalidRequest, "DeleteProject needs a project id.");
+        }
+
+        string userKey = RequireUserKey();
+
+        if (!_projects.TryDelete(userKey, request.ProjectId, out string? error))
+        {
+            return Error(error!, "The project could not be deleted.");
+        }
+
+        IReadOnlyList<LabelledSession> reassigned = _registry.ClearProjectAssignments(userKey, request.ProjectId);
+        IReadOnlyList<string> recipients = _registry.ClientsOf(userKey);
+
+        foreach (LabelledSession labelled in reassigned)
+        {
+            await Clients.Clients(recipients).SendAsync(
+                HubMethods.Client.SessionUpdated,
+                new ClientSessionUpdatedNotification
+                {
+                    MachineId = labelled.MachineId,
+                    Session = labelled.Session,
+                });
+        }
+
+        await Clients.Clients(recipients).SendAsync(
+            HubMethods.Client.ProjectDeleted,
+            new ProjectDeletedNotification { ProjectId = request.ProjectId });
+
+        return null;
+    }
+
+    /// <summary>Moves a live session to a different project, or back to General with null.</summary>
+    public Task<ErrorNotification?> SetSessionProject(SetSessionProjectRequest request)
+    {
+        if (request is null ||
+            string.IsNullOrWhiteSpace(request.MachineId) ||
+            string.IsNullOrWhiteSpace(request.SessionId))
+        {
+            return Task.FromResult<ErrorNotification?>(
+                Error(ErrorCodes.InvalidRequest, "SetSessionProject needs a machine id and a session id."));
+        }
+
+        string userKey = RequireUserKey();
+
+        if (request.ProjectId is not null && !_projects.Exists(userKey, request.ProjectId))
+        {
+            return Task.FromResult<ErrorNotification?>(
+                Error(ErrorCodes.ProjectNotFound, "No such project.", request.SessionId));
+        }
+
+        bool moved = _registry.TryMoveSession(
+            Context.ConnectionId,
+            request.MachineId,
+            request.SessionId,
+            request.ProjectId,
+            out LabelledSession? labelled,
+            out ErrorNotification? error);
+
+        return AnnounceLabelAsync(moved, labelled, error);
+    }
+
     // Internals.
+
+    /// <summary>
+    /// Defensive backstop for <c>DeleteProject</c>'s sweep: a machine that was
+    /// offline when a project was deleted still carries the old <c>ProjectId</c> in
+    /// its label, and re-announces it verbatim the moment it reconnects. Caught here,
+    /// on the two paths an agent can (re-)announce a session, rather than trusted to
+    /// have been swept already.
+    /// </summary>
+    private void CorrectStaleProjectIfNeeded(SessionAddress address, SessionInfo session)
+    {
+        if (session.ProjectId is not { } projectId || _projects.Exists(address.UserKey, projectId))
+        {
+            return;
+        }
+
+        _registry.CorrectStaleProject(address.UserKey, address.MachineId, session.SessionId);
+        session.ProjectId = null;
+    }
 
     /// <summary>
     /// Tells every one of this user's clients what a session is now called.

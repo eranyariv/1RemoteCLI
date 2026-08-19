@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import type { MachineInfo, SessionInfo } from '../protocol/wire'
 import { pinnedSessions, sessionLabel, type Machines } from '../relay/machines'
+import { GENERAL_PROJECT_ID, type Projects } from '../relay/projects'
 import { labelFor } from '../terminal/catalog'
 import { shortOs, shortPath, uptime } from './format'
 import { Empty } from './Chrome'
@@ -10,6 +11,7 @@ import { Empty } from './Chrome'
 export interface SessionActions {
   onRename(machineId: string, sessionId: string, name: string | null): void
   onPin(machineId: string, sessionId: string, pinned: boolean): void
+  onMove(machineId: string, sessionId: string, projectId: string | null): void
 }
 
 /**
@@ -22,11 +24,13 @@ export interface SessionActions {
 function SessionEditor({
   machineId,
   session,
+  projects,
   actions,
   onClose,
 }: {
   machineId: string
   session: SessionInfo
+  projects: Projects
   actions: SessionActions
   onClose(): void
 }) {
@@ -115,6 +119,29 @@ function SessionEditor({
           Cancel
         </button>
       </div>
+
+      {/* Moving only makes sense once there is somewhere else to go. */}
+      {projects.length > 1 ? (
+        <label className="mt-2 flex items-center gap-2">
+          <span className="shrink-0 text-sm text-slate-400">Project</span>
+          <select
+            value={session.projectId ?? GENERAL_PROJECT_ID}
+            onChange={(event) => {
+              const next = event.target.value
+              actions.onMove(machineId, session.sessionId, next === GENERAL_PROJECT_ID ? null : next)
+              onClose()
+            }}
+            aria-label="Move to project"
+            className="min-h-10 min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 text-sm text-slate-100 focus:border-slate-500 focus:outline-none"
+          >
+            {projects.map((project) => (
+              <option key={project.projectId} value={project.projectId}>
+                {project.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
     </div>
   )
 }
@@ -128,6 +155,7 @@ function SessionEditor({
 function SessionRow({
   machineId,
   session,
+  projects,
   disabled,
   subtitle,
   actions,
@@ -135,6 +163,7 @@ function SessionRow({
 }: {
   machineId: string
   session: SessionInfo
+  projects: Projects
   disabled: boolean
   /** Shown instead of the working directory, for rows lifted away from their machine. */
   subtitle?: string
@@ -211,6 +240,7 @@ function SessionRow({
         <SessionEditor
           machineId={machineId}
           session={session}
+          projects={projects}
           actions={actions}
           onClose={() => setEditing(false)}
         />
@@ -229,10 +259,12 @@ function SessionRow({
  */
 function PinnedCard({
   machines,
+  projects,
   actions,
   onOpenSession,
 }: {
   machines: Machines
+  projects: Projects
   actions: SessionActions
   onOpenSession(machine: MachineInfo, session: SessionInfo): void
 }) {
@@ -256,6 +288,7 @@ function PinnedCard({
               key={`${entry.machineId}:${entry.session.sessionId}`}
               machineId={entry.machineId}
               session={entry.session}
+              projects={projects}
               // A pinned session on a machine that went offline is already gone --
               // going offline clears its sessions -- so the only reachable state here
               // is online. The guard costs nothing and outlives that argument.
@@ -273,10 +306,12 @@ function PinnedCard({
 
 function MachineCard({
   machine,
+  projects,
   actions,
   onOpenSession,
 }: {
   machine: MachineInfo
+  projects: Projects
   actions: SessionActions
   onOpenSession(machine: MachineInfo, session: SessionInfo): void
 }) {
@@ -319,6 +354,7 @@ function MachineCard({
                 key={session.sessionId}
                 machineId={machine.machineId}
                 session={session}
+                projects={projects}
                 disabled={false}
                 actions={actions}
                 onOpen={(s) => onOpenSession(machine, s)}
@@ -355,10 +391,12 @@ function MachineCard({
 
 export function MachineList({
   machines,
+  projects,
   actions,
   onOpenSession,
 }: {
   machines: Machines
+  projects: Projects
   actions: SessionActions
   onOpenSession(machine: MachineInfo, session: SessionInfo): void
 }) {
@@ -373,12 +411,13 @@ export function MachineList({
 
   return (
     <div className="flex flex-col gap-3">
-      <PinnedCard machines={machines} actions={actions} onOpenSession={onOpenSession} />
+      <PinnedCard machines={machines} projects={projects} actions={actions} onOpenSession={onOpenSession} />
 
       {machines.map((machine) => (
         <MachineCard
           key={machine.machineId}
           machine={machine}
+          projects={projects}
           actions={actions}
           onOpenSession={onOpenSession}
         />

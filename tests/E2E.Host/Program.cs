@@ -10,6 +10,7 @@ using OneRemoteCli.Daemon.Wrapper;
 using OneRemoteCli.E2E.Host;
 using OneRemoteCli.Hub.Auth;
 using OneRemoteCli.Hub.Ops;
+using OneRemoteCli.Hub.Projects;
 using OneRemoteCli.Hub.Push;
 using OneRemoteCli.Hub.Relay;
 using OneRemoteCli.Protocol.Hub;
@@ -85,6 +86,19 @@ builder.Services.AddSingleton<IPushNotifier, DroppingNotifier>();
 // which is exactly what the real hub does when no Telegram chat is configured; what
 // the channel reports is the hub tests' business, not the browser's.
 builder.Services.AddSingleton<IUsageRecorder, NullUsageRecorder>();
+
+// Projects (issue #110). RelayHub takes a ProjectStore constructor dependency like
+// every other piece of hub state, so it has to be wired here too - scoped to a
+// scratch file this process owns, torn down when the process exits, since nothing
+// about the browser suite needs projects to survive between runs.
+string projectStatePath = Path.Combine(Path.GetTempPath(), $"1remote-e2e-projects-{Guid.NewGuid():n}.json");
+string projectIconRoot = Path.Combine(Path.GetTempPath(), $"1remote-e2e-icons-{Guid.NewGuid():n}");
+builder.Services.Configure<ProjectsOptions>(options =>
+{
+    options.StatePath = projectStatePath;
+    options.IconRoot = projectIconRoot;
+});
+builder.Services.AddSingleton<ProjectStore>();
 
 builder.Services.AddSignalR(RelayLiveness.Apply).AddMessagePackProtocol();
 
@@ -201,6 +215,25 @@ foreach (Shell shell in shells.Values)
 
 await Quietly(() => running).ConfigureAwait(false);
 File.Delete(identityPath);
+
+try
+{
+    File.Delete(projectStatePath);
+}
+catch (IOException)
+{
+}
+
+try
+{
+    if (Directory.Exists(projectIconRoot))
+    {
+        Directory.Delete(projectIconRoot, recursive: true);
+    }
+}
+catch (IOException)
+{
+}
 
 return 0;
 

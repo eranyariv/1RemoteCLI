@@ -97,6 +97,11 @@ public sealed class WireContractTests
         Assert.Contains("sessionAwaitingInput", covered);
         Assert.Contains("tokenExpiring", covered);
         Assert.Contains("error", covered);
+        Assert.Contains("projectList", covered);
+        Assert.Contains("projectResult", covered);
+        Assert.Contains("projectCreated", covered);
+        Assert.Contains("projectUpdated", covered);
+        Assert.Contains("projectDeleted", covered);
     }
 
     // The fixture.
@@ -305,6 +310,153 @@ public sealed class WireContractTests
             MachineId = "5d41402abc4b2a76b9719d911017c592",
             SessionId = "ff00ff00",
             Pinned = true,
+        });
+
+        // The appended field (protocol version 3): a session assigned to a
+        // non-General project. sessionUpdated above already pins the label pair
+        // (CustomName/Pinned); this entry is the one that pins ProjectId, the
+        // field appended after it.
+        Add(messages, "sessionOpenedWithProject", new ClientSessionOpenedNotification
+        {
+            MachineId = "5d41402abc4b2a76b9719d911017c592",
+            Session = new SessionInfo
+            {
+                SessionId = "ff00ff00",
+                Program = "pwsh",
+                Args = [],
+                Cwd = @"C:\Users\eran",
+                Cols = 80,
+                Rows = 24,
+                StartedAt = Instant,
+                DisplayName = null,
+                AwaitingInput = false,
+                CliType = CliType.PowerShell,
+                ProjectId = "8277e0910d750195b448797616e091ad",
+            },
+        });
+
+        Add(messages, "listProjectsRequest", new ListProjectsRequest());
+
+        Add(messages, "createProjectRequest", new CreateProjectRequest
+        {
+            Name = "1RemoteCLI",
+            Description = "Remote CLI sessions from a phone.",
+            SiteUrl = "https://1remotecli.example.com",
+            RepoUrl = "https://github.com/eranyariv/1RemoteCLI",
+        });
+
+        Add(messages, "updateProjectRequest", new UpdateProjectRequest
+        {
+            ProjectId = "8277e0910d750195b448797616e091ad",
+            Name = "1RemoteCLI",
+            Description = "Remote CLI sessions from a phone.",
+            SiteUrl = "https://1remotecli.example.com",
+            RepoUrl = "https://github.com/eranyariv/1RemoteCLI",
+        });
+
+        Add(messages, "deleteProjectRequest", new DeleteProjectRequest
+        {
+            ProjectId = "8277e0910d750195b448797616e091ad",
+        });
+
+        Add(messages, "setSessionProjectRequest", new SetSessionProjectRequest
+        {
+            MachineId = "5d41402abc4b2a76b9719d911017c592",
+            SessionId = "ff00ff00",
+            ProjectId = "8277e0910d750195b448797616e091ad",
+        });
+
+        Add(messages, "setSessionProjectClearRequest", new SetSessionProjectRequest
+        {
+            MachineId = "5d41402abc4b2a76b9719d911017c592",
+            SessionId = "ff00ff00",
+            ProjectId = null,
+        });
+
+        Add(messages, "projectList", new ProjectListNotification
+        {
+            Projects =
+            [
+                new ProjectInfo
+                {
+                    ProjectId = "general",
+                    Name = "General",
+                    Description = null,
+                    SiteUrl = null,
+                    RepoUrl = null,
+                    IsGeneral = true,
+                    IconVersion = 0,
+                    CreatedAt = Instant,
+                },
+                new ProjectInfo
+                {
+                    ProjectId = "8277e0910d750195b448797616e091ad",
+                    Name = "1RemoteCLI",
+                    Description = "Remote CLI sessions from a phone.",
+                    SiteUrl = "https://1remotecli.example.com",
+                    RepoUrl = "https://github.com/eranyariv/1RemoteCLI",
+                    IsGeneral = false,
+                    IconVersion = 2,
+                    CreatedAt = Instant,
+                },
+            ],
+        });
+
+        Add(messages, "projectResult", new ProjectResult
+        {
+            Project = new ProjectInfo
+            {
+                ProjectId = "8277e0910d750195b448797616e091ad",
+                Name = "1RemoteCLI",
+                Description = "Remote CLI sessions from a phone.",
+                SiteUrl = "https://1remotecli.example.com",
+                RepoUrl = "https://github.com/eranyariv/1RemoteCLI",
+                IsGeneral = false,
+                IconVersion = 0,
+                CreatedAt = Instant,
+            },
+            Error = null,
+        });
+
+        Add(messages, "projectResultError", new ProjectResult
+        {
+            Project = null,
+            Error = ErrorCodes.DuplicateProjectName,
+        });
+
+        Add(messages, "projectCreated", new ProjectCreatedNotification
+        {
+            Project = new ProjectInfo
+            {
+                ProjectId = "8277e0910d750195b448797616e091ad",
+                Name = "1RemoteCLI",
+                Description = "Remote CLI sessions from a phone.",
+                SiteUrl = "https://1remotecli.example.com",
+                RepoUrl = "https://github.com/eranyariv/1RemoteCLI",
+                IsGeneral = false,
+                IconVersion = 0,
+                CreatedAt = Instant,
+            },
+        });
+
+        Add(messages, "projectUpdated", new ProjectUpdatedNotification
+        {
+            Project = new ProjectInfo
+            {
+                ProjectId = "8277e0910d750195b448797616e091ad",
+                Name = "1RemoteCLI",
+                Description = "Remote CLI sessions from a phone.",
+                SiteUrl = "https://1remotecli.example.com",
+                RepoUrl = "https://github.com/eranyariv/1RemoteCLI",
+                IsGeneral = false,
+                IconVersion = 2,
+                CreatedAt = Instant,
+            },
+        });
+
+        Add(messages, "projectDeleted", new ProjectDeletedNotification
+        {
+            ProjectId = "8277e0910d750195b448797616e091ad",
         });
 
         return new JsonObject

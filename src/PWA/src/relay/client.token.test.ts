@@ -69,7 +69,7 @@ describe('a token that is about to expire', () => {
     getAccessToken.mockResolvedValue('first-token')
     // Null is the hub's "no complaint" answer to the handshake and to a refresh; the
     // machine list is the one invoke that has to come back shaped like something.
-    invoke.mockImplementation(async (method) => (method === 'ListMachines' ? [[]] : null))
+    invoke.mockImplementation(async (method) => (method === 'ListMachines' || method === 'ListProjects' ? [[]] : null))
 
     const client = new RelayClient('http://example.invalid/hub')
     seen.length = 0
@@ -98,7 +98,7 @@ describe('a token that is about to expire', () => {
   it('reports a refresh the hub refused', async () => {
     invoke.mockImplementation(async (method) => {
       if (method === 'RefreshToken') return ['token_expired', 'That token is not valid.', null]
-      return method === 'ListMachines' ? [[]] : null
+      return method === 'ListMachines' || method === 'ListProjects' ? [[]] : null
     })
 
     await handlers.get('TokenExpiring')!([new Date().toISOString()])
@@ -114,7 +114,7 @@ describe('a token that is about to expire', () => {
   it('survives the hub closing the connection mid-refresh', async () => {
     invoke.mockImplementation(async (method) => {
       if (method === 'RefreshToken') throw new Error('Invocation canceled.')
-      return method === 'ListMachines' ? [[]] : null
+      return method === 'ListMachines' || method === 'ListProjects' ? [[]] : null
     })
 
     await expect(handlers.get('TokenExpiring')!([new Date().toISOString()])).resolves.not.toThrow()

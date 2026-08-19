@@ -9,6 +9,11 @@ import {
   decodeMachineList,
   decodeMachineOffline,
   decodeMachineOnline,
+  decodeProject,
+  decodeProjectDeleted,
+  decodeProjectList,
+  decodeProjectNotification,
+  decodeProjectResult,
   decodeSessionClosed,
   decodeSessionOpened,
   decodeSessionUpdated,
@@ -16,13 +21,17 @@ import {
   decodeTokenExpiring,
   encodeAttachSession,
   encodeClientHandshake,
+  encodeCreateProject,
+  encodeDeleteProject,
   encodeDetachSession,
   encodeInterruptSession,
   encodeResizeTerminal,
   encodeSendInput,
   encodeSetSessionName,
   encodeSetSessionPinned,
+  encodeSetSessionProject,
   encodeSetSessionType,
+  encodeUpdateProject,
   type CliType,
 } from './wire'
 
@@ -237,6 +246,88 @@ describe('decoding what the hub sends', () => {
     expect(error.message).toBe(want.message)
     expect(error.sessionId).toBeNull()
   })
+
+  it('reads a session opened with a non-General project already assigned', () => {
+    const opened = decodeSessionOpened(wire('sessionOpenedWithProject'))
+    const want = expected('sessionOpenedWithProject')
+
+    expect(opened.session.projectId).toBe(want.session.projectId)
+  })
+
+  it('treats a session from a hub that predates projects as General', () => {
+    // ProjectId was appended after CustomName/Pinned, so a hub that only knows
+    // about renaming sends an eleven-element session (through Pinned). Reading
+    // past the end has to land on General (null), not on undefined.
+    const raw = wire('sessionOpenedWithProject') as unknown[]
+    const session = raw[1] as unknown[]
+
+    expect(decodeSessionOpened([raw[0], session.slice(0, 11)]).session.projectId).toBeNull()
+  })
+
+  it('reads a project, including its icon version', () => {
+    const projects = decodeProjectList(wire('projectList'))
+    const want = expected('projectList').projects as any[]
+
+    expect(projects).toHaveLength(want.length)
+
+    projects.forEach((project, i) => {
+      expect(project.projectId).toBe(want[i].projectId)
+      expect(project.name).toBe(want[i].name)
+      expect(project.description).toBe(want[i].description)
+      expect(project.siteUrl).toBe(want[i].siteUrl)
+      expect(project.repoUrl).toBe(want[i].repoUrl)
+      expect(project.isGeneral).toBe(want[i].isGeneral)
+      expect(project.iconVersion).toBe(want[i].iconVersion)
+    })
+  })
+
+  it('reads General first in the project list, since the hub always seeds it', () => {
+    const projects = decodeProjectList(wire('projectList'))
+    expect(projects[0].isGeneral).toBe(true)
+  })
+
+  it('reads a successful ProjectResult, with no error', () => {
+    const result = decodeProjectResult(wire('projectResult'))
+    const want = expected('projectResult').project
+
+    expect(result.project?.projectId).toBe(want.projectId)
+    expect(result.project?.name).toBe(want.name)
+    expect(result.error).toBeNull()
+  })
+
+  it('reads a failed ProjectResult, with no project', () => {
+    const result = decodeProjectResult(wire('projectResultError'))
+    const want = expected('projectResultError')
+
+    expect(result.project).toBeNull()
+    expect(result.error).toBe(want.error)
+  })
+
+  it('reads a project created for another device to pick up', () => {
+    const project = decodeProjectNotification(wire('projectCreated'))
+    expect(project.projectId).toBe(expected('projectCreated').project.projectId)
+  })
+
+  it('reads a project updated, including a bumped icon version', () => {
+    const project = decodeProjectNotification(wire('projectUpdated'))
+    const want = expected('projectUpdated').project
+
+    expect(project.projectId).toBe(want.projectId)
+    expect(project.iconVersion).toBe(want.iconVersion)
+  })
+
+  it('reads a project deleted, as a bare id', () => {
+    expect(decodeProjectDeleted(wire('projectDeleted'))).toBe(expected('projectDeleted').projectId)
+  })
+
+  it('decodes one ProjectInfo directly, matching what the list decodes', () => {
+    const [first] = (wire('projectList') as unknown[])[0] as unknown[]
+    const project = decodeProject(first)
+    const want = expected('projectList').projects[0]
+
+    expect(project.projectId).toBe(want.projectId)
+    expect(project.name).toBe(want.name)
+  })
 })
 
 describe('encoding what we send the hub', () => {
@@ -323,5 +414,53 @@ describe('encoding what we send the hub', () => {
     expect(encodeSetSessionPinned(want[0] as string, want[1] as string, want[2] as boolean)).toEqual(
       want,
     )
+  })
+
+  it('sends a move to a project', () => {
+    const want = shape('setSessionProjectRequest')
+
+    expect(
+      encodeSetSessionProject(want[0] as string, want[1] as string, want[2] as string),
+    ).toEqual(want)
+  })
+
+  it('sends a move back to General as null, not the string "general"', () => {
+    const want = shape('setSessionProjectClearRequest')
+
+    expect(want[2]).toBeNull()
+    expect(encodeSetSessionProject(want[0] as string, want[1] as string, null)).toEqual(want)
+  })
+
+  it('sends a project creation with every optional field filled in', () => {
+    const want = shape('createProjectRequest')
+
+    expect(
+      encodeCreateProject(
+        want[0] as string,
+        want[1] as string,
+        want[2] as string,
+        want[3] as string,
+      ),
+    ).toEqual(want)
+  })
+
+  it('sends a project update, id first', () => {
+    const want = shape('updateProjectRequest')
+
+    expect(
+      encodeUpdateProject(
+        want[0] as string,
+        want[1] as string,
+        want[2] as string,
+        want[3] as string,
+        want[4] as string,
+      ),
+    ).toEqual(want)
+  })
+
+  it('sends a project deletion', () => {
+    const want = shape('deleteProjectRequest')
+
+    expect(encodeDeleteProject(want[0] as string)).toEqual(want)
   })
 })

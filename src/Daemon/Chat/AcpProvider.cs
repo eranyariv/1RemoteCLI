@@ -9,11 +9,9 @@ namespace OneRemoteCli.Daemon.Chat;
 /// Discovers desktop-agent sessions through a public ACP server and makes their
 /// structured transcripts available to the relay.
 /// </summary>
-public sealed class AcpProvider(
-    Action<string>? log = null,
-    bool hideArchivedSessions = true) : IAsyncDisposable
+public sealed class AcpProvider : IAsyncDisposable
 {
-    private const int MaximumSessions = 20;
+    private const int MaximumSessions = 100;
     private static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan RecentWindow = TimeSpan.FromDays(14);
@@ -21,13 +19,38 @@ public sealed class AcpProvider(
     private readonly ConcurrentDictionary<string, AcpSession> _sessions = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, PendingPermission> _permissions = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _refreshRequested = new(0);
-    private readonly Action<string>? _log = log;
+    private readonly Func<string, JsonObject, CancellationToken, Task<JsonElement>>? _call;
+    private readonly Action<string>? _log;
     private readonly AcpSettings _settings = AcpSettings.FromEnvironment();
-    private readonly CopilotArchiveIndex _copilotArchives = new(log);
+    private readonly CopilotArchiveIndex _copilotArchives;
     private AcpClient? _client;
     private IAgentChatSink? _sink;
     private int _activeTurns;
-    private int _hideArchivedSessions = hideArchivedSessions ? 1 : 0;
+    private int _hideArchivedSessions;
+
+    public AcpProvider(Action<string>? log = null, bool hideArchivedSessions = true)
+        : this(log, hideArchivedSessions, call: null)
+    {
+    }
+
+    internal AcpProvider(
+        Func<string, JsonObject, CancellationToken, Task<JsonElement>> call,
+        bool hideArchivedSessions = false)
+        : this(log: null, hideArchivedSessions, call)
+    {
+        ArgumentNullException.ThrowIfNull(call);
+    }
+
+    private AcpProvider(
+        Action<string>? log,
+        bool hideArchivedSessions,
+        Func<string, JsonObject, CancellationToken, Task<JsonElement>>? call)
+    {
+        _log = log;
+        _copilotArchives = new CopilotArchiveIndex(log);
+        _hideArchivedSessions = hideArchivedSessions ? 1 : 0;
+        _call = call;
+    }
 
     /// <summary>Raised when the discovered chat count changes.</summary>
     public event Action? Changed;
@@ -234,8 +257,6 @@ public sealed class AcpProvider(
 
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
-        JsonElement result = await Client.CallAsync("session/list", new JsonObject(), cancellationToken)
-            .ConfigureAwait(false);
         bool changed = false;
 
         DateTimeOffset cutoff = DateTimeOffset.UtcNow - RecentWindow;
@@ -244,18 +265,8 @@ public sealed class AcpProvider(
             _settings.CliType == CliType.CopilotCli
             ? await _copilotArchives.ReadArchivedSessionIdsAsync(cancellationToken).ConfigureAwait(false)
             : [];
-        List<SessionMetadata> latest = result.TryGetProperty("sessions", out JsonElement sessions)
-            ? sessions.EnumerateArray()
-                .Select(ReadMetadata)
-                .Where(item =>
-                    item is not null &&
-                    item.UpdatedAt >= cutoff &&
-                    !archived.Contains(item.SessionId))
-                .Cast<SessionMetadata>()
-                .OrderByDescending(item => item.UpdatedAt)
-                .Take(MaximumSessions)
-                .ToList()
-            : [];
+        List<SessionMetadata> latest =
+            await ListSessionsAsync(cutoff, archived, cancellationToken).ConfigureAwait(false);
 
         HashSet<string> visible = latest.Select(item => item.SessionId).ToHashSet(StringComparer.Ordinal);
 
@@ -304,6 +315,63 @@ public sealed class AcpProvider(
         {
             Changed?.Invoke();
         }
+    }
+
+    private async Task<List<SessionMetadata>> ListSessionsAsync(
+        DateTimeOffset cutoff,
+        HashSet<string> archived,
+        CancellationToken cancellationToken)
+    {
+        var discovered = new Dictionary<string, SessionMetadata>(StringComparer.Ordinal);
+        var cursors = new HashSet<string>(StringComparer.Ordinal);
+        string? cursor = null;
+
+        do
+        {
+            var parameters = new JsonObject();
+            if (cursor is not null)
+            {
+                parameters["cursor"] = cursor;
+            }
+
+            JsonElement result =
+                await CallAsync("session/list", parameters, cancellationToken).ConfigureAwait(false);
+
+            if (result.TryGetProperty("sessions", out JsonElement sessions))
+            {
+                foreach (JsonElement value in sessions.EnumerateArray())
+                {
+                    if (ReadMetadata(value) is { } item &&
+                        item.UpdatedAt >= cutoff &&
+                        !archived.Contains(item.SessionId))
+                    {
+                        discovered.TryAdd(item.SessionId, item);
+                    }
+                }
+            }
+
+            string? next = String(result, "nextCursor");
+            if (string.IsNullOrWhiteSpace(next))
+            {
+                break;
+            }
+
+            if (!cursors.Add(next))
+            {
+                throw new InvalidOperationException(
+                    $"{_settings.DisplayName} ACP repeated session-list cursor {next}.");
+            }
+
+            cursor = next;
+        }
+        while (discovered.Count < MaximumSessions);
+
+        return
+        [
+            .. discovered.Values
+                .OrderByDescending(item => item.UpdatedAt)
+                .Take(MaximumSessions),
+        ];
     }
 
     private async Task EnsureLoadedAsync(AcpSession session, CancellationToken cancellationToken)
@@ -403,6 +471,14 @@ public sealed class AcpProvider(
 
     private AcpClient Client =>
         _client ?? throw new InvalidOperationException($"{_settings.DisplayName} ACP is not running.");
+
+    private Task<JsonElement> CallAsync(
+        string method,
+        JsonObject parameters,
+        CancellationToken cancellationToken) =>
+        _call is null
+            ? Client.CallAsync(method, parameters, cancellationToken)
+            : _call(method, parameters, cancellationToken);
 
     private SessionMetadata? ReadMetadata(JsonElement value)
     {

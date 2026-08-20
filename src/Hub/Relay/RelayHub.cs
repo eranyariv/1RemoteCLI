@@ -787,6 +787,9 @@ public sealed class RelayHub(
     {
         if (request is null || string.IsNullOrWhiteSpace(request.Name))
         {
+            _logger.LogInformation(
+                "Rejected a project creation request with {ErrorCode}.",
+                ErrorCodes.InvalidRequest);
             return new ProjectResult { Error = ErrorCodes.InvalidRequest };
         }
 
@@ -801,6 +804,7 @@ public sealed class RelayHub(
                 out ProjectInfo? project,
                 out string? error))
         {
+            _logger.LogInformation("Rejected a project creation request with {ErrorCode}.", error);
             return new ProjectResult { Error = error };
         }
 
@@ -821,6 +825,9 @@ public sealed class RelayHub(
             string.IsNullOrWhiteSpace(request.ProjectId) ||
             string.IsNullOrWhiteSpace(request.Name))
         {
+            _logger.LogInformation(
+                "Rejected a project update request with {ErrorCode}.",
+                ErrorCodes.InvalidRequest);
             return new ProjectResult { Error = ErrorCodes.InvalidRequest };
         }
 
@@ -836,6 +843,7 @@ public sealed class RelayHub(
                 out ProjectInfo? project,
                 out string? error))
         {
+            _logger.LogInformation("Rejected a project update request with {ErrorCode}.", error);
             return new ProjectResult { Error = error };
         }
 

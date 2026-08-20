@@ -690,9 +690,15 @@ public sealed class ProjectStore
             return false;
         }
 
-        if (!IsValidOptionalUrl(siteUrl) || !IsValidOptionalUrl(repoUrl))
+        if (!IsValidOptionalUrl(siteUrl))
         {
-            error = ErrorCodes.InvalidRequest;
+            error = ErrorCodes.InvalidProjectSiteUrl;
+            return false;
+        }
+
+        if (!IsValidOptionalUrl(repoUrl))
+        {
+            error = ErrorCodes.InvalidProjectRepoUrl;
             return false;
         }
 

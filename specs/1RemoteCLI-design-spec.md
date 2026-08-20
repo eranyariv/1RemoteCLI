@@ -683,7 +683,7 @@ Like every other display name, a custom name is never logged, at any level, and 
 
 `ListProjects`/`CreateProject`/`UpdateProject`/`DeleteProject` are answered entirely inside the hub, like `SetSessionName`/`SetSessionPinned` — there is no agent-facing message for any of them, and §4.9 explains why the agent has no need to know. `SetSessionProject` is likewise resolved from the caller's own partition rather than through an attachment, exactly like the two existing session-label methods, and its effect surfaces the same way theirs does: an ordinary `SessionUpdated` carrying the session's new `projectId`.
 
-New error codes: `ProjectNotFound` (an unknown or another user's project id), `DuplicateProjectName` (case-insensitive collision, including against "General"), `CannotDeleteGeneralProject`.
+New error codes: `ProjectNotFound` (an unknown or another user's project id), `DuplicateProjectName` (case-insensitive collision, including against "General"), `InvalidProjectSiteUrl` and `InvalidProjectRepoUrl` (the corresponding optional URL is not an absolute HTTP(S) URL), `CannotDeleteGeneralProject`.
 
 ### 5.5 Versioning
 

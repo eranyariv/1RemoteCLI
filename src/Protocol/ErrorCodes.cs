@@ -43,6 +43,12 @@ public static class ErrorCodes
     /// <summary>Another of this user's projects already has this name.</summary>
     public const string DuplicateProjectName = "duplicate_project_name";
 
+    /// <summary>A project's optional site URL is not an absolute HTTP(S) URL.</summary>
+    public const string InvalidProjectSiteUrl = "invalid_project_site_url";
+
+    /// <summary>A project's optional repository URL is not an absolute HTTP(S) URL.</summary>
+    public const string InvalidProjectRepoUrl = "invalid_project_repo_url";
+
     /// <summary>The reserved General project cannot be deleted.</summary>
     public const string CannotDeleteGeneralProject = "cannot_delete_general_project";
 }

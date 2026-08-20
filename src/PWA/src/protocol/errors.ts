@@ -20,6 +20,8 @@ export const ErrorCodes = {
   InternalError: 'internal_error',
   ProjectNotFound: 'project_not_found',
   DuplicateProjectName: 'duplicate_project_name',
+  InvalidProjectSiteUrl: 'invalid_project_site_url',
+  InvalidProjectRepoUrl: 'invalid_project_repo_url',
   CannotDeleteGeneralProject: 'cannot_delete_general_project',
 } as const
 
@@ -56,6 +58,10 @@ export function describeError(code: string, fallback?: string): string {
       return 'That project no longer exists.'
     case ErrorCodes.DuplicateProjectName:
       return 'You already have a project with that name.'
+    case ErrorCodes.InvalidProjectSiteUrl:
+      return 'Site URL must be a complete http:// or https:// address.'
+    case ErrorCodes.InvalidProjectRepoUrl:
+      return 'GitHub repo URL must be a complete http:// or https:// address.'
     case ErrorCodes.CannotDeleteGeneralProject:
       return 'The General project cannot be deleted.'
     default:

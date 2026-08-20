@@ -154,7 +154,11 @@ public class ProjectStoreTests
 
             Assert.False(store.TryCreate(
                 UserA, "Website", null, "not-a-url", null, out _, out string? error));
-            Assert.Equal(ErrorCodes.InvalidRequest, error);
+            Assert.Equal(ErrorCodes.InvalidProjectSiteUrl, error);
+
+            Assert.False(store.TryCreate(
+                UserA, "Website", null, null, "github.com/o/r", out _, out string? repoError));
+            Assert.Equal(ErrorCodes.InvalidProjectRepoUrl, repoError);
 
             Assert.True(store.TryCreate(
                 UserA, "Website", null, "https://example.com", "https://github.com/o/r", out ProjectInfo? project, out _));

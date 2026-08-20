@@ -53,6 +53,18 @@ export function ProjectEditor({
       return
     }
 
+    const normalizedSiteUrl = blankToNull(siteUrl)
+    if (!isAbsoluteHttpUrl(normalizedSiteUrl)) {
+      setError('Site URL must be a complete http:// or https:// address.')
+      return
+    }
+
+    const normalizedRepoUrl = blankToNull(repoUrl)
+    if (!isAbsoluteHttpUrl(normalizedRepoUrl)) {
+      setError('GitHub repo URL must be a complete http:// or https:// address.')
+      return
+    }
+
     setBusy(true)
     setError(null)
 
@@ -61,14 +73,14 @@ export function ProjectEditor({
           saved.projectId,
           trimmedName,
           blankToNull(description),
-          blankToNull(siteUrl),
-          blankToNull(repoUrl),
+          normalizedSiteUrl,
+          normalizedRepoUrl,
         )
       : await client.createProject(
           trimmedName,
           blankToNull(description),
-          blankToNull(siteUrl),
-          blankToNull(repoUrl),
+          normalizedSiteUrl,
+          normalizedRepoUrl,
         )
 
     if (result.error || !result.project) {
@@ -326,6 +338,17 @@ export function ProjectEditor({
 function blankToNull(value: string): string | null {
   const trimmed = value.trim()
   return trimmed.length > 0 ? trimmed : null
+}
+
+function isAbsoluteHttpUrl(value: string | null): boolean {
+  if (value === null) return true
+
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
 }
 
 function useFileUrl(file: File | null): string | null {

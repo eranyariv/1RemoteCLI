@@ -81,4 +81,47 @@ describe('ProjectEditor', () => {
       iconMocks.uploadProjectIcon.mock.invocationCallOrder[0],
     )
   })
+
+  it.each([
+    ['Site URL', 'example.com', 'Site URL must be a complete http:// or https:// address.'],
+    [
+      'GitHub repo URL',
+      'github.com/o/r',
+      'GitHub repo URL must be a complete http:// or https:// address.',
+    ],
+  ])('explains an invalid %s before calling the hub', async (label, value, message) => {
+    const createProject = vi.fn()
+    const client = { createProject } as unknown as RelayClient
+
+    render(<ProjectEditor client={client} onClose={vi.fn()} />)
+
+    fireEvent.change(screen.getByPlaceholderText('Project name'), {
+      target: { value: 'New project' },
+    })
+    fireEvent.change(screen.getByLabelText(label), { target: { value } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByText(message)).toBeTruthy()
+    expect(createProject).not.toHaveBeenCalled()
+  })
+
+  it('renders a field-specific validation error returned by the hub', async () => {
+    const client = {
+      createProject: vi.fn(async () => ({
+        project: null,
+        error: 'invalid_project_repo_url',
+      })),
+    } as unknown as RelayClient
+
+    render(<ProjectEditor client={client} onClose={vi.fn()} />)
+
+    fireEvent.change(screen.getByPlaceholderText('Project name'), {
+      target: { value: 'New project' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(
+      await screen.findByText('GitHub repo URL must be a complete http:// or https:// address.'),
+    ).toBeTruthy()
+  })
 })

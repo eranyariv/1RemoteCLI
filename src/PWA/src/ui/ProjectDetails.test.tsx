@@ -25,7 +25,7 @@ describe('ProjectDetails', () => {
   it('shows project metadata and external links', () => {
     render(<ProjectDetails project={project} />)
 
-    expect(screen.getByRole('heading', { name: 'Project A' })).toBeTruthy()
+    expect(screen.getByText('Project A')).toBeTruthy()
     expect(screen.getByText('A useful project.')).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Project page' }).getAttribute('href')).toBe(
       project.siteUrl,

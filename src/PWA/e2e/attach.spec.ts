@@ -16,7 +16,10 @@ test.describe('finding and opening a session', () => {
     await expect(sessionCard(app, 'build watcher')).toBeVisible()
   })
 
-  test('says so when a machine has nothing running', async ({ app }) => {
+  test('collapses an idle machine and explains it when expanded', async ({ app }) => {
+    const expand = app.getByRole('button', { name: 'Expand desk' })
+    await expect(expand).toBeVisible()
+    await expand.click()
     await expect(app.getByText(/Nothing running/)).toBeVisible()
   })
 

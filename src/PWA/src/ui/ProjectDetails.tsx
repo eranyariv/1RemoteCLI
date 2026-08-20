@@ -10,7 +10,7 @@ export function ProjectDetails({ project }: { project: ProjectInfo }) {
       <ProjectIcon project={project} className="size-20 rounded-2xl" />
 
       <div className="min-w-0 flex-1">
-        <h2 className="text-xl font-semibold text-slate-100">{project.name}</h2>
+        <p className="text-xl font-semibold text-slate-100">{project.name}</p>
         <p className="mt-1 whitespace-pre-wrap text-sm leading-5 text-slate-400">
           {project.description ?? 'No description provided.'}
         </p>

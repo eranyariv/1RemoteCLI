@@ -80,7 +80,7 @@ export interface ProjectInfo {
   siteUrl: string | null
   repoUrl: string | null
   isGeneral: boolean
-  /** Zero means no custom icon has been uploaded — show the app's own default icon. */
+  /** Zero means no custom icon has been uploaded — show the project's built-in default icon. */
   iconVersion: number
   createdAt: Date
 }

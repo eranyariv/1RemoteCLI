@@ -50,6 +50,15 @@ describe('ProjectEditor', () => {
 
   afterEach(cleanup)
 
+  it('shows the dedicated fallback icon when editing General', () => {
+    const generalProject = { ...createdProject, name: 'General', isGeneral: true }
+    const { container } = render(
+      <ProjectEditor client={{} as RelayClient} project={generalProject} onClose={vi.fn()} />,
+    )
+
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('/general-project.png')
+  })
+
   it('uploads an icon selected while creating after the project has an id', async () => {
     const processedIcon = new File(['processed'], 'project.webp', { type: 'image/webp' })
     iconMocks.downscaleToSquare.mockResolvedValue(processedIcon)

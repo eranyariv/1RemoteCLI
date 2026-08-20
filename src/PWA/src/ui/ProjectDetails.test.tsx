@@ -22,6 +22,15 @@ const project: ProjectInfo = {
 describe('ProjectDetails', () => {
   afterEach(cleanup)
 
+  it.each([
+    ['regular projects', false, '/icon-192.png'],
+    ['General', true, '/general-project.png'],
+  ])('uses the built-in fallback icon for %s', (_label, isGeneral, expected) => {
+    const { container } = render(<ProjectDetails project={{ ...project, isGeneral }} />)
+
+    expect(container.querySelector('img')?.getAttribute('src')).toBe(expected)
+  })
+
   it('shows project metadata and external links', () => {
     render(<ProjectDetails project={project} />)
 

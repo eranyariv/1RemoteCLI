@@ -89,7 +89,7 @@ export async function uploadProjectIcon(projectId: string, file: File): Promise<
   return typeof body.iconVersion === 'number' ? body.iconVersion : null
 }
 
-/** Clears a project's custom icon, reverting it to the app's default. */
+/** Clears a project's custom icon, reverting it to the project's built-in default. */
 export async function deleteProjectIcon(projectId: string): Promise<boolean> {
   const token = await auth.getAccessToken()
   if (!token) return false

@@ -6,8 +6,7 @@ import type { RelayClient } from '../relay/client'
 import { deleteProjectIcon, uploadProjectIcon, useProjectIconUrl } from '../relay/projectIcon'
 import { downscaleToSquare } from './icon'
 import { Banner } from './Chrome'
-
-const DEFAULT_ICON = '/icon-192.png'
+import { defaultProjectIconUrl } from './projectIconFallback'
 
 /**
  * Create and edit, in one form.
@@ -188,7 +187,7 @@ export function ProjectEditor({
         <div className="mt-3 flex flex-col gap-3">
           <div className="flex items-center gap-3">
             <img
-              src={pendingIconUrl ?? iconUrl ?? DEFAULT_ICON}
+              src={pendingIconUrl ?? iconUrl ?? defaultProjectIconUrl(saved)}
               alt=""
               aria-hidden
               className="size-14 shrink-0 rounded-xl bg-slate-800 object-cover"

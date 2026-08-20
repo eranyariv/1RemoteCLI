@@ -3,11 +3,9 @@ import { projectStats, type Projects } from '../relay/projects'
 import type { Machines } from '../relay/machines'
 import type { ProjectInfo } from '../protocol/wire'
 import { useProjectOrder } from './preferences'
+import { defaultProjectIconUrl } from './projectIconFallback'
 import { sortableStyle, useSortable } from './sortableItem'
 import { SortableGrip, SortableList } from './sorting'
-
-/** The app's own icon, shown for every project that has not uploaded a custom one. */
-const DEFAULT_ICON = '/icon-192.png'
 
 export function ProjectIcon({
   project,
@@ -20,7 +18,7 @@ export function ProjectIcon({
 
   return (
     <img
-      src={url ?? DEFAULT_ICON}
+      src={url ?? defaultProjectIconUrl(project)}
       alt=""
       aria-hidden
       className={`${className} shrink-0 bg-slate-800 object-cover`}

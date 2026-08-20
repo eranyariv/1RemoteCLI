@@ -572,22 +572,23 @@ internal sealed class SettingsWindow
         // thing, and "Version 0.12" reading directly above "Version 0.13 is available"
         // is what makes the second sentence mean anything.
         const int updateWidth = 112;
+        const int updateTextHeight = RowHeight * 2;
 
         y += Gap;
 
         _updateLabel = Static(
             instance,
             Margin,
-            y + ((ButtonHeight - RowHeight) / 2),
+            y,
             content - updateWidth - Gap,
-            RowHeight,
+            updateTextHeight,
             style: SS_LEFT);
 
         _update = Button(
             instance,
             IdUpdate,
             ClientWidth - Margin - updateWidth,
-            y,
+            y + ((updateTextHeight - ButtonHeight) / 2),
             updateWidth,
             ButtonHeight,
             SettingsPresenter.UpdateLabel);
@@ -595,7 +596,7 @@ internal sealed class SettingsWindow
         ShowWindow(_updateLabel, SW_HIDE);
         ShowWindow(_update, SW_HIDE);
 
-        _expandedHeight = y + ButtonHeight + Margin;
+        _expandedHeight = y + updateTextHeight + Margin;
         _clientHeight = _collapsedHeight;
     }
 

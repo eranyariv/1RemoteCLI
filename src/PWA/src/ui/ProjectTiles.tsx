@@ -51,7 +51,7 @@ function ProjectTile({
     <div
       ref={sortable.setNodeRef}
       style={sortableStyle(sortable)}
-      className="flex items-center rounded-2xl border border-slate-800 bg-slate-900/60"
+      className="flex w-full min-w-0 items-center overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60"
     >
       <SortableGrip sortable={sortable} label={`Reorder ${project.name}`} />
 
@@ -126,9 +126,9 @@ export function ProjectTiles({
   })
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex w-full min-w-0 flex-col gap-2 overflow-x-clip">
       <SortableList ids={preference.order} onMove={preference.move}>
-        <div className="flex flex-col gap-2">
+        <div className="flex min-w-0 flex-col gap-2">
           {ordered.map((project) => (
             <ProjectTile
               key={project.projectId}

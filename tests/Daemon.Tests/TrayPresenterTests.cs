@@ -1,4 +1,5 @@
 using OneRemoteCli.Daemon.Tray;
+using OneRemoteCli.Protocol;
 
 namespace OneRemoteCli.Daemon.Tests;
 
@@ -13,6 +14,18 @@ namespace OneRemoteCli.Daemon.Tests;
 public sealed class TrayPresenterTests
 {
     private const string Machine = "ADA-LAPTOP";
+
+    [Fact]
+    public void StartsWithTheAgentNameAndCurrentVersion()
+    {
+        string[] lines = TrayPresenter.Present(
+            AgentState.Connected,
+            1,
+            Machine,
+            version: "9.99").Tooltip.Split('\n');
+
+        Assert.Equal("1RemoteCLI Agent v9.99", lines[0]);
+    }
 
     [Fact]
     public void ConnectedSaysHowManySessionsThePhoneCanSee()
@@ -166,18 +179,29 @@ public sealed class TrayPresenterTests
         Assert.True(view.Tooltip.Length <= TrayPresenter.TooltipLimit);
 
         // And what survives is the part that says what is going on.
-        Assert.StartsWith("1RemoteCLI: connected", view.Tooltip, StringComparison.Ordinal);
+        Assert.StartsWith(
+            $"1RemoteCLI Agent v{ProductVersion.Current}\nconnected",
+            view.Tooltip,
+            StringComparison.Ordinal);
     }
 
     [Theory]
     [InlineData(AgentState.Connected)]
     [InlineData(AgentState.Reconnecting)]
     [InlineData(AgentState.SignedOut)]
-    public void EveryStateSaysWhichStateItIsOnTheFirstLine(AgentState state)
+    public void EveryStateSaysWhichStateItIsBelowTheProductLine(AgentState state)
     {
-        string first = TrayPresenter.Present(state, 1, Machine).Tooltip.Split('\n')[0];
+        string status = TrayPresenter.Present(state, 1, Machine).Tooltip.Split('\n')[1];
 
-        Assert.StartsWith("1RemoteCLI: ", first, StringComparison.Ordinal);
+        Assert.Contains(
+            state switch
+            {
+                AgentState.Connected => "connected",
+                AgentState.Reconnecting => "reconnecting",
+                _ => "signed out",
+            },
+            status,
+            StringComparison.Ordinal);
     }
 
     [Fact]

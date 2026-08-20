@@ -298,18 +298,9 @@ public sealed class TrayIcon : IDisposable
     /// </summary>
     private void OnIconClicked(IntPtr wParam, IntPtr lParam)
     {
-        switch (LowWord(lParam))
+        if (TrayIconInteraction.OpensMenu(LowWord(lParam)))
         {
-            case WM_CONTEXTMENU:
-                ShowMenu(SignedLowWord(wParam), SignedHighWord(wParam));
-                break;
-
-            // What people try first, so it should do the most useful thing rather than
-            // nothing. Read from the menu rather than named here, so the item drawn in
-            // bold and the action this performs cannot drift apart.
-            case WM_LBUTTONDBLCLK:
-                Invoke(TrayMenu.DefaultCommand);
-                break;
+            ShowMenu(SignedLowWord(wParam), SignedHighWord(wParam));
         }
     }
 
@@ -557,4 +548,15 @@ public sealed class TrayIcon : IDisposable
     /// </para>
     /// </summary>
     private sealed record TrayState(AgentState State, int Sessions, string? Account, UpdateStatus Update = default);
+}
+
+/// <summary>Maps shell notification codes to tray behavior without requiring a live shell.</summary>
+internal static class TrayIconInteraction
+{
+    /// <summary>
+    /// Left click, keyboard activation, and right click all reveal the same menu.
+    /// The first two are version 4 notifications rather than raw mouse messages.
+    /// </summary>
+    public static bool OpensMenu(int notification) =>
+        notification is NIN_SELECT or NIN_KEYSELECT or WM_CONTEXTMENU;
 }

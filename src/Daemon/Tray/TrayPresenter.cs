@@ -1,4 +1,5 @@
 using OneRemoteCli.Daemon.Update;
+using OneRemoteCli.Protocol;
 
 namespace OneRemoteCli.Daemon.Tray;
 
@@ -25,7 +26,7 @@ public enum AgentState
 }
 
 /// <summary>How the tray should look and what its menu should offer.</summary>
-/// <param name="Tooltip">The hover text. First line is the state, second the detail.</param>
+/// <param name="Tooltip">The hover text: product/version, state/machine, then detail.</param>
 /// <param name="Badge">The icon's state, which the renderer maps to a colour.</param>
 /// <param name="Account">
 /// The menu's first line: who is signed in. Shown even though the icon already
@@ -70,13 +71,14 @@ public static class TrayPresenter
         int sessionCount,
         string machineName,
         string? account = null,
-        UpdateStatus update = default)
+        UpdateStatus update = default,
+        string? version = null)
     {
-        string headline = state switch
+        string status = state switch
         {
-            AgentState.Connected => "1RemoteCLI: connected",
-            AgentState.Reconnecting => "1RemoteCLI: reconnecting",
-            _ => "1RemoteCLI: signed out",
+            AgentState.Connected => "connected",
+            AgentState.Reconnecting => "reconnecting",
+            _ => "signed out",
         };
 
         string detail = state switch
@@ -93,12 +95,13 @@ public static class TrayPresenter
             _ => "Sign in so your phone can see this machine.",
         };
 
-        string name = string.IsNullOrWhiteSpace(machineName) ? string.Empty : $" ({machineName})";
+        string name = string.IsNullOrWhiteSpace(machineName) ? string.Empty : $" · {machineName}";
+        string product = $"1RemoteCLI Agent v{version ?? ProductVersion.Current}";
 
         bool signedIn = !string.IsNullOrWhiteSpace(account);
 
         return new TrayPresentation(
-            Truncate($"{headline}{name}\n{detail}"),
+            Truncate($"{product}\n{status}{name}\n{detail}"),
             state,
             // Keyed off the account rather than the connection: a machine on a train is
             // reconnecting, not signed out, and offering to sign in an account that is
@@ -111,7 +114,7 @@ public static class TrayPresenter
 
     /// <summary>
     /// Trims to what Windows will show. The headline comes first for exactly this
-    /// reason: a tooltip cut short still says what is wrong.
+    /// reason: a tooltip cut short still identifies the product and says what is wrong.
     /// </summary>
     private static string Truncate(string tooltip) =>
         tooltip.Length <= TooltipLimit

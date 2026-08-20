@@ -49,6 +49,16 @@ internal static partial class NativeMethods
 
     internal const int WM_LBUTTONDBLCLK = 0x0203;
     internal const int WM_CONTEXTMENU = 0x007B;
+    internal const int WM_USER = 0x0400;
+
+    /// <summary>
+    /// Version 4 notification-area activation messages. The shell sends
+    /// <see cref="NIN_SELECT"/> for a single left click and
+    /// <see cref="NIN_KEYSELECT"/> for keyboard activation instead of raw mouse
+    /// messages.
+    /// </summary>
+    internal const int NIN_SELECT = WM_USER;
+    internal const int NIN_KEYSELECT = WM_USER + 1;
     internal const int WM_APP = 0x8000;
 
     /// <summary>The shell's notification callback. Anything in the WM_APP range is ours.</summary>

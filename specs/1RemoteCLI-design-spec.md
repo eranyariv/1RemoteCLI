@@ -278,7 +278,9 @@ The count is independent of the connection state and is shown in all three: sess
 
 The tooltip is the whole diagnostic surface for someone whose phone has stopped seeing a machine, so it leads with the state and the machine name and is truncated to the 127 characters Windows will show — beyond that Windows drops the tooltip entirely rather than truncating it.
 
-Menu: the account line, *Settings…* (the default action, so a double-click opens it), *Open the web app*, *Update to x.yy* when there is one, *Quit*. Deliberately short — everything else lives in the settings window, so there is only ever one place that answers "am I signed in".
+Menu: the account line, *Settings…* (the default action), *Open the web app*, *Update to x.yy* when there is one, *Quit*. A single left click, keyboard activation, and right click all open this same menu; with notification-area version 4 behavior the first two arrive as `NIN_SELECT` and `NIN_KEYSELECT`, not raw mouse messages. Deliberately short — everything else lives in the settings window, so there is only ever one place that answers "am I signed in".
+
+The native hover tooltip is capped by Windows at 127 characters and does not support rich text or per-line bold styling. Its first line therefore identifies `1RemoteCLI Agent` and the current `x.yy` version in plain text, followed by connection/machine and session/action details. Product and state come before arbitrary machine text so truncation cannot remove the facts needed to diagnose the icon.
 
 The icon runs its own STA thread with its own message pump. The agent's main thread is busy awaiting the pipe server, and the tray is optional decoration: a machine with no interactive desktop, a policy that blocks shell integration or a broken shell must not stop the agent relaying. Failure to create it is logged and ignored.
 

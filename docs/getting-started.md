@@ -159,17 +159,25 @@ If you start your CLI from a shortcut on your desktop rather than by typing its 
 nothing above helps: there is no command line to put `1remote` in front of. So make a
 copy of the shortcut that goes through 1remote.
 
-In the settings window, click **Wrap a desktop shortcut…** and pick the `.lnk`. Or from
-a terminal:
+In the settings window, click **Wrap a desktop shortcut…** and pick the `.lnk`. 1RemoteCLI
+shows what it detected and waits for you to confirm or override the CLI type before it
+creates anything. Or confirm the type explicitly from a terminal:
 
 ```powershell
-1remote wrap-shortcut "$env:USERPROFILE\Desktop\Claude Code.lnk"
+1remote wrap-shortcut "$env:USERPROFILE\Desktop\Claude Code.lnk" --type claude-code
 ```
 
 You get **Claude Code (1Remote).lnk** beside the original — same icon, same working
 directory, same arguments, and the session shows up on your phone named after the
 shortcut. The original is left alone; delete it or keep it as you prefer. Use
 `--output <path>` to put the copy somewhere else.
+
+The confirmed type controls the generated shortcut:
+
+| Type | What the shortcut does |
+| --- | --- |
+| GitHub Copilot CLI | Asks the running agent to create a native Copilot ACP chat, then opens that chat in the web app. |
+| Claude Code, PowerShell, Command Prompt, Generic | Starts the original target in 1RemoteCLI's shared pseudoconsole and carries the confirmed type into the local and web session lists. |
 
 Some shortcuts are refused, and each one says why:
 
@@ -196,11 +204,14 @@ its session will be an empty terminal.
 | `1remote install` | Start the agent now and at every logon, and put `1remote` on your `PATH` |
 | `1remote uninstall` | Undo `install` |
 | `1remote update` | Install the latest release over this one |
-| `1remote wrap-shortcut <path.lnk>` | Copy a desktop shortcut into one that shares its session |
+| `1remote wrap-shortcut <path.lnk> --type <type>` | Create a confirmed desktop shortcut that shares its session |
+| `1remote new-chat --type copilot --cwd <path>` | Create a Copilot ACP chat through the running agent and open it |
 
 | Option | |
 | --- | --- |
 | `--name <text>` | Friendly name for the session, shown on the phone. Defaults to the program name. |
+| `--type <type>` | Confirm `generic`, `cmd`, `powershell`, `claude-code`, or `copilot`. |
+| `--cwd <path>` | Working directory for `new-chat`. |
 | `--no-agent` | Run without the agent. The session is **not** shareable. |
 | `--output <path>` | Where `wrap-shortcut` writes. Defaults to beside the original. |
 | `--version`, `-h`/`--help` | As you would expect. |

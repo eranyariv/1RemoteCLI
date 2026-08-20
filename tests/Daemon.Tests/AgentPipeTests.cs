@@ -5,6 +5,7 @@ using System.Security.Principal;
 using System.Text;
 using OneRemoteCli.Daemon.Ipc;
 using OneRemoteCli.Daemon.Wrapper;
+using OneRemoteCli.Protocol.Hub;
 using OneRemoteCli.Protocol.Pipe;
 
 namespace OneRemoteCli.Daemon.Tests;
@@ -111,6 +112,37 @@ public class AgentPipeTests
         await agentSide.SendAsync(PipeMessageKind.SessionAccepted, new SessionAcceptedMessage { SessionId = "s-42" });
 
         Assert.Equal("s-42", await opening.WaitAsync(Timeout));
+    }
+
+    [Fact]
+    public async Task CarriesAChatCreationRequestInBothDirections()
+    {
+        await using var server = new AgentPipeServer(UniquePipeName());
+        Task<AgentPipeConnection> accepting = server.AcceptAsync();
+
+        await using AgentPipeClient client = await AgentPipeClient.ConnectAsync(server.PipeName);
+        await using AgentPipeConnection agentSide = await accepting.WaitAsync(Timeout);
+
+        Task<ChatCreatedMessage> creating = client.CreateChatAsync(
+            @"C:\repo",
+            "My repo",
+            CliType.CopilotCli);
+
+        PipeEnvelope requested = await Receive(agentSide);
+        Assert.Equal(PipeMessageKind.ChatCreate, requested.Kind);
+        ChatCreateMessage request = PipeFraming.DecodePayload<ChatCreateMessage>(requested);
+        Assert.Equal(@"C:\repo", request.Cwd);
+        Assert.Equal("My repo", request.DisplayName);
+        Assert.Equal(CliType.CopilotCli, request.CliType);
+
+        await agentSide.SendAsync(
+            PipeMessageKind.ChatCreated,
+            new ChatCreatedMessage { MachineId = "machine", SessionId = "chat" });
+
+        ChatCreatedMessage created = await creating.WaitAsync(Timeout);
+        Assert.True(created.Ok);
+        Assert.Equal("machine", created.MachineId);
+        Assert.Equal("chat", created.SessionId);
     }
 
     [Fact]

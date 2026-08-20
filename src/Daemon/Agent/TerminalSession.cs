@@ -54,7 +54,8 @@ public sealed class TerminalSession
         int cols,
         int rows,
         string? displayName,
-        ISessionChannel channel)
+        ISessionChannel channel,
+        CliType? cliType = null)
     {
         SessionId = sessionId;
         Program = program;
@@ -67,7 +68,7 @@ public sealed class TerminalSession
         Screen = new SessionScreen(cols, rows);
         StartedUtc = DateTimeOffset.UtcNow;
         _lastOutputTicks = StartedUtc.UtcTicks;
-        _cliType = (int)CliTypes.Detect(program, args);
+        _cliType = (int)(cliType ?? CliTypes.Detect(program, args));
     }
 
     public string SessionId { get; }

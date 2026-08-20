@@ -2,6 +2,7 @@ using System.IO.Pipes;
 using System.Runtime.Versioning;
 using System.Threading.Channels;
 using OneRemoteCli.Daemon.Wrapper;
+using OneRemoteCli.Protocol.Hub;
 using OneRemoteCli.Protocol.Pipe;
 
 namespace OneRemoteCli.Daemon.Ipc;
@@ -28,6 +29,8 @@ public sealed class AgentPipeClient : IAgentConnection
     private readonly Channel<AgentCommand> _commands = Channel.CreateUnbounded<AgentCommand>();
     private readonly Channel<PipeEnvelope> _outbound;
     private readonly TaskCompletionSource<string> _accepted =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<ChatCreatedMessage> _chatCreated =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private readonly CancellationTokenSource _stopping = new();
@@ -114,10 +117,31 @@ public sealed class AgentPipeClient : IAgentConnection
                 Cols = info.Cols,
                 Rows = info.Rows,
                 DisplayName = info.DisplayName,
+                CliType = info.CliType,
             },
             cancellationToken).ConfigureAwait(false);
 
         return await _accepted.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Asks the running agent to create one ACP chat.</summary>
+    public async Task<ChatCreatedMessage> CreateChatAsync(
+        string cwd,
+        string? displayName,
+        CliType cliType,
+        CancellationToken cancellationToken = default)
+    {
+        await SendAsync(
+            PipeMessageKind.ChatCreate,
+            new ChatCreateMessage
+            {
+                Cwd = cwd,
+                DisplayName = displayName,
+                CliType = cliType,
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        return await _chatCreated.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public ValueTask SendOutputAsync(ReadOnlyMemory<byte> bytes, CancellationToken cancellationToken) =>
@@ -199,6 +223,11 @@ public sealed class AgentPipeClient : IAgentConnection
                         _commands.Writer.TryWrite(new AgentCommand.Interrupt());
                         break;
 
+                    case PipeMessageKind.ChatCreated:
+                        _chatCreated.TrySetResult(
+                            PipeFraming.DecodePayload<ChatCreatedMessage>(envelope));
+                        break;
+
                     default:
                         // A frame kind this build does not know about. The envelope
                         // carries its own length, so skipping it keeps the stream in
@@ -220,6 +249,7 @@ public sealed class AgentPipeClient : IAgentConnection
     {
         _fault ??= ex;
         _accepted.TrySetException(ex);
+        _chatCreated.TrySetException(ex);
         _commands.Writer.TryComplete(ex);
         _outbound.Writer.TryComplete(ex);
     }

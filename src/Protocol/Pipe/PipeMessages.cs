@@ -1,4 +1,5 @@
 using MessagePack;
+using OneRemoteCli.Protocol.Hub;
 
 namespace OneRemoteCli.Protocol.Pipe;
 
@@ -28,6 +29,12 @@ public enum PipeMessageKind : byte
 
     /// <summary>Agent to wrapper: send 0x03 to the PTY.</summary>
     Interrupt = 7,
+
+    /// <summary>Shortcut launcher to agent: create a new ACP chat.</summary>
+    ChatCreate = 8,
+
+    /// <summary>Agent to shortcut launcher: the ACP chat was created or refused.</summary>
+    ChatCreated = 9,
 }
 
 /// <summary>
@@ -67,6 +74,10 @@ public sealed class SessionOpenedMessage
     /// <summary>Optional friendly label; the agent falls back to the program name.</summary>
     [Key(5)]
     public string? DisplayName { get; set; }
+
+    /// <summary>User-confirmed type, or null when the agent should detect it.</summary>
+    [Key(6)]
+    public CliType? CliType { get; set; }
 }
 
 /// <summary>Agent to wrapper. Confirms registration and assigns the session id.</summary>
@@ -119,4 +130,37 @@ public sealed class ResizeMessage
 [MessagePackObject]
 public sealed class InterruptMessage
 {
+}
+
+/// <summary>Shortcut launcher to agent. Requests one new ACP chat.</summary>
+[MessagePackObject]
+public sealed class ChatCreateMessage
+{
+    [Key(0)]
+    public string Cwd { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string? DisplayName { get; set; }
+
+    [Key(2)]
+    public CliType CliType { get; set; }
+}
+
+/// <summary>Agent to shortcut launcher. Identifies the new chat or explains the refusal.</summary>
+[MessagePackObject]
+public sealed class ChatCreatedMessage
+{
+    [Key(0)]
+    public string? MachineId { get; set; }
+
+    [Key(1)]
+    public string? SessionId { get; set; }
+
+    [Key(2)]
+    public string? Problem { get; set; }
+
+    [IgnoreMember]
+    public bool Ok => Problem is null &&
+                      !string.IsNullOrWhiteSpace(MachineId) &&
+                      !string.IsNullOrWhiteSpace(SessionId);
 }

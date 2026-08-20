@@ -20,6 +20,7 @@ public sealed class WrapperConnection : ISessionChannel
     private readonly ISessionSink _sink;
     private readonly Action<string>? _log;
     private readonly TimeSpan? _outputTick;
+    private readonly Func<ChatCreateMessage, CancellationToken, Task<ChatCreatedMessage>>? _createChat;
 
     private TerminalSession? _session;
     private SessionOutputPump? _pump;
@@ -31,13 +32,15 @@ public sealed class WrapperConnection : ISessionChannel
         SessionRegistry registry,
         ISessionSink? sink = null,
         Action<string>? log = null,
-        TimeSpan? outputTick = null)
+        TimeSpan? outputTick = null,
+        Func<ChatCreateMessage, CancellationToken, Task<ChatCreatedMessage>>? createChat = null)
     {
         _connection = connection ?? throw new ArgumentNullException(nameof(connection));
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _sink = sink ?? NullSessionSink.Instance;
         _log = log;
         _outputTick = outputTick;
+        _createChat = createChat;
     }
 
     /// <summary>The session this wrapper registered, or null before it has.</summary>
@@ -121,6 +124,12 @@ public sealed class WrapperConnection : ISessionChannel
                     .ConfigureAwait(false);
                 return false;
 
+            case PipeMessageKind.ChatCreate:
+                await OnChatCreateAsync(
+                    PipeFraming.DecodePayload<ChatCreateMessage>(envelope),
+                    cancellationToken).ConfigureAwait(false);
+                return false;
+
             default:
                 // Either a frame kind this build does not know, or an agent-to-wrapper
                 // frame arriving in the wrong direction. Both are skippable: the
@@ -129,6 +138,43 @@ public sealed class WrapperConnection : ISessionChannel
                 // mixed-version installs for no gain.
                 return true;
         }
+    }
+
+    private async Task OnChatCreateAsync(
+        ChatCreateMessage message,
+        CancellationToken cancellationToken)
+    {
+        ChatCreatedMessage result;
+
+        if (_session is not null)
+        {
+            result = new ChatCreatedMessage
+            {
+                Problem = "A terminal connection cannot also create an ACP chat.",
+            };
+        }
+        else if (_createChat is null)
+        {
+            result = new ChatCreatedMessage
+            {
+                Problem = "This 1RemoteCLI agent does not support creating ACP chats.",
+            };
+        }
+        else
+        {
+            try
+            {
+                result = await _createChat(message, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _log?.Invoke($"1remote: could not create an ACP chat ({ex.Message}).");
+                result = new ChatCreatedMessage { Problem = ex.Message };
+            }
+        }
+
+        await _connection.SendAsync(PipeMessageKind.ChatCreated, result, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async Task OnSessionOpenedAsync(SessionOpenedMessage message, CancellationToken cancellationToken)
@@ -146,7 +192,8 @@ public sealed class WrapperConnection : ISessionChannel
             message.Cols,
             message.Rows,
             message.DisplayName,
-            this);
+            this,
+            message.CliType);
 
         // Accept first: the wrapper blocks on this before it starts pumping output,
         // so anything the sink does slowly must not sit in front of it.

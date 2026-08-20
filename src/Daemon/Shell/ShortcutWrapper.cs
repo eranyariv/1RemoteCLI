@@ -1,5 +1,6 @@
 using System.Runtime.Versioning;
 using OneRemoteCli.Daemon.Cli;
+using OneRemoteCli.Protocol.Hub;
 
 namespace OneRemoteCli.Daemon.Shell;
 
@@ -16,6 +17,25 @@ public enum ProgramKind
     Graphical,
 }
 
+/// <summary>How the generated shortcut reaches the selected CLI.</summary>
+public enum ShortcutPlanKind
+{
+    ConsoleWrapper,
+    CopilotAcp,
+}
+
+/// <summary>The safe, side-effect-free result shown before the user confirms a type.</summary>
+public readonly record struct ShortcutAnalysis(
+    string? Problem,
+    string DisplayName,
+    CliType DetectedType)
+{
+    public bool Ok => Problem is null;
+
+    internal static ShortcutAnalysis Refused(string problem) =>
+        new(problem, string.Empty, CliType.Generic);
+}
+
 /// <summary>
 /// The outcome of planning a wrap: either a shortcut to write, or a reason not to.
 /// </summary>
@@ -29,17 +49,21 @@ public enum ProgramKind
 /// <param name="OutputPath">Where the wrapped shortcut goes.</param>
 /// <param name="Link">What to write there.</param>
 /// <param name="DisplayName">What the session will be called on the phone.</param>
+/// <param name="Kind">Whether this is a console wrapper or an ACP chat launcher.</param>
+/// <param name="CliType">The user-confirmed type persisted by the shortcut.</param>
 public readonly record struct WrapPlan(
     string? Problem,
     string? Warning,
     string OutputPath,
     ShellLinkInfo Link,
-    string DisplayName)
+    string DisplayName,
+    ShortcutPlanKind Kind,
+    CliType CliType)
 {
     public bool Ok => Problem is null;
 
     internal static WrapPlan Refused(string problem) =>
-        new(problem, null, string.Empty, default, string.Empty);
+        new(problem, null, string.Empty, default, string.Empty, ShortcutPlanKind.ConsoleWrapper, CliType.Generic);
 }
 
 /// <summary>
@@ -93,7 +117,8 @@ public static class ShortcutWrapper
         string agentPath,
         string? outputPath = null,
         Func<string, bool>? exists = null,
-        Func<string, ProgramKind>? classify = null)
+        Func<string, ProgramKind>? classify = null,
+        CliType? cliType = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(agentPath);
@@ -101,33 +126,14 @@ public static class ShortcutWrapper
         exists ??= File.Exists;
         classify ??= Classify;
 
-        if (!source.HasProgram)
+        ShortcutAnalysis analysis = Analyze(sourcePath, source, agentPath);
+        if (!analysis.Ok)
         {
-            // Store and MSIX shortcuts carry an AppUserModelID and no file. There is
-            // nothing to hand to a pseudoconsole, and writing a shortcut anyway would
-            // produce one that fails on double-click with no clue as to why.
-            return WrapPlan.Refused(
-                $"'{Path.GetFileName(sourcePath)}' does not name a program to run — it is a Store or packaged app shortcut, "
-                + "which 1remote cannot start. Wrap the tool's own .exe or .cmd instead.");
+            return WrapPlan.Refused(analysis.Problem!);
         }
 
-        if (source.RunAsAdministrator)
-        {
-            // The agent runs as the user, unelevated, and its pipe is ACL'd to that
-            // user's SID. An elevated child cannot connect to it, so the wrapped
-            // shortcut would launch and then immediately report the agent as missing.
-            return WrapPlan.Refused(
-                $"'{Path.GetFileName(sourcePath)}' runs as administrator. The 1remote agent is per-user and unelevated, "
-                + "so an elevated session could not reach it.");
-        }
-
-        if (IsAgent(source.Target, agentPath))
-        {
-            return WrapPlan.Refused(
-                $"'{Path.GetFileName(sourcePath)}' already starts a 1remote session. Wrapping it again would nest one inside the other.");
-        }
-
-        string displayName = NameOf(sourcePath);
+        CliType confirmedType = cliType ?? analysis.DetectedType;
+        string displayName = analysis.DisplayName;
         string? destination = outputPath ?? Choose(Path.GetDirectoryName(Path.GetFullPath(sourcePath)) ?? ".", displayName, exists);
 
         if (destination is null)
@@ -136,7 +142,12 @@ public static class ShortcutWrapper
                 $"There are already {Variants} wrapped copies of '{displayName}' beside it. Delete some, or pass --output.");
         }
 
-        string? warning = classify(source.Target) == ProgramKind.Graphical
+        string workingDirectory = WorkingDirectory(source);
+        ShortcutPlanKind planKind = confirmedType == CliType.CopilotCli
+            ? ShortcutPlanKind.CopilotAcp
+            : ShortcutPlanKind.ConsoleWrapper;
+        string? warning = planKind == ShortcutPlanKind.ConsoleWrapper &&
+                          classify(source.Target) == ProgramKind.Graphical
             ? $"'{Path.GetFileName(source.Target)}' is a windowed program, so its session will show an empty terminal. "
               + "Wrapped anyway, in case that is what you meant."
             : null;
@@ -147,20 +158,59 @@ public static class ShortcutWrapper
             destination,
             new ShellLinkInfo(
                 agentPath,
-                Arguments(displayName, source),
-                // The original's working directory, which for a great many tools is the
-                // only reason they work at all. Falling back to the target's own folder
-                // rather than to nothing: an empty working directory means "inherit",
-                // and what would be inherited is Explorer's, which is unpredictable.
-                source.WorkingDirectory.Length > 0
-                    ? source.WorkingDirectory
-                    : Path.GetDirectoryName(source.Target) ?? string.Empty,
-                // Copied so the wrapped shortcut still looks like the tool it launches.
-                // A desktop full of identical 1remote icons is a feature nobody uses.
+                planKind == ShortcutPlanKind.CopilotAcp
+                    ? AcpArguments(displayName, workingDirectory)
+                    : WrapperArguments(displayName, source, confirmedType),
+                workingDirectory,
                 source.IconPath.Length > 0 ? source.IconPath : source.Target,
                 source.IconPath.Length > 0 ? source.IconIndex : 0,
-                $"Runs {displayName} in a 1RemoteCLI session you can reach from your phone."),
-            displayName);
+                planKind == ShortcutPlanKind.CopilotAcp
+                    ? $"Creates a {displayName} ACP chat and opens it in 1RemoteCLI."
+                    : $"Runs {displayName} in a 1RemoteCLI session you can reach from your phone."),
+            displayName,
+            planKind,
+            confirmedType);
+    }
+
+    /// <summary>Inspects a shortcut without creating or overwriting anything.</summary>
+    public static ShortcutAnalysis Analyze(
+        string sourcePath,
+        ShellLinkInfo source,
+        string agentPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentPath);
+
+        if (!source.HasProgram)
+        {
+            // Store and MSIX shortcuts carry an AppUserModelID and no file. There is
+            // nothing to hand to a pseudoconsole, and writing a shortcut anyway would
+            // produce one that fails on double-click with no clue as to why.
+            return ShortcutAnalysis.Refused(
+                $"'{Path.GetFileName(sourcePath)}' does not name a program to run — it is a Store or packaged app shortcut, "
+                + "which 1remote cannot start. Wrap the tool's own .exe or .cmd instead.");
+        }
+
+        if (source.RunAsAdministrator)
+        {
+            // The agent runs as the user, unelevated, and its pipe is ACL'd to that
+            // user's SID. An elevated child cannot connect to it, so the wrapped
+            // shortcut would launch and then immediately report the agent as missing.
+            return ShortcutAnalysis.Refused(
+                $"'{Path.GetFileName(sourcePath)}' runs as administrator. The 1remote agent is per-user and unelevated, "
+                + "so an elevated session could not reach it.");
+        }
+
+        if (IsAgent(source.Target, agentPath))
+        {
+            return ShortcutAnalysis.Refused(
+                $"'{Path.GetFileName(sourcePath)}' is already managed by 1RemoteCLI. Creating another shortcut from it would nest or duplicate the session.");
+        }
+
+        return new ShortcutAnalysis(
+            null,
+            NameOf(sourcePath),
+            CliTypes.Detect(source.Target, source.Arguments));
     }
 
     /// <summary>
@@ -173,12 +223,21 @@ public static class ShortcutWrapper
     /// do — against no benefit, since this is copying a command line, not reading one.
     /// </para>
     /// </summary>
-    private static string Arguments(string displayName, ShellLinkInfo source)
+    private static string WrapperArguments(string displayName, ShellLinkInfo source, CliType cliType)
     {
-        string wrapped = $"--name {CommandLine.Quote(displayName)} -- {CommandLine.Quote(source.Target)}";
+        string wrapped =
+            $"--name {CommandLine.Quote(displayName)} --type {CliTypes.Token(cliType)} -- {CommandLine.Quote(source.Target)}";
 
         return source.Arguments.Length > 0 ? $"{wrapped} {source.Arguments}" : wrapped;
     }
+
+    private static string AcpArguments(string displayName, string workingDirectory) =>
+        $"new-chat --type copilot --name {CommandLine.Quote(displayName)} --cwd {CommandLine.Quote(workingDirectory)}";
+
+    private static string WorkingDirectory(ShellLinkInfo source) =>
+        source.WorkingDirectory.Length > 0
+            ? source.WorkingDirectory
+            : Path.GetDirectoryName(source.Target) ?? string.Empty;
 
     /// <summary>
     /// What to call the session, taken from the shortcut's own file name.

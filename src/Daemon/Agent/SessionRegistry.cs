@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using OneRemoteCli.Protocol.Hub;
 
 namespace OneRemoteCli.Daemon.Agent;
 
@@ -29,7 +30,8 @@ public sealed class SessionRegistry
         int cols,
         int rows,
         string? displayName,
-        ISessionChannel channel)
+        ISessionChannel channel,
+        CliType? cliType = null)
     {
         // A GUID, not a counter: ids leave this machine, and a counter would make
         // one machine's session id collide with another's the moment the phone
@@ -42,7 +44,8 @@ public sealed class SessionRegistry
             cols,
             rows,
             displayName,
-            channel);
+            channel,
+            cliType);
 
         _sessions[session.SessionId] = session;
         Changed?.Invoke();

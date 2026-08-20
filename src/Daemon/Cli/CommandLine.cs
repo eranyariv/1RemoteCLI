@@ -1,3 +1,5 @@
+using OneRemoteCli.Protocol.Hub;
+
 namespace OneRemoteCli.Daemon.Cli;
 
 /// <summary>What the user asked <c>1remote</c> to do.</summary>
@@ -47,6 +49,9 @@ public enum CommandKind
     /// shareable session.
     /// </summary>
     WrapShortcut,
+
+    /// <summary>Ask the running agent to create and open a new ACP chat.</summary>
+    NewChat,
 }
 
 /// <summary>A parsed command line.</summary>
@@ -60,6 +65,8 @@ public enum CommandKind
 /// <param name="Error">Why parsing failed, or null when it succeeded.</param>
 /// <param name="ShortcutPath">The <c>.lnk</c> to wrap, for <see cref="CommandKind.WrapShortcut"/>.</param>
 /// <param name="OutputPath">Where to write the wrapped shortcut, when the user named a place.</param>
+/// <param name="ExplicitCliType">A user-confirmed CLI type, or null to keep automatic detection.</param>
+/// <param name="Cwd">Working directory for a newly created ACP chat.</param>
 public sealed record ParsedCommand(
     CommandKind Kind,
     string? Program = null,
@@ -68,7 +75,9 @@ public sealed record ParsedCommand(
     bool RequireAgent = true,
     string? Error = null,
     string? ShortcutPath = null,
-    string? OutputPath = null)
+    string? OutputPath = null,
+    CliType? ExplicitCliType = null,
+    string? Cwd = null)
 {
     public IReadOnlyList<string> Args { get; init; } = Args ?? [];
 }
@@ -118,6 +127,7 @@ public static class CommandLine
     /// word is the last token, and this one is always followed by a path.
     /// </summary>
     private const string WrapShortcutCommand = "wrap-shortcut";
+    private const string NewChatCommand = "new-chat";
 
     public static ParsedCommand Parse(IReadOnlyList<string> argv)
     {
@@ -129,6 +139,7 @@ public static class CommandLine
         }
 
         string? displayName = null;
+        CliType? explicitCliType = null;
         bool requireAgent = true;
         int i = 0;
 
@@ -151,6 +162,22 @@ public static class CommandLine
                     }
 
                     displayName = argv[i + 1];
+                    i += 2;
+                    continue;
+
+                case "--type":
+                    if (i + 1 >= argv.Count)
+                    {
+                        return Fail("--type requires a value.");
+                    }
+
+                    if (!CliTypes.TryParse(argv[i + 1], out CliType cliType))
+                    {
+                        return Fail(
+                            $"Unknown CLI type '{argv[i + 1]}'. Use generic, cmd, powershell, claude-code, or copilot.");
+                    }
+
+                    explicitCliType = cliType;
                     i += 2;
                     continue;
 
@@ -197,12 +224,18 @@ public static class CommandLine
             return ParseWrapShortcut(argv, i + 1);
         }
 
+        if (string.Equals(program, NewChatCommand, StringComparison.Ordinal))
+        {
+            return ParseNewChat(argv, i + 1);
+        }
+
         return new ParsedCommand(
             CommandKind.Wrap,
             program,
             argv.Skip(i + 1).ToArray(),
             displayName,
-            requireAgent);
+            requireAgent,
+            ExplicitCliType: explicitCliType);
     }
 
     /// <summary>
@@ -218,6 +251,7 @@ public static class CommandLine
     {
         string? source = null;
         string? output = null;
+        CliType? explicitCliType = null;
 
         while (i < argv.Count)
         {
@@ -231,6 +265,24 @@ public static class CommandLine
                 }
 
                 output = argv[i + 1];
+                i += 2;
+                continue;
+            }
+
+            if (token == "--type")
+            {
+                if (i + 1 >= argv.Count)
+                {
+                    return Fail("--type requires a value.");
+                }
+
+                if (!CliTypes.TryParse(argv[i + 1], out CliType cliType))
+                {
+                    return Fail(
+                        $"Unknown CLI type '{argv[i + 1]}'. Use generic, cmd, powershell, claude-code, or copilot.");
+                }
+
+                explicitCliType = cliType;
                 i += 2;
                 continue;
             }
@@ -253,7 +305,63 @@ public static class CommandLine
 
         return source is null
             ? Fail("wrap-shortcut needs the path of a .lnk to wrap.")
-            : new ParsedCommand(CommandKind.WrapShortcut, ShortcutPath: source, OutputPath: output);
+            : new ParsedCommand(
+                CommandKind.WrapShortcut,
+                ShortcutPath: source,
+                OutputPath: output,
+                ExplicitCliType: explicitCliType);
+    }
+
+    private static ParsedCommand ParseNewChat(IReadOnlyList<string> argv, int i)
+    {
+        string? name = null;
+        string? cwd = null;
+        CliType? type = null;
+
+        while (i < argv.Count)
+        {
+            string token = argv[i];
+            if (token is not ("--name" or "--cwd" or "--type") || i + 1 >= argv.Count)
+            {
+                return Fail(
+                    token.StartsWith('-')
+                        ? $"{token} requires a value."
+                        : $"Unexpected new-chat argument '{token}'.");
+            }
+
+            string value = argv[i + 1];
+            switch (token)
+            {
+                case "--name":
+                    name = value;
+                    break;
+                case "--cwd":
+                    cwd = value;
+                    break;
+                case "--type":
+                    if (!CliTypes.TryParse(value, out CliType parsed))
+                    {
+                        return Fail($"Unknown CLI type '{value}'.");
+                    }
+                    type = parsed;
+                    break;
+            }
+
+            i += 2;
+        }
+
+        if (type != CliType.CopilotCli)
+        {
+            return Fail("new-chat currently requires --type copilot.");
+        }
+
+        return string.IsNullOrWhiteSpace(cwd)
+            ? Fail("new-chat requires --cwd.")
+            : new ParsedCommand(
+                CommandKind.NewChat,
+                DisplayName: name,
+                ExplicitCliType: type,
+                Cwd: cwd);
     }
 
     private static ParsedCommand Fail(string message) => new(CommandKind.Help, Error: message);
@@ -342,10 +450,13 @@ public static class CommandLine
           1remote install                         Start the agent now and at every logon
           1remote uninstall                       Stop starting the agent at logon
           1remote update                          Install the latest release
-          1remote wrap-shortcut <shortcut.lnk>    Copy a shortcut into a shareable one
+          1remote wrap-shortcut <shortcut.lnk>    Create a confirmed shareable shortcut
+          1remote new-chat [options]              Create and open an ACP chat
 
         Options:
           --name <text>   Friendly name for the session (defaults to the program name)
+          --type <type>   Confirm CLI type: generic, cmd, powershell, claude-code, copilot
+          --cwd <path>    Working directory for new-chat
           --no-agent      Run without the agent. The session is NOT shareable.
           --output <path> Where wrap-shortcut writes (defaults to beside the original)
           --version       Print the version

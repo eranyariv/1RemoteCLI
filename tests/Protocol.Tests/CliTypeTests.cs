@@ -103,6 +103,24 @@ public class CliTypeTests
         Assert.Equal(CliType.CopilotCli, CliTypes.Detect("cmd", ["/k", "gh copilot"]));
     }
 
+    [Fact]
+    public void ReadsTheRawArgumentStringStoredInAShortcut()
+    {
+        Assert.Equal(
+            CliType.CopilotCli,
+            CliTypes.Detect("cmd.exe", "/k \"copilot --resume\""));
+    }
+
+    [Fact]
+    public void RoundTripsEveryPersistedTypeToken()
+    {
+        foreach (CliType expected in Enum.GetValues<CliType>())
+        {
+            Assert.True(CliTypes.TryParse(CliTypes.Token(expected), out CliType actual));
+            Assert.Equal(expected, actual);
+        }
+    }
+
     /// <summary>
     /// One shell can start another, and the tool is still what is on screen.
     /// </summary>

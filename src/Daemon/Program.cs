@@ -13,6 +13,7 @@ using OneRemoteCli.Daemon.Chat;
 using OneRemoteCli.Daemon.Diagnostics;
 using OneRemoteCli.Daemon.Hub;
 using OneRemoteCli.Daemon.Install;
+using OneRemoteCli.Daemon.Ipc;
 using OneRemoteCli.Daemon.Pty;
 using OneRemoteCli.Daemon.Shell;
 using OneRemoteCli.Daemon.Tray;
@@ -21,6 +22,7 @@ using OneRemoteCli.Daemon.Wrapper;
 using OneRemoteCli.Protocol;
 using OneRemoteCli.Protocol.Diagnostics;
 using OneRemoteCli.Protocol.Hub;
+using OneRemoteCli.Protocol.Pipe;
 
 namespace OneRemoteCli.Daemon;
 
@@ -52,6 +54,7 @@ public static class Program
 
     /// <summary>A shortcut could not be wrapped, and the reason has been printed.</summary>
     private const int ExitCannotWrap = 8;
+    private const int ExitCannotCreateChat = 9;
 
     public static async Task<int> Main(string[] args)
     {
@@ -112,6 +115,9 @@ public static class Program
 
             case CommandKind.WrapShortcut:
                 return RunWrapShortcut(command);
+
+            case CommandKind.NewChat:
+                return await RunNewChatAsync(command).ConfigureAwait(false);
 
             default:
                 return await RunWrappedAsync(command).ConfigureAwait(false);
@@ -349,7 +355,10 @@ public static class Program
     /// </summary>
     private static int RunWrapShortcut(ParsedCommand command)
     {
-        SettingsNotice result = Wrap(command.ShortcutPath!, command.OutputPath);
+        SettingsNotice result = Wrap(
+            command.ShortcutPath!,
+            command.OutputPath,
+            command.ExplicitCliType) ?? new SettingsNotice("Cancelled.", NoticeKind.Information);
 
         if (result.Kind == NoticeKind.Problem)
         {
@@ -370,7 +379,11 @@ public static class Program
     /// in a message box.
     /// </para>
     /// </summary>
-    private static SettingsNotice Wrap(string sourcePath, string? outputPath)
+    private static SettingsNotice? Wrap(
+        string sourcePath,
+        string? outputPath,
+        CliType? confirmedType = null,
+        Func<ShortcutAnalysis, CliType?>? chooseType = null)
     {
         string full;
 
@@ -410,7 +423,35 @@ public static class Program
             return new SettingsNotice($"Could not read '{Path.GetFileName(full)}': {ex.Message}", NoticeKind.Problem);
         }
 
-        WrapPlan plan = ShortcutWrapper.Plan(full, source, Installer.ExecutablePath, outputPath);
+        ShortcutAnalysis analysis = ShortcutWrapper.Analyze(full, source, Installer.ExecutablePath);
+        if (!analysis.Ok)
+        {
+            return new SettingsNotice(analysis.Problem!, NoticeKind.Problem);
+        }
+
+        if (confirmedType is null)
+        {
+            if (chooseType is null)
+            {
+                return new SettingsNotice(
+                    $"Detected {CliTypes.Label(analysis.DetectedType)} for '{analysis.DisplayName}'. "
+                    + $"Confirm it or override it by passing --type {CliTypes.Token(analysis.DetectedType)}.",
+                    NoticeKind.Problem);
+            }
+
+            confirmedType = chooseType(analysis);
+            if (confirmedType is null)
+            {
+                return null;
+            }
+        }
+
+        WrapPlan plan = ShortcutWrapper.Plan(
+            full,
+            source,
+            Installer.ExecutablePath,
+            outputPath,
+            cliType: confirmedType);
 
         if (!plan.Ok)
         {
@@ -426,8 +467,11 @@ public static class Program
             return new SettingsNotice($"Could not write '{plan.OutputPath}': {ex.Message}", NoticeKind.Problem);
         }
 
+        string action = plan.Kind == ShortcutPlanKind.CopilotAcp
+            ? $"Created an ACP launcher for '{plan.DisplayName}'."
+            : $"Wrapped '{plan.DisplayName}' as {CliTypes.Label(plan.CliType)}.";
         string done =
-            $"Wrapped '{plan.DisplayName}'.{Environment.NewLine}{Environment.NewLine}"
+            $"{action}{Environment.NewLine}{Environment.NewLine}"
             + $"Created {plan.OutputPath}.{Environment.NewLine}"
             + "Start it from there and the session shows up on your phone.";
 
@@ -520,7 +564,35 @@ public static class Program
             sessions,
             hub,
             log: Console.Error.WriteLine,
-            awaitingInput: AwaitingInputOptions.Load(log: Console.Error.WriteLine));
+            awaitingInput: AwaitingInputOptions.Load(log: Console.Error.WriteLine),
+            createChat: async (request, cancellationToken) =>
+            {
+                if (request.CliType != CliType.CopilotCli)
+                {
+                    return new ChatCreatedMessage
+                    {
+                        Problem = "Only GitHub Copilot CLI shortcuts can create ACP chats.",
+                    };
+                }
+
+                if (chats.CliType != CliType.CopilotCli)
+                {
+                    return new ChatCreatedMessage
+                    {
+                        Problem = "This agent is configured for a different ACP provider.",
+                    };
+                }
+
+                AcpSession session = await chats.CreateAsync(
+                    request.Cwd,
+                    request.DisplayName,
+                    cancellationToken).ConfigureAwait(false);
+                return new ChatCreatedMessage
+                {
+                    MachineId = identity.MachineId,
+                    SessionId = session.SessionId,
+                };
+            });
 
         // Signing in and out happen in other processes, so the only way the agent finds
         // out is by watching the file they share. Without this a sign-out is cosmetic:
@@ -797,7 +869,12 @@ public static class Program
 
         // Cancelling is a decision, not a failure. Saying anything about it would make
         // backing out of the dialog cost an extra click.
-        return picked is null ? null : Wrap(picked, null);
+        return picked is null
+            ? null
+            : Wrap(
+                picked,
+                outputPath: null,
+                chooseType: analysis => ShortcutTypePicker.Pick(owner, analysis));
     }
 
     /// <summary>Hands something to the shell to open — a URL, a folder or this executable.</summary>
@@ -818,6 +895,51 @@ public static class Program
         {
             Console.Error.WriteLine($"1remote: could not open {target} ({ex.Message}).");
         }
+    }
+
+    private static async Task<int> RunNewChatAsync(ParsedCommand command)
+    {
+        ChatCreatedMessage result;
+
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            await using AgentPipeClient agent =
+                await AgentPipeClient.ConnectAsync(cancellationToken: timeout.Token)
+                    .ConfigureAwait(false);
+            result = await agent.CreateChatAsync(
+                command.Cwd!,
+                command.DisplayName,
+                command.ExplicitCliType!.Value,
+                timeout.Token).ConfigureAwait(false);
+        }
+        catch (AgentUnavailableException ex)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return ExitAgentUnavailable;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException)
+        {
+            Console.Error.WriteLine($"1remote: could not create the chat ({ex.Message}).");
+            return ExitCannotCreateChat;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("1remote: the agent did not create the chat within 15 seconds.");
+            return ExitCannotCreateChat;
+        }
+
+        if (!result.Ok)
+        {
+            Console.Error.WriteLine($"1remote: {result.Problem ?? "the agent returned an incomplete chat."}");
+            return ExitCannotCreateChat;
+        }
+
+        string query =
+            $"?machine={Uri.EscapeDataString(result.MachineId!)}&session={Uri.EscapeDataString(result.SessionId!)}";
+        Launch(new Uri(HubEndpoint.AppUri(), query).ToString());
+        Console.WriteLine($"Created '{command.DisplayName ?? "GitHub Copilot chat"}' and opened it in 1RemoteCLI.");
+        return 0;
     }
 
     private static async Task<int> RunWrappedAsync(ParsedCommand command)
@@ -874,7 +996,8 @@ public static class Program
                         Environment.CurrentDirectory,
                         terminal.Cols,
                         terminal.Rows,
-                        command.DisplayName),
+                        command.DisplayName,
+                        command.ExplicitCliType),
                     CancellationToken.None).ConfigureAwait(false);
 
                 var session = new WrapperSession(pty, terminal, agent, Console.Error.WriteLine);

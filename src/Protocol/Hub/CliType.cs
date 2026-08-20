@@ -82,6 +82,41 @@ public static class CliTypes
     public static CliType Detect(string? program, IReadOnlyList<string>? args = null) =>
         Detect(program, args, Shells);
 
+    /// <summary>
+    /// Detects a shortcut command line without first normalising the arguments.
+    /// Shell links store their argument tail as one already-quoted string, so splitting
+    /// it here with the same tokenizer used for nested shell commands avoids callers
+    /// inventing subtly different quoting rules.
+    /// </summary>
+    public static CliType Detect(string? program, string? arguments) =>
+        Detect(program, Tokenise(arguments ?? string.Empty).ToArray(), Shells);
+
+    /// <summary>A stable command-line token for persisting an explicit user choice.</summary>
+    public static string Token(CliType type) => type switch
+    {
+        CliType.Cmd => "cmd",
+        CliType.PowerShell => "powershell",
+        CliType.ClaudeCode => "claude-code",
+        CliType.CopilotCli => "copilot",
+        _ => "generic",
+    };
+
+    /// <summary>Reads a token accepted by <c>1remote --type</c>.</summary>
+    public static bool TryParse(string? value, out CliType type)
+    {
+        type = (value ?? string.Empty).Trim().ToLowerInvariant() switch
+        {
+            "generic" => CliType.Generic,
+            "cmd" or "command-prompt" => CliType.Cmd,
+            "powershell" or "pwsh" => CliType.PowerShell,
+            "claude" or "claude-code" => CliType.ClaudeCode,
+            "copilot" or "copilot-cli" => CliType.CopilotCli,
+            _ => (CliType)(-1),
+        };
+
+        return Enum.IsDefined(type);
+    }
+
     private static CliType Detect(string? program, IReadOnlyList<string>? args, int depth)
     {
         string name = FileName(program);

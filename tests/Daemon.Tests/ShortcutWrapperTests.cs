@@ -1,4 +1,5 @@
 using OneRemoteCli.Daemon.Shell;
+using OneRemoteCli.Protocol.Hub;
 
 namespace OneRemoteCli.Daemon.Tests;
 
@@ -21,8 +22,16 @@ public sealed class ShortcutWrapperTests
         string sourcePath = @"C:\Users\ada\Desktop\Claude Code.lnk",
         string? outputPath = null,
         Func<string, bool>? exists = null,
-        ProgramKind kind = ProgramKind.Console) =>
-        ShortcutWrapper.Plan(sourcePath, source, Agent, outputPath, exists ?? (_ => false), _ => kind);
+        ProgramKind kind = ProgramKind.Console,
+        CliType? cliType = null) =>
+        ShortcutWrapper.Plan(
+            sourcePath,
+            source,
+            Agent,
+            outputPath,
+            exists ?? (_ => false),
+            _ => kind,
+            cliType);
 
     private static ShellLinkInfo Source(
         string target = @"C:\tools\claude\claude.cmd",
@@ -65,7 +74,7 @@ public sealed class ShortcutWrapperTests
             sourcePath: @"C:\Users\ada\Desktop\Claude Code (1Remote).lnk");
 
         Assert.False(plan.Ok);
-        Assert.Contains("already starts a 1remote session", plan.Problem!, StringComparison.Ordinal);
+        Assert.Contains("already managed by 1RemoteCLI", plan.Problem!, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -90,7 +99,7 @@ public sealed class ShortcutWrapperTests
         // The original program is quoted because its path has a space in it. Getting
         // this wrong produces a session that tries to run "C:\Program".
         Assert.Equal(
-            "--name \"Claude Code\" -- \"C:\\Program Files\\claude\\claude.cmd\" --dangerously-skip",
+            "--name \"Claude Code\" --type claude-code -- \"C:\\Program Files\\claude\\claude.cmd\" --dangerously-skip",
             plan.Link.Arguments);
     }
 
@@ -100,8 +109,54 @@ public sealed class ShortcutWrapperTests
         // Quotes are added where they are needed, not everywhere. A command line full
         // of unnecessary quoting is one nobody can read back when it goes wrong.
         Assert.Equal(
-            "--name \"Claude Code\" -- C:\\tools\\claude.cmd",
+            "--name \"Claude Code\" --type claude-code -- C:\\tools\\claude.cmd",
             Plan(Source(target: @"C:\tools\claude.cmd")).Link.Arguments);
+    }
+
+    [Fact]
+    public void CopilotCreatesAnAcpLauncherInsteadOfAConsoleWrapper()
+    {
+        WrapPlan plan = Plan(
+            Source(
+                target: @"C:\tools\copilot.exe",
+                arguments: "--allow-all-tools",
+                workingDirectory: @"C:\repo"),
+            sourcePath: @"C:\Users\ada\Desktop\Copilot.lnk");
+
+        Assert.True(plan.Ok);
+        Assert.Equal(ShortcutPlanKind.CopilotAcp, plan.Kind);
+        Assert.Equal(CliType.CopilotCli, plan.CliType);
+        Assert.Equal(Agent, plan.Link.Target);
+        Assert.Equal(
+            "new-chat --type copilot --name Copilot --cwd C:\\repo",
+            plan.Link.Arguments);
+        Assert.DoesNotContain("--allow-all-tools", plan.Link.Arguments, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UserOverrideWinsOverDetectionAndIsPersisted()
+    {
+        WrapPlan plan = Plan(
+            Source(target: @"C:\tools\copilot.exe"),
+            cliType: CliType.Generic);
+
+        Assert.Equal(ShortcutPlanKind.ConsoleWrapper, plan.Kind);
+        Assert.Equal(CliType.Generic, plan.CliType);
+        Assert.Contains("--type generic", plan.Link.Arguments, StringComparison.Ordinal);
+        Assert.EndsWith(@"-- C:\tools\copilot.exe", plan.Link.Arguments, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnalysisReportsTheTypeWithoutCreatingAPlan()
+    {
+        ShortcutAnalysis analysis = ShortcutWrapper.Analyze(
+            @"C:\Users\ada\Desktop\Copilot.lnk",
+            Source(target: "cmd.exe", arguments: "/k \"copilot --resume\""),
+            Agent);
+
+        Assert.True(analysis.Ok);
+        Assert.Equal("Copilot", analysis.DisplayName);
+        Assert.Equal(CliType.CopilotCli, analysis.DetectedType);
     }
 
     [Fact]

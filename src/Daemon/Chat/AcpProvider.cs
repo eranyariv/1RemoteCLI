@@ -17,6 +17,7 @@ public sealed class AcpProvider : IAsyncDisposable
     private static readonly TimeSpan RecentWindow = TimeSpan.FromDays(14);
 
     private readonly ConcurrentDictionary<string, AcpSession> _sessions = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, byte> _createdSessions = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, PendingPermission> _permissions = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _refreshRequested = new(0);
     private readonly Func<string, JsonObject, CancellationToken, Task<JsonElement>>? _call;
@@ -61,6 +62,8 @@ public sealed class AcpProvider : IAsyncDisposable
 
     public int ActiveTurns => Volatile.Read(ref _activeTurns);
 
+    public CliType CliType => _settings.CliType;
+
     public bool HideArchivedSessions => Volatile.Read(ref _hideArchivedSessions) != 0;
 
     public IReadOnlyList<AcpSession> Snapshot() =>
@@ -79,6 +82,57 @@ public sealed class AcpProvider : IAsyncDisposable
         {
             _refreshRequested.Release();
         }
+    }
+
+    /// <summary>Creates a new ACP chat and publishes it before returning.</summary>
+    public async Task<AcpSession> CreateAsync(
+        string cwd,
+        string? displayName = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(cwd);
+
+        string fullCwd = Path.GetFullPath(cwd);
+        JsonElement result = await CallAsync(
+            "session/new",
+            new JsonObject
+            {
+                ["cwd"] = fullCwd,
+                ["mcpServers"] = new JsonArray(),
+            },
+            cancellationToken).ConfigureAwait(false);
+        string? sessionId = String(result, "sessionId");
+
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            throw new InvalidOperationException(
+                $"{_settings.DisplayName} ACP returned no session id for the new chat.");
+        }
+
+        string title = string.IsNullOrWhiteSpace(displayName)
+            ? $"{_settings.DisplayName} chat"
+            : displayName.Trim();
+        var session = new AcpSession(
+            sessionId,
+            fullCwd,
+            title,
+            DateTimeOffset.UtcNow,
+            _settings.Program,
+            _settings.CliType);
+
+        if (!_sessions.TryAdd(sessionId, session))
+        {
+            return _sessions[sessionId];
+        }
+
+        _createdSessions[sessionId] = 0;
+        if (_sink is not null)
+        {
+            await _sink.OnChatOpenedAsync(session, cancellationToken).ConfigureAwait(false);
+        }
+
+        Changed?.Invoke();
+        return session;
     }
 
     public async Task RunAsync(CancellationToken cancellationToken = default)
@@ -281,6 +335,10 @@ public sealed class AcpProvider : IAsyncDisposable
                 .ConfigureAwait(false);
 
         HashSet<string> visible = latest.Select(item => item.SessionId).ToHashSet(StringComparer.Ordinal);
+        foreach (string discovered in visible)
+        {
+            _createdSessions.TryRemove(discovered, out _);
+        }
 
         foreach (SessionMetadata item in latest)
         {
@@ -312,7 +370,9 @@ public sealed class AcpProvider : IAsyncDisposable
 
         foreach ((string id, AcpSession session) in _sessions)
         {
-            if (!visible.Contains(id) && _sessions.TryRemove(id, out _))
+            if (!visible.Contains(id) &&
+                !_createdSessions.ContainsKey(id) &&
+                _sessions.TryRemove(id, out _))
             {
                 changed = true;
 

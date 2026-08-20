@@ -1,4 +1,5 @@
 using OneRemoteCli.Daemon.Cli;
+using OneRemoteCli.Protocol.Hub;
 
 namespace OneRemoteCli.Daemon.Tests;
 
@@ -108,6 +109,37 @@ public class CommandLineTests
         Assert.Equal(CommandKind.WrapShortcut, parsed.Kind);
         Assert.Equal(@"C:\a.lnk", parsed.ShortcutPath);
         Assert.Equal(@"D:\b.lnk", parsed.OutputPath);
+    }
+
+    [Fact]
+    public void WrapShortcutReadsTheConfirmedType()
+    {
+        ParsedCommand parsed = CommandLine.Parse(
+            ["wrap-shortcut", @"C:\a.lnk", "--type", "claude-code"]);
+
+        Assert.Equal(CommandKind.WrapShortcut, parsed.Kind);
+        Assert.Equal(CliType.ClaudeCode, parsed.ExplicitCliType);
+    }
+
+    [Fact]
+    public void NewChatRequiresAndReadsCopilotTypeAndWorkingDirectory()
+    {
+        ParsedCommand parsed = CommandLine.Parse(
+            ["new-chat", "--type", "copilot", "--name", "My repo", "--cwd", @"C:\repo"]);
+
+        Assert.Equal(CommandKind.NewChat, parsed.Kind);
+        Assert.Equal(CliType.CopilotCli, parsed.ExplicitCliType);
+        Assert.Equal("My repo", parsed.DisplayName);
+        Assert.Equal(@"C:\repo", parsed.Cwd);
+    }
+
+    [Theory]
+    [InlineData("new-chat", "--type", "copilot")]
+    [InlineData("new-chat", "--cwd", @"C:\repo")]
+    [InlineData("new-chat", "--type", "claude-code", "--cwd", @"C:\repo")]
+    public void NewChatRejectsIncompleteOrUnsupportedRequests(params string[] args)
+    {
+        Assert.Equal(CommandKind.Help, CommandLine.Parse(args).Kind);
     }
 
     [Fact]

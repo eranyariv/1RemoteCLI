@@ -8,6 +8,44 @@ namespace OneRemoteCli.Daemon.Tests;
 public sealed class AcpProviderTests
 {
     [Fact]
+    public async Task CreatesAndKeepsANewAcpSession()
+    {
+        var calls = new List<(string Method, JsonObject Parameters)>();
+
+        Task<JsonElement> Call(
+            string method,
+            JsonObject parameters,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            calls.Add((method, parameters));
+
+            return Task.FromResult(method switch
+            {
+                "session/new" => JsonSerializer.SerializeToElement(new { sessionId = "created" }),
+                "session/list" => JsonSerializer.SerializeToElement(new
+                {
+                    sessions = Array.Empty<object>(),
+                    nextCursor = (string?)null,
+                }),
+                _ => throw new InvalidOperationException(method),
+            });
+        }
+
+        await using var provider = new AcpProvider(Call);
+
+        AcpSession created = await provider.CreateAsync(@"C:\repo", "My repo");
+        await provider.RefreshAsync();
+
+        Assert.Equal("created", created.SessionId);
+        Assert.Equal("My repo", created.Title);
+        Assert.Same(created, Assert.Single(provider.Snapshot()));
+        Assert.Equal("session/new", calls[0].Method);
+        Assert.Equal(@"C:\repo", calls[0].Parameters["cwd"]!.GetValue<string>());
+        Assert.Empty(calls[0].Parameters["mcpServers"]!.AsArray());
+    }
+
+    [Fact]
     public async Task CopilotSidebarVisibilityReplacesTheBroadRecentFilter()
     {
         string path = TemporaryDatabasePath();

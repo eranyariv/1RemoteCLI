@@ -1,5 +1,6 @@
 using System.Runtime.Versioning;
 using OneRemoteCli.Daemon.Ipc;
+using OneRemoteCli.Protocol.Pipe;
 
 namespace OneRemoteCli.Daemon.Agent;
 
@@ -28,6 +29,7 @@ public sealed class AgentHost : IAsyncDisposable
     private readonly AgentPipeServer _server;
     private readonly ISessionSink _sink;
     private readonly Action<string>? _log;
+    private readonly Func<ChatCreateMessage, CancellationToken, Task<ChatCreatedMessage>>? _createChat;
     private readonly List<Task> _connections = [];
     private readonly object _connectionsLock = new();
 
@@ -37,13 +39,15 @@ public sealed class AgentHost : IAsyncDisposable
         ISessionSink? sink = null,
         AgentPipeServer? server = null,
         Action<string>? log = null,
-        AwaitingInputOptions? awaitingInput = null)
+        AwaitingInputOptions? awaitingInput = null,
+        Func<ChatCreateMessage, CancellationToken, Task<ChatCreatedMessage>>? createChat = null)
     {
         Identity = identity ?? throw new ArgumentNullException(nameof(identity));
         Sessions = registry ?? new SessionRegistry();
         _sink = sink ?? NullSessionSink.Instance;
         _server = server ?? new AgentPipeServer();
         _log = log;
+        _createChat = createChat;
         AwaitingInput = new AwaitingInputMonitor(Sessions, _sink, awaitingInput, log: log);
     }
 
@@ -111,7 +115,12 @@ public sealed class AgentHost : IAsyncDisposable
                 throw new AgentAlreadyRunningException(ex);
             }
 
-            var wrapper = new WrapperConnection(connection, Sessions, _sink, _log);
+            var wrapper = new WrapperConnection(
+                connection,
+                Sessions,
+                _sink,
+                _log,
+                createChat: _createChat);
             Track(Task.Run(() => wrapper.RunAsync(cancellationToken), CancellationToken.None));
         }
     }

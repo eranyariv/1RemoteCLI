@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using OneRemoteCli.Protocol.Hub;
 
 namespace OneRemoteCli.Daemon.Wrapper;
 
@@ -26,7 +27,8 @@ public sealed record SessionStartInfo(
     string Cwd,
     int Cols,
     int Rows,
-    string? DisplayName);
+    string? DisplayName,
+    CliType? CliType = null);
 
 /// <summary>
 /// The wrapper's link to the agent.

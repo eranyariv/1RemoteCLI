@@ -3,6 +3,8 @@ using System.Text;
 using OneRemoteCli.Daemon.Agent;
 using OneRemoteCli.Daemon.Ipc;
 using OneRemoteCli.Daemon.Wrapper;
+using OneRemoteCli.Protocol.Hub;
+using OneRemoteCli.Protocol.Pipe;
 
 namespace OneRemoteCli.Daemon.Tests;
 
@@ -30,6 +32,48 @@ public class AgentHostTests
         Assert.Equal("pwsh", session.Program);
         Assert.Equal(120, session.Cols);
         Assert.Equal(30, session.Rows);
+    }
+
+    [Fact]
+    public async Task ConfirmedTypeOverridesCommandLineDetection()
+    {
+        await using var fixture = await AgentFixture.StartAsync();
+
+        AgentPipeClient wrapper = await fixture.ConnectAsync();
+        string sessionId = await wrapper.OpenSessionAsync(
+            StartInfo("copilot") with { CliType = CliType.Generic },
+            default).WaitAsync(Timeout);
+
+        TerminalSession session = await fixture.WaitForSessionAsync(sessionId);
+        Assert.Equal(CliType.Generic, session.CliType);
+    }
+
+    [Fact]
+    public async Task RoutesAChatCreationRequestToTheAgentCallback()
+    {
+        ChatCreateMessage? received = null;
+        await using var fixture = await AgentFixture.StartAsync(
+            createChat: (request, _) =>
+            {
+                received = request;
+                return Task.FromResult(new ChatCreatedMessage
+                {
+                    MachineId = "machine",
+                    SessionId = "chat",
+                });
+            });
+
+        AgentPipeClient launcher = await fixture.ConnectAsync();
+        ChatCreatedMessage created = await launcher.CreateChatAsync(
+            @"C:\repo",
+            "My repo",
+            CliType.CopilotCli).WaitAsync(Timeout);
+
+        Assert.True(created.Ok);
+        Assert.NotNull(received);
+        Assert.Equal(@"C:\repo", received.Cwd);
+        Assert.Equal("My repo", received.DisplayName);
+        Assert.Equal(CliType.CopilotCli, received.CliType);
     }
 
     /// <summary>The headline requirement: two terminals on one desk are two sessions.</summary>
@@ -302,14 +346,16 @@ public class AgentHostTests
 
         public RecordingSink Sink { get; }
 
-        public static async Task<AgentFixture> StartAsync()
+        public static async Task<AgentFixture> StartAsync(
+            Func<ChatCreateMessage, CancellationToken, Task<ChatCreatedMessage>>? createChat = null)
         {
             string directory = Path.Combine(Path.GetTempPath(), $"1remote-agent-{Guid.NewGuid():N}");
             var sink = new RecordingSink();
             var host = new AgentHost(
                 MachineIdentity.Load(Path.Combine(directory, "machine.json")),
                 sink: sink,
-                server: new AgentPipeServer($"1remotecli-test-{Guid.NewGuid():N}"));
+                server: new AgentPipeServer($"1remotecli-test-{Guid.NewGuid():N}"),
+                createChat: createChat);
 
             var fixture = new AgentFixture(host, sink, directory);
             fixture._run = Task.Run(() => host.RunAsync(fixture._stopping.Token));

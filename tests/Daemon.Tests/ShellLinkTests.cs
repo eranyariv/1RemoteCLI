@@ -112,7 +112,10 @@ public sealed class ShellLinkTests : IDisposable
         ShellLinkInfo wrapped = ShellLink.Read(plan.OutputPath);
 
         Assert.Equal(agent, wrapped.Target, ignoreCase: true);
-        Assert.StartsWith("--name \"Claude Code\" -- ", wrapped.Arguments, StringComparison.Ordinal);
+        Assert.StartsWith(
+            "--name \"Claude Code\" --type generic -- ",
+            wrapped.Arguments,
+            StringComparison.Ordinal);
         Assert.Contains(Environment.ProcessPath!, wrapped.Arguments, StringComparison.Ordinal);
         Assert.EndsWith("--dangerously-skip", wrapped.Arguments, StringComparison.Ordinal);
         Assert.Equal(_scratch, wrapped.WorkingDirectory, ignoreCase: true);

@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using OneRemoteCli.Daemon.Chat;
+using OneRemoteCli.Protocol.Hub;
 
 namespace OneRemoteCli.Daemon.Tests;
 
@@ -43,6 +44,52 @@ public sealed class AcpProviderTests
         Assert.Equal("session/new", calls[0].Method);
         Assert.Equal(@"C:\repo", calls[0].Parameters["cwd"]!.GetValue<string>());
         Assert.Empty(calls[0].Parameters["mcpServers"]!.AsArray());
+    }
+
+    [Fact]
+    public async Task ReusesLoadedSessionWhenAnotherClientAttaches()
+    {
+        int loads = 0;
+
+        Task<JsonElement> Call(
+            string method,
+            JsonObject parameters,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            return Task.FromResult(method switch
+            {
+                "session/list" => JsonSerializer.SerializeToElement(new
+                {
+                    sessions = new[]
+                    {
+                        new
+                        {
+                            sessionId = "shared",
+                            cwd = @"C:\repo",
+                            title = "Shared chat",
+                            updatedAt = DateTimeOffset.UtcNow,
+                        },
+                    },
+                    nextCursor = (string?)null,
+                }),
+                "session/load" when ++loads == 1 => JsonSerializer.SerializeToElement(new { }),
+                "session/load" => throw new InvalidOperationException("Session shared is already loaded"),
+                _ => throw new InvalidOperationException(method),
+            });
+        }
+
+        var sink = new RecordingChatSink();
+        await using var provider = new AcpProvider(Call);
+        provider.AttachSink(sink);
+        await provider.RefreshAsync();
+
+        await provider.AttachAsync("shared", "phone-one");
+        await provider.AttachAsync("shared", "phone-two");
+
+        Assert.Equal(1, loads);
+        Assert.Equal(["phone-one", "phone-two"], sink.TranscriptTargets);
     }
 
     [Fact]
@@ -241,5 +288,44 @@ public sealed class AcpProviderTests
         await using SqliteCommand command = connection.CreateCommand();
         command.CommandText = schema;
         await command.ExecuteNonQueryAsync();
+    }
+
+    private sealed class RecordingChatSink : IAgentChatSink
+    {
+        public List<string?> TranscriptTargets { get; } = [];
+
+        public ValueTask OnChatOpenedAsync(
+            AcpSession session,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnChatUpdatedAsync(
+            AcpSession session,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnChatClosedAsync(
+            AcpSession session,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnChatTranscriptAsync(
+            AcpSession session,
+            ChatTranscriptKind kind,
+            ChatEvent[] events,
+            string? targetConnectionId = null,
+            CancellationToken cancellationToken = default)
+        {
+            Assert.Equal(ChatTranscriptKind.Snapshot, kind);
+            TranscriptTargets.Add(targetConnectionId);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask OnChatAttentionAsync(
+            AcpSession session,
+            bool awaitingInput,
+            string? hint,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.CompletedTask;
     }
 }

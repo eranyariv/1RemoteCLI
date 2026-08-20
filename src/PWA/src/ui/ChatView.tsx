@@ -18,6 +18,7 @@ export function ChatView({
   onClose(): void
 }) {
   const [events, setEvents] = useState<ChatEvent[]>([])
+  const [loaded, setLoaded] = useState(false)
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -27,6 +28,7 @@ export function ChatView({
     const off = client.on('chatTranscript', (transcript) => {
       if (transcript.sessionId !== session.sessionId) return
 
+      if (transcript.kind === 'Snapshot') setLoaded(true)
       setEvents((current) => {
         if (transcript.kind === 'Snapshot') return transcript.events
 
@@ -50,6 +52,7 @@ export function ChatView({
     if (!connected) return
 
     let active = true
+    setLoaded(false)
     setLoadError(null)
     void client.attach(machine.machineId, session.sessionId, 0, 0).then((error) => {
       if (active && error) setLoadError(error.message)
@@ -104,8 +107,10 @@ export function ChatView({
       <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4" aria-live="polite">
         {loadError ? (
           <p className="py-8 text-center text-sm text-rose-300">{loadError}</p>
-        ) : events.length === 0 ? (
+        ) : !loaded ? (
           <p className="py-8 text-center text-sm text-slate-500">Loading the transcript…</p>
+        ) : events.length === 0 ? (
+          <p className="py-8 text-center text-sm text-slate-500">No messages yet.</p>
         ) : null}
 
         {events.map((item) => (

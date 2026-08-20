@@ -300,6 +300,40 @@ public sealed class RelayHubTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task LargeChatTranscriptReachesItsWatcher()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "chat-1", "GitHub Copilot", SessionKind.AgentChat);
+
+        HubConnection watcher = await ConnectClientAsync(AliceTenant, AliceObject);
+        Channel<ChatTranscriptNotification> watched =
+            Listen<ChatTranscriptNotification>(watcher, HubMethods.Client.ChatTranscript);
+        await AttachAsync(watcher, "machine-a", "chat-1");
+
+        string text = new('x', 4 * 1024 * 1024);
+        await agent.InvokeAsync(
+            HubMethods.Server.ChatTranscript,
+            new ChatTranscriptNotification
+            {
+                SessionId = "chat-1",
+                Seq = 1,
+                Kind = ChatTranscriptKind.Snapshot,
+                Events =
+                [
+                    new ChatEvent
+                    {
+                        EventId = "large-answer",
+                        Kind = ChatEventKind.AgentMessage,
+                        Text = text,
+                    },
+                ],
+            });
+
+        ChatTranscriptNotification transcript = await Next(watched);
+        Assert.Equal(text.Length, Assert.Single(transcript.Events).Text.Length);
+    }
+
+    [Fact]
     public async Task OutputReachesTheWatcherAndNobodyElse()
     {
         HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");

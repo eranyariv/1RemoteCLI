@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using OneRemoteCli.Daemon.Chat;
@@ -6,6 +7,139 @@ namespace OneRemoteCli.Daemon.Tests;
 
 public sealed class AcpProviderTests
 {
+    [Fact]
+    public async Task CopilotSidebarVisibilityReplacesTheBroadRecentFilter()
+    {
+        string path = TemporaryDatabasePath();
+
+        try
+        {
+            await CreateDatabaseAsync(
+                path,
+                """
+                CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    session_type TEXT,
+                    archived_at TEXT
+                );
+                CREATE TABLE workspaces (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT,
+                    archived_at TEXT
+                );
+                CREATE TABLE app_state (key TEXT PRIMARY KEY, value TEXT);
+
+                INSERT INTO sessions VALUES ('visible', 'general_chat', NULL);
+                INSERT INTO sessions VALUES ('hidden', 'project', NULL);
+                INSERT INTO app_state VALUES (
+                    'sidebar-project-groups',
+                    '{"state":{"viewMode":"recent"}}'
+                );
+                INSERT INTO app_state VALUES (
+                    'workspace-mru',
+                    '{"state":{"recentIds":[]}}'
+                );
+                """);
+            var index = new CopilotArchiveIndex(databasePath: path);
+
+            Task<JsonElement> Call(
+                string method,
+                JsonObject parameters,
+                CancellationToken cancellationToken)
+            {
+                Assert.Equal("session/list", method);
+                Assert.Empty(parameters);
+                cancellationToken.ThrowIfCancellationRequested();
+
+                return Task.FromResult(JsonSerializer.SerializeToElement(new
+                {
+                    sessions = new[]
+                    {
+                        new
+                        {
+                            sessionId = "visible",
+                            cwd = @"C:\visible",
+                            title = "Visible",
+                            updatedAt = DateTimeOffset.UtcNow.AddDays(-30),
+                        },
+                        new
+                        {
+                            sessionId = "hidden",
+                            cwd = @"C:\hidden",
+                            title = "Hidden",
+                            updatedAt = DateTimeOffset.UtcNow,
+                        },
+                    },
+                    nextCursor = (string?)null,
+                }));
+            }
+
+            await using var provider = new AcpProvider(
+                Call,
+                hideArchivedSessions: true,
+                copilotIndex: index);
+
+            await provider.RefreshAsync();
+
+            AcpSession visible = Assert.Single(provider.Snapshot());
+            Assert.Equal("visible", visible.SessionId);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task IncompatibleCopilotDatabaseFallsBackWithoutHidingSessions()
+    {
+        string path = TemporaryDatabasePath();
+
+        try
+        {
+            await CreateDatabaseAsync(path, "CREATE TABLE unrelated (id TEXT);");
+            var index = new CopilotArchiveIndex(databasePath: path);
+
+            Task<JsonElement> Call(
+                string method,
+                JsonObject parameters,
+                CancellationToken cancellationToken)
+            {
+                Assert.Equal("session/list", method);
+                Assert.Empty(parameters);
+                cancellationToken.ThrowIfCancellationRequested();
+
+                return Task.FromResult(JsonSerializer.SerializeToElement(new
+                {
+                    sessions = new[]
+                    {
+                        new
+                        {
+                            sessionId = "fallback",
+                            cwd = @"C:\fallback",
+                            title = "Fallback",
+                            updatedAt = DateTimeOffset.UtcNow,
+                        },
+                    },
+                    nextCursor = (string?)null,
+                }));
+            }
+
+            await using var provider = new AcpProvider(
+                Call,
+                hideArchivedSessions: true,
+                copilotIndex: index);
+
+            await provider.RefreshAsync();
+
+            Assert.Equal("fallback", Assert.Single(provider.Snapshot()).SessionId);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     [Fact]
     public async Task FollowsSessionListCursorUpToOneHundredSessions()
     {
@@ -52,5 +186,22 @@ public sealed class AcpProviderTests
         });
 
         return JsonSerializer.SerializeToElement(new { sessions, nextCursor });
+    }
+
+    private static string TemporaryDatabasePath() =>
+        Path.Combine(Path.GetTempPath(), $"1remote-copilot-provider-{Guid.NewGuid():N}.db");
+
+    private static async Task CreateDatabaseAsync(string path, string schema)
+    {
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = path,
+            Pooling = false,
+        }.ToString();
+        await using var connection = new SqliteConnection(connectionString);
+        await connection.OpenAsync();
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = schema;
+        await command.ExecuteNonQueryAsync();
     }
 }

@@ -6,6 +6,106 @@ namespace OneRemoteCli.Daemon.Tests;
 public sealed class CopilotArchiveIndexTests
 {
     [Fact]
+    public async Task FindsGeneralChatsAndRecentSidebarWorkspaces()
+    {
+        string path = TemporaryDatabasePath();
+
+        try
+        {
+            await CreateDatabaseAsync(
+                path,
+                """
+                CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    session_type TEXT,
+                    archived_at TEXT
+                );
+                CREATE TABLE workspaces (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT,
+                    archived_at TEXT
+                );
+                CREATE TABLE app_state (key TEXT PRIMARY KEY, value TEXT);
+
+                INSERT INTO sessions VALUES ('general', 'general_chat', NULL);
+                INSERT INTO sessions VALUES ('archived-general', 'general_chat', '2026-08-20');
+                INSERT INTO sessions VALUES ('recent-session', 'project', NULL);
+                INSERT INTO sessions VALUES ('older-session', 'project', NULL);
+                INSERT INTO workspaces VALUES ('recent-workspace', 'recent-session', NULL);
+                INSERT INTO workspaces VALUES ('older-workspace', 'older-session', NULL);
+                INSERT INTO app_state VALUES (
+                    'sidebar-project-groups',
+                    '{"state":{"viewMode":"recent"}}'
+                );
+                INSERT INTO app_state VALUES (
+                    'workspace-mru',
+                    '{"state":{"recentIds":["recent-workspace"]}}'
+                );
+                """);
+            var index = new CopilotArchiveIndex(databasePath: path);
+
+            HashSet<string>? visible = await index.ReadVisibleSessionIdsAsync();
+
+            Assert.NotNull(visible);
+            Assert.Equal(2, visible.Count);
+            Assert.Contains("general", visible);
+            Assert.Contains("recent-session", visible);
+            Assert.DoesNotContain("archived-general", visible);
+            Assert.DoesNotContain("older-session", visible);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task NonRecentSidebarIncludesEveryUnarchivedWorkspace()
+    {
+        string path = TemporaryDatabasePath();
+
+        try
+        {
+            await CreateDatabaseAsync(
+                path,
+                """
+                CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    session_type TEXT,
+                    archived_at TEXT
+                );
+                CREATE TABLE workspaces (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT,
+                    archived_at TEXT
+                );
+                CREATE TABLE app_state (key TEXT PRIMARY KEY, value TEXT);
+
+                INSERT INTO sessions VALUES ('first', 'project', NULL);
+                INSERT INTO sessions VALUES ('second', 'project', NULL);
+                INSERT INTO workspaces VALUES ('first-workspace', 'first', NULL);
+                INSERT INTO workspaces VALUES ('second-workspace', 'second', NULL);
+                INSERT INTO app_state VALUES (
+                    'sidebar-project-groups',
+                    '{"state":{"viewMode":"all"}}'
+                );
+                """);
+            var index = new CopilotArchiveIndex(databasePath: path);
+
+            HashSet<string>? visible = await index.ReadVisibleSessionIdsAsync();
+
+            Assert.NotNull(visible);
+            Assert.Equal(2, visible.Count);
+            Assert.Contains("first", visible);
+            Assert.Contains("second", visible);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public async Task FindsArchivedSessionsAndArchivedWorkspaceChats()
     {
         string path = TemporaryDatabasePath();
@@ -67,6 +167,20 @@ public sealed class CopilotArchiveIndexTests
     }
 
     [Fact]
+    public async Task MissingDatabaseLogsThatSidebarVisibilityIsUnavailable()
+    {
+        string path = TemporaryDatabasePath();
+        var messages = new List<string>();
+        var index = new CopilotArchiveIndex(messages.Add, path);
+
+        Assert.Null(await index.ReadVisibleSessionIdsAsync());
+
+        string message = Assert.Single(messages);
+        Assert.Contains("visibility may differ from the GitHub Copilot sidebar", message);
+        Assert.False(File.Exists(path));
+    }
+
+    [Fact]
     public async Task MissingWorkspaceTablesStillFiltersDirectSessionArchives()
     {
         string path = TemporaryDatabasePath();
@@ -107,6 +221,28 @@ public sealed class CopilotArchiveIndexTests
 
             string message = Assert.Single(messages);
             Assert.Contains("archived ACP sessions may be shown", message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task IncompatibleDatabaseCannotClaimToKnowSidebarVisibility()
+    {
+        string path = TemporaryDatabasePath();
+        var messages = new List<string>();
+
+        try
+        {
+            await CreateDatabaseAsync(path, "CREATE TABLE unrelated (id TEXT);");
+            var index = new CopilotArchiveIndex(messages.Add, path);
+
+            Assert.Null(await index.ReadVisibleSessionIdsAsync());
+
+            string message = Assert.Single(messages);
+            Assert.Contains("visibility may differ from the GitHub Copilot sidebar", message);
         }
         finally
         {

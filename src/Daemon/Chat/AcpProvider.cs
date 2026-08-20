@@ -22,7 +22,7 @@ public sealed class AcpProvider : IAsyncDisposable
     private readonly Func<string, JsonObject, CancellationToken, Task<JsonElement>>? _call;
     private readonly Action<string>? _log;
     private readonly AcpSettings _settings = AcpSettings.FromEnvironment();
-    private readonly CopilotArchiveIndex _copilotArchives;
+    private readonly CopilotArchiveIndex _copilotIndex;
     private AcpClient? _client;
     private IAgentChatSink? _sink;
     private int _activeTurns;
@@ -35,8 +35,9 @@ public sealed class AcpProvider : IAsyncDisposable
 
     internal AcpProvider(
         Func<string, JsonObject, CancellationToken, Task<JsonElement>> call,
-        bool hideArchivedSessions = false)
-        : this(log: null, hideArchivedSessions, call)
+        bool hideArchivedSessions = false,
+        CopilotArchiveIndex? copilotIndex = null)
+        : this(log: null, hideArchivedSessions, call, copilotIndex)
     {
         ArgumentNullException.ThrowIfNull(call);
     }
@@ -44,10 +45,11 @@ public sealed class AcpProvider : IAsyncDisposable
     private AcpProvider(
         Action<string>? log,
         bool hideArchivedSessions,
-        Func<string, JsonObject, CancellationToken, Task<JsonElement>>? call)
+        Func<string, JsonObject, CancellationToken, Task<JsonElement>>? call,
+        CopilotArchiveIndex? copilotIndex = null)
     {
         _log = log;
-        _copilotArchives = new CopilotArchiveIndex(log);
+        _copilotIndex = copilotIndex ?? new CopilotArchiveIndex(log);
         _hideArchivedSessions = hideArchivedSessions ? 1 : 0;
         _call = call;
     }
@@ -260,13 +262,23 @@ public sealed class AcpProvider : IAsyncDisposable
         bool changed = false;
 
         DateTimeOffset cutoff = DateTimeOffset.UtcNow - RecentWindow;
-        HashSet<string> archived =
-            HideArchivedSessions &&
-            _settings.CliType == CliType.CopilotCli
-            ? await _copilotArchives.ReadArchivedSessionIdsAsync(cancellationToken).ConfigureAwait(false)
-            : [];
+        HashSet<string>? visibleCopilotSessions = null;
+        HashSet<string> archived = [];
+
+        if (HideArchivedSessions && _settings.CliType == CliType.CopilotCli)
+        {
+            visibleCopilotSessions =
+                await _copilotIndex.ReadVisibleSessionIdsAsync(cancellationToken).ConfigureAwait(false);
+            if (visibleCopilotSessions is null)
+            {
+                archived =
+                    await _copilotIndex.ReadArchivedSessionIdsAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+
         List<SessionMetadata> latest =
-            await ListSessionsAsync(cutoff, archived, cancellationToken).ConfigureAwait(false);
+            await ListSessionsAsync(cutoff, archived, visibleCopilotSessions, cancellationToken)
+                .ConfigureAwait(false);
 
         HashSet<string> visible = latest.Select(item => item.SessionId).ToHashSet(StringComparer.Ordinal);
 
@@ -320,11 +332,20 @@ public sealed class AcpProvider : IAsyncDisposable
     private async Task<List<SessionMetadata>> ListSessionsAsync(
         DateTimeOffset cutoff,
         HashSet<string> archived,
+        HashSet<string>? visibleCopilotSessions,
         CancellationToken cancellationToken)
     {
         var discovered = new Dictionary<string, SessionMetadata>(StringComparer.Ordinal);
         var cursors = new HashSet<string>(StringComparer.Ordinal);
         string? cursor = null;
+        int targetCount = visibleCopilotSessions is null
+            ? MaximumSessions
+            : Math.Min(MaximumSessions, visibleCopilotSessions.Count);
+
+        if (targetCount == 0)
+        {
+            return [];
+        }
 
         do
         {
@@ -342,8 +363,8 @@ public sealed class AcpProvider : IAsyncDisposable
                 foreach (JsonElement value in sessions.EnumerateArray())
                 {
                     if (ReadMetadata(value) is { } item &&
-                        item.UpdatedAt >= cutoff &&
-                        !archived.Contains(item.SessionId))
+                        (visibleCopilotSessions?.Contains(item.SessionId) ??
+                         item.UpdatedAt >= cutoff && !archived.Contains(item.SessionId)))
                     {
                         discovered.TryAdd(item.SessionId, item);
                     }
@@ -364,7 +385,7 @@ public sealed class AcpProvider : IAsyncDisposable
 
             cursor = next;
         }
-        while (discovered.Count < MaximumSessions);
+        while (discovered.Count < targetCount);
 
         return
         [

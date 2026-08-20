@@ -211,7 +211,9 @@ public sealed class SettingsPresenterTests
 
     [Fact]
     public void ArchivedSessionPreferenceHasTheRequestedLabel() =>
-        Assert.Equal("Hide archived sessions", SettingsPresenter.HideArchivedSessionsLabel);
+        Assert.Equal(
+            "Show only sessions visible in GitHub Copilot",
+            SettingsPresenter.HideArchivedSessionsLabel);
 
     private static SettingsView WithUpdate(UpdateStatus update) =>
         SettingsPresenter.Present(AgentState.Connected, "ada@example.com", [], Now, update);

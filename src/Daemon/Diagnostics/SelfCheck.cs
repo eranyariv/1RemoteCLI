@@ -62,7 +62,7 @@ public static class SelfCheck
                 Check("File dialog (COM)", FileDialog),
                 Check("Machine identity file (JSON)", () => Identity(scratch)),
                 Check("Settings file (JSON)", () => Settings(scratch)),
-                Check("Copilot archive index (SQLite)", () => CopilotArchives(scratch)),
+                Check("Copilot session index (SQLite)", () => CopilotSessionIndex(scratch)),
                 Check("Hub messages (MessagePack)", Wire),
                 Check(ChromeCheckName, Chrome),
             ];
@@ -268,7 +268,7 @@ public static class SelfCheck
         }
     }
 
-    private static void CopilotArchives(string scratch)
+    private static void CopilotSessionIndex(string scratch)
     {
         string path = Path.Combine(scratch, "copilot-data.db");
         var connectionString = new SqliteConnectionStringBuilder
@@ -283,10 +283,20 @@ public static class SelfCheck
             using SqliteCommand command = connection.CreateCommand();
             command.CommandText =
                 """
-                CREATE TABLE sessions (id TEXT PRIMARY KEY, archived_at TEXT);
+                CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    session_type TEXT,
+                    archived_at TEXT
+                );
                 CREATE TABLE workspaces (id TEXT PRIMARY KEY, session_id TEXT, archived_at TEXT);
                 CREATE TABLE workspace_side_chats (workspace_id TEXT, session_id TEXT);
-                INSERT INTO sessions VALUES ('archived', '2026-08-20');
+                CREATE TABLE app_state (key TEXT PRIMARY KEY, value TEXT);
+                INSERT INTO sessions VALUES ('visible', 'general_chat', NULL);
+                INSERT INTO sessions VALUES ('archived', 'general_chat', '2026-08-20');
+                INSERT INTO app_state VALUES (
+                    'sidebar-project-groups',
+                    '{"state":{"viewMode":"all"}}'
+                );
                 """;
             command.ExecuteNonQuery();
         }
@@ -297,6 +307,12 @@ public static class SelfCheck
         if (!archived.Contains("archived"))
         {
             throw new InvalidOperationException("The Copilot archive index did not return the archived session.");
+        }
+
+        HashSet<string>? visible = index.ReadVisibleSessionIdsAsync().GetAwaiter().GetResult();
+        if (visible is null || !visible.Contains("visible") || visible.Contains("archived"))
+        {
+            throw new InvalidOperationException("The Copilot session index did not match sidebar visibility.");
         }
     }
 

@@ -108,7 +108,7 @@ public static class SettingsPresenter
     /// </summary>
     public const string StartAtLogonLabel = "Start when I sign in to Windows";
 
-    public const string HideArchivedSessionsLabel = "Hide archived sessions";
+    public const string HideArchivedSessionsLabel = "Show only sessions visible in GitHub Copilot";
 
     public const string WrapShortcutLabel = "Wrap a desktop shortcut\u2026";
 

@@ -153,6 +153,30 @@ describe('ChatView', () => {
     await waitFor(() => expect(relay.attach).toHaveBeenCalledTimes(1))
   })
 
+  it('finishes loading when the transcript is empty', () => {
+    render(
+      <ChatView
+        client={relay.client}
+        connected
+        machine={machine}
+        session={session}
+        onClose={() => {}}
+      />,
+    )
+
+    act(() => {
+      relay.emit({
+        sessionId: 'chat-1',
+        seq: 1,
+        kind: 'Snapshot',
+        events: [],
+      })
+    })
+
+    expect(screen.queryByText('Loading the transcript…')).toBeNull()
+    expect(screen.getByText('No messages yet.')).toBeTruthy()
+  })
+
   it('sends trimmed messages and clears the composer', async () => {
     render(
       <ChatView

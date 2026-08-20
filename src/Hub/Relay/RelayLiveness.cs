@@ -13,6 +13,17 @@ namespace OneRemoteCli.Hub.Relay;
 public static class RelayLiveness
 {
     /// <summary>
+    /// Maximum size of one authenticated hub call.
+    /// <para>
+    /// Terminal output is framed below SignalR's 32 KiB default, but an ACP transcript
+    /// snapshot is a single typed message and real Copilot histories routinely exceed
+    /// that default. Eight MiB admits a substantial chat while retaining a firm bound
+    /// on the memory one connection can ask the relay to buffer.
+    /// </para>
+    /// </summary>
+    public const long MaximumReceiveMessageSize = 8 * 1024 * 1024;
+
+    /// <summary>
     /// How often the hub pings an idle connection.
     /// <para>
     /// Terminal output is chatty but small, and a phone on a flaky connection is the
@@ -38,5 +49,6 @@ public static class RelayLiveness
 
         options.KeepAliveInterval = KeepAlive;
         options.ClientTimeoutInterval = ClientTimeout;
+        options.MaximumReceiveMessageSize = MaximumReceiveMessageSize;
     }
 }

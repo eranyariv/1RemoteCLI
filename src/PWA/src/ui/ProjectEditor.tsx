@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { describeError } from '../protocol/errors'
 import type { ProjectInfo } from '../protocol/wire'
@@ -33,6 +33,7 @@ export function ProjectEditor({
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [pendingIcon, setPendingIcon] = useState<File | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
 
   // Tracks the project once creation succeeds, so an icon picked before the
@@ -41,6 +42,7 @@ export function ProjectEditor({
   // to loop back around.
   const [saved, setSaved] = useState(project ?? null)
   const iconUrl = useProjectIconUrl(saved?.projectId ?? '', saved?.iconVersion ?? 0)
+  const pendingIconUrl = useFileUrl(pendingIcon)
 
   const isGeneral = project?.isGeneral ?? false
 
@@ -69,25 +71,42 @@ export function ProjectEditor({
           blankToNull(repoUrl),
         )
 
-    setBusy(false)
-
     if (result.error || !result.project) {
+      setBusy(false)
       setError(describeError(result.error ?? 'internal_error'))
       return
     }
 
-    setSaved(result.project)
+    const savedProject = result.project
+    setSaved(savedProject)
+
+    if (pendingIcon) {
+      const version = await uploadProjectIcon(savedProject.projectId, pendingIcon)
+      if (version === null) {
+        setBusy(false)
+        setError('Project saved, but its icon could not be uploaded. Try a smaller image.')
+        return
+      }
+
+      setSaved({ ...savedProject, iconVersion: version })
+      setPendingIcon(null)
+    }
+
+    setBusy(false)
     onClose()
   }
 
   const pickIcon = async (file: File) => {
-    if (!saved) return
-
     setBusy(true)
     setError(null)
 
     try {
       const downscaled = await downscaleToSquare(file)
+      if (!saved) {
+        setPendingIcon(downscaled)
+        return
+      }
+
       const version = await uploadProjectIcon(saved.projectId, downscaled)
 
       if (version === null) {
@@ -96,12 +115,18 @@ export function ProjectEditor({
       }
 
       setSaved({ ...saved, iconVersion: version })
+      setPendingIcon(null)
     } finally {
       setBusy(false)
     }
   }
 
   const clearIcon = async () => {
+    if (pendingIcon) {
+      setPendingIcon(null)
+      return
+    }
+
     if (!saved) return
 
     setBusy(true)
@@ -149,52 +174,49 @@ export function ProjectEditor({
         ) : null}
 
         <div className="mt-3 flex flex-col gap-3">
-          {saved ? (
-            <div className="flex items-center gap-3">
-              <img
-                src={iconUrl ?? DEFAULT_ICON}
-                alt=""
-                aria-hidden
-                className="size-14 shrink-0 rounded-xl bg-slate-800 object-cover"
-              />
+          <div className="flex items-center gap-3">
+            <img
+              src={pendingIconUrl ?? iconUrl ?? DEFAULT_ICON}
+              alt=""
+              aria-hidden
+              className="size-14 shrink-0 rounded-xl bg-slate-800 object-cover"
+            />
 
-              <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-1.5">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => fileInput.current?.click()}
+                className="min-h-9 rounded-lg bg-slate-700 px-3 text-left text-sm font-medium text-slate-100 transition active:bg-slate-600 disabled:opacity-40"
+              >
+                {saved || pendingIcon ? 'Change icon' : 'Choose icon'}
+              </button>
+
+              {pendingIconUrl || iconUrl ? (
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={() => fileInput.current?.click()}
-                  className="min-h-9 rounded-lg bg-slate-700 px-3 text-left text-sm font-medium text-slate-100 transition active:bg-slate-600 disabled:opacity-40"
+                  onClick={() => void clearIcon()}
+                  className="min-h-9 rounded-lg px-3 text-left text-sm text-slate-400 transition active:bg-slate-800 disabled:opacity-40"
                 >
-                  Change icon
+                  Use default icon
                 </button>
-
-                {iconUrl ? (
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void clearIcon()}
-                    className="min-h-9 rounded-lg px-3 text-left text-sm text-slate-400 transition active:bg-slate-800 disabled:opacity-40"
-                  >
-                    Use default icon
-                  </button>
-                ) : null}
-              </div>
-
-              <input
-                ref={fileInput}
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0]
-                  event.target.value = ''
-                  if (file) void pickIcon(file)
-                }}
-              />
+              ) : null}
             </div>
-          ) : (
-            <p className="text-[13px] text-slate-500">Save the project first, then add an icon.</p>
-          )}
+
+            <input
+              ref={fileInput}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              aria-label="Project icon"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0]
+                event.target.value = ''
+                if (file) void pickIcon(file)
+              }}
+            />
+          </div>
 
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-slate-400">Name</span>
@@ -304,4 +326,21 @@ export function ProjectEditor({
 function blankToNull(value: string): string | null {
   const trimmed = value.trim()
   return trimmed.length > 0 ? trimmed : null
+}
+
+function useFileUrl(file: File | null): string | null {
+  const [url, setUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!file) {
+      setUrl(null)
+      return
+    }
+
+    const next = URL.createObjectURL(file)
+    setUrl(next)
+    return () => URL.revokeObjectURL(next)
+  }, [file])
+
+  return url
 }

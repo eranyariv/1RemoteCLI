@@ -108,6 +108,8 @@ public static class SettingsPresenter
     /// </summary>
     public const string StartAtLogonLabel = "Start when I sign in to Windows";
 
+    public const string HideArchivedSessionsLabel = "Hide archived sessions";
+
     public const string WrapShortcutLabel = "Wrap a desktop shortcut\u2026";
 
     public const string OpenLogsLabel = "Open logs";

@@ -506,7 +506,13 @@ public static class Program
             },
             loggers.CreateLogger("Hub"));
 
-        await using var chats = new AcpProvider(loggers.CreateLogger("Chat").Update);
+        var preferenceStore = new AgentPreferencesStore(
+            log: loggers.CreateLogger("Settings").Update);
+        AgentPreferences preferences = preferenceStore.Load();
+
+        await using var chats = new AcpProvider(
+            loggers.CreateLogger("Chat").Update,
+            preferences.HideArchivedSessions);
         hub.AttachChatProvider(chats);
 
         await using var host = new AgentHost(
@@ -585,6 +591,7 @@ public static class Program
             accounts,
             updates,
             windowLayout,
+            preferenceStore,
             stopping);
 
         // The hub loop runs alongside the pipe server rather than gating it: a machine
@@ -629,6 +636,7 @@ public static class Program
         SignedInAccountWatcher accounts,
         UpdateService updates,
         SettingsWindowLayoutStore windowLayout,
+        AgentPreferencesStore preferenceStore,
         CancellationTokenSource stopping)
     {
         if (!Environment.UserInteractive)
@@ -700,7 +708,19 @@ public static class Program
             // window can afford to ask every time it opens.
             CheckForUpdate: updates.CheckSoon,
             ReadLayout: windowLayout.Load,
-            WriteLayout: windowLayout.Save);
+            WriteLayout: windowLayout.Save,
+            ReadHideArchivedSessions: () => chats.HideArchivedSessions,
+            WriteHideArchivedSessions: wanted =>
+            {
+                string? problem = preferenceStore.Save(
+                    new AgentPreferences { HideArchivedSessions = wanted });
+                if (problem is null)
+                {
+                    chats.SetHideArchivedSessions(wanted);
+                }
+
+                return problem;
+            });
 
         TrayIcon tray;
 

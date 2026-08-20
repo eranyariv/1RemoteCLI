@@ -9,7 +9,9 @@ namespace OneRemoteCli.Daemon.Chat;
 /// Discovers desktop-agent sessions through a public ACP server and makes their
 /// structured transcripts available to the relay.
 /// </summary>
-public sealed class AcpProvider(Action<string>? log = null) : IAsyncDisposable
+public sealed class AcpProvider(
+    Action<string>? log = null,
+    bool hideArchivedSessions = true) : IAsyncDisposable
 {
     private const int MaximumSessions = 20;
     private static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(30);
@@ -18,11 +20,14 @@ public sealed class AcpProvider(Action<string>? log = null) : IAsyncDisposable
 
     private readonly ConcurrentDictionary<string, AcpSession> _sessions = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, PendingPermission> _permissions = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim _refreshRequested = new(0);
     private readonly Action<string>? _log = log;
     private readonly AcpSettings _settings = AcpSettings.FromEnvironment();
+    private readonly CopilotArchiveIndex _copilotArchives = new(log);
     private AcpClient? _client;
     private IAgentChatSink? _sink;
     private int _activeTurns;
+    private int _hideArchivedSessions = hideArchivedSessions ? 1 : 0;
 
     /// <summary>Raised when the discovered chat count changes.</summary>
     public event Action? Changed;
@@ -30,6 +35,8 @@ public sealed class AcpProvider(Action<string>? log = null) : IAsyncDisposable
     public int Count => _sessions.Count;
 
     public int ActiveTurns => Volatile.Read(ref _activeTurns);
+
+    public bool HideArchivedSessions => Volatile.Read(ref _hideArchivedSessions) != 0;
 
     public IReadOnlyList<AcpSession> Snapshot() =>
         [.. _sessions.Values.OrderByDescending(session => session.UpdatedAt)];
@@ -39,6 +46,15 @@ public sealed class AcpProvider(Action<string>? log = null) : IAsyncDisposable
 
     public void AttachSink(IAgentChatSink sink) =>
         _sink = sink ?? throw new ArgumentNullException(nameof(sink));
+
+    public void SetHideArchivedSessions(bool hide)
+    {
+        int value = hide ? 1 : 0;
+        if (Interlocked.Exchange(ref _hideArchivedSessions, value) != value)
+        {
+            _refreshRequested.Release();
+        }
+    }
 
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
@@ -65,7 +81,8 @@ public sealed class AcpProvider(Action<string>? log = null) : IAsyncDisposable
                 while (!cancellationToken.IsCancellationRequested)
                 {
                     await RefreshAsync(cancellationToken).ConfigureAwait(false);
-                    await Task.Delay(RefreshInterval, cancellationToken).ConfigureAwait(false);
+                    await _refreshRequested.WaitAsync(RefreshInterval, cancellationToken)
+                        .ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -222,10 +239,18 @@ public sealed class AcpProvider(Action<string>? log = null) : IAsyncDisposable
         bool changed = false;
 
         DateTimeOffset cutoff = DateTimeOffset.UtcNow - RecentWindow;
+        HashSet<string> archived =
+            HideArchivedSessions &&
+            _settings.CliType == CliType.CopilotCli
+            ? await _copilotArchives.ReadArchivedSessionIdsAsync(cancellationToken).ConfigureAwait(false)
+            : [];
         List<SessionMetadata> latest = result.TryGetProperty("sessions", out JsonElement sessions)
             ? sessions.EnumerateArray()
                 .Select(ReadMetadata)
-                .Where(item => item is not null && item.UpdatedAt >= cutoff)
+                .Where(item =>
+                    item is not null &&
+                    item.UpdatedAt >= cutoff &&
+                    !archived.Contains(item.SessionId))
                 .Cast<SessionMetadata>()
                 .OrderByDescending(item => item.UpdatedAt)
                 .Take(MaximumSessions)
@@ -451,6 +476,8 @@ public sealed class AcpProvider(Action<string>? log = null) : IAsyncDisposable
         {
             session.LoadGate.Dispose();
         }
+
+        _refreshRequested.Dispose();
     }
 
     private sealed record SessionMetadata(

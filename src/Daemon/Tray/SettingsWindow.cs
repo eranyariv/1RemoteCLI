@@ -58,7 +58,9 @@ public sealed record SettingsActions(
     Action Update,
     Action? CheckForUpdate = null,
     Func<SettingsWindowLayout>? ReadLayout = null,
-    Action<SettingsWindowLayout>? WriteLayout = null);
+    Action<SettingsWindowLayout>? WriteLayout = null,
+    Func<bool>? ReadHideArchivedSessions = null,
+    Func<bool, string?>? WriteHideArchivedSessions = null);
 
 /// <summary>
 /// The agent's settings window.
@@ -90,6 +92,7 @@ internal sealed class SettingsWindow
     private const int IdUpdate = 106;
     private const int IdCheckForUpdates = 107;
     private const int IdTabs = 108;
+    private const int IdHideArchivedSessions = 109;
 
     private const int Style =
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX |
@@ -168,6 +171,7 @@ internal sealed class SettingsWindow
     private IntPtr _sessionsEmpty;
     private IntPtr _wrapShortcut;
     private IntPtr _startAtLogon;
+    private IntPtr _hideArchivedSessions;
     private IntPtr _versionLabel;
     private IntPtr _changeHistory;
     private IntPtr _updateLabel;
@@ -602,6 +606,22 @@ internal sealed class SettingsWindow
                 RowHeight + 4,
                 IdStartAtLogon,
                 SettingsPresenter.StartAtLogonLabel));
+        _hideArchivedSessions = PageControl(
+            _settingsControls,
+            Create(
+                instance,
+                "BUTTON",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+                0,
+                0,
+                100,
+                RowHeight + 4,
+                IdHideArchivedSessions,
+                SettingsPresenter.HideArchivedSessionsLabel));
+        EnableWindow(
+            _hideArchivedSessions,
+            _actions.ReadHideArchivedSessions is not null &&
+            _actions.WriteHideArchivedSessions is not null);
 
         _close = Button(
             instance,
@@ -748,6 +768,12 @@ internal sealed class SettingsWindow
         Move(_wrapShortcut, pageX, wrapY, 188, ButtonHeight);
 
         Move(_startAtLogon, pageX, pageY, pageWidth, RowHeight + 4);
+        Move(
+            _hideArchivedSessions,
+            pageX,
+            pageY + RowHeight + Tight,
+            pageWidth,
+            RowHeight + 4);
     }
 
     private void Move(IntPtr control, int x, int y, int width, int height)
@@ -1013,6 +1039,11 @@ internal sealed class SettingsWindow
         if (reread)
         {
             Check(_startAtLogon, Ask(_actions.ReadStartAtLogon));
+        }
+
+        if (_actions.ReadHideArchivedSessions is not null)
+        {
+            Check(_hideArchivedSessions, Ask(_actions.ReadHideArchivedSessions));
         }
     }
 
@@ -1346,6 +1377,10 @@ internal sealed class SettingsWindow
                 OnStartAtLogonToggled();
                 break;
 
+            case IdHideArchivedSessions:
+                OnHideArchivedSessionsToggled();
+                break;
+
             case IdWrapShortcut:
                 OnWrapShortcut();
                 break;
@@ -1404,6 +1439,35 @@ internal sealed class SettingsWindow
         }
 
         Check(_startAtLogon, Ask(_actions.ReadStartAtLogon));
+
+        if (problem is not null)
+        {
+            Say(new SettingsNotice(problem, NoticeKind.Problem));
+        }
+    }
+
+    private void OnHideArchivedSessionsToggled()
+    {
+        if (_actions.ReadHideArchivedSessions is null ||
+            _actions.WriteHideArchivedSessions is null)
+        {
+            return;
+        }
+
+        bool wanted =
+            SendMessage(_hideArchivedSessions, BM_GETCHECK, IntPtr.Zero, IntPtr.Zero) == BST_CHECKED;
+        string? problem;
+
+        try
+        {
+            problem = _actions.WriteHideArchivedSessions(wanted);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            problem = ex.Message;
+        }
+
+        Check(_hideArchivedSessions, Ask(_actions.ReadHideArchivedSessions));
 
         if (problem is not null)
         {
@@ -1497,6 +1561,7 @@ internal sealed class SettingsWindow
         _sessionsEmpty = IntPtr.Zero;
         _wrapShortcut = IntPtr.Zero;
         _startAtLogon = IntPtr.Zero;
+        _hideArchivedSessions = IntPtr.Zero;
         _versionLabel = IntPtr.Zero;
         _changeHistory = IntPtr.Zero;
         _updateLabel = IntPtr.Zero;

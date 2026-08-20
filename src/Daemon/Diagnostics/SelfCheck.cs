@@ -2,7 +2,9 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text.Json;
 using MessagePack;
+using Microsoft.Data.Sqlite;
 using OneRemoteCli.Daemon.Agent;
+using OneRemoteCli.Daemon.Chat;
 using OneRemoteCli.Daemon.Install;
 using OneRemoteCli.Daemon.Shell;
 using OneRemoteCli.Daemon.Tray;
@@ -60,6 +62,7 @@ public static class SelfCheck
                 Check("File dialog (COM)", FileDialog),
                 Check("Machine identity file (JSON)", () => Identity(scratch)),
                 Check("Settings file (JSON)", () => Settings(scratch)),
+                Check("Copilot archive index (SQLite)", () => CopilotArchives(scratch)),
                 Check("Hub messages (MessagePack)", Wire),
                 Check(ChromeCheckName, Chrome),
             ];
@@ -262,6 +265,38 @@ public static class SelfCheck
         if (options.PromptPatterns is not ["ready?"])
         {
             throw new InvalidOperationException("Prompt patterns did not survive the round trip.");
+        }
+    }
+
+    private static void CopilotArchives(string scratch)
+    {
+        string path = Path.Combine(scratch, "copilot-data.db");
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = path,
+            Pooling = false,
+        }.ToString();
+
+        using (var connection = new SqliteConnection(connectionString))
+        {
+            connection.Open();
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText =
+                """
+                CREATE TABLE sessions (id TEXT PRIMARY KEY, archived_at TEXT);
+                CREATE TABLE workspaces (id TEXT PRIMARY KEY, session_id TEXT, archived_at TEXT);
+                CREATE TABLE workspace_side_chats (workspace_id TEXT, session_id TEXT);
+                INSERT INTO sessions VALUES ('archived', '2026-08-20');
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        var index = new CopilotArchiveIndex(databasePath: path);
+        HashSet<string> archived = index.ReadArchivedSessionIdsAsync().GetAwaiter().GetResult();
+
+        if (!archived.Contains("archived"))
+        {
+            throw new InvalidOperationException("The Copilot archive index did not return the archived session.");
         }
     }
 

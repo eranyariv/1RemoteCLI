@@ -2,11 +2,20 @@ import { useProjectIconUrl } from '../relay/projectIcon'
 import { projectStats, type Projects } from '../relay/projects'
 import type { Machines } from '../relay/machines'
 import type { ProjectInfo } from '../protocol/wire'
+import { useProjectOrder } from './preferences'
+import { sortableStyle, useSortable } from './sortableItem'
+import { SortableGrip, SortableList } from './sorting'
 
 /** The app's own icon, shown for every project that has not uploaded a custom one. */
 const DEFAULT_ICON = '/icon-192.png'
 
-function ProjectIcon({ project }: { project: ProjectInfo }) {
+export function ProjectIcon({
+  project,
+  className = 'size-12 rounded-xl',
+}: {
+  project: ProjectInfo
+  className?: string
+}) {
   const url = useProjectIconUrl(project.projectId, project.iconVersion)
 
   return (
@@ -14,7 +23,7 @@ function ProjectIcon({ project }: { project: ProjectInfo }) {
       src={url ?? DEFAULT_ICON}
       alt=""
       aria-hidden
-      className="size-12 shrink-0 rounded-xl bg-slate-800 object-cover"
+      className={`${className} shrink-0 bg-slate-800 object-cover`}
     />
   )
 }
@@ -38,9 +47,16 @@ function ProjectTile({
   onEdit(project: ProjectInfo): void
 }) {
   const stats = projectStats(machines, project.projectId)
+  const sortable = useSortable({ id: project.projectId })
 
   return (
-    <div className="flex items-center rounded-2xl border border-slate-800 bg-slate-900/60">
+    <div
+      ref={sortable.setNodeRef}
+      style={sortableStyle(sortable)}
+      className="flex items-center rounded-2xl border border-slate-800 bg-slate-900/60"
+    >
+      <SortableGrip sortable={sortable} label={`Reorder ${project.name}`} />
+
       <button
         type="button"
         onClick={() => onOpen(project.projectId)}
@@ -64,8 +80,8 @@ function ProjectTile({
             {stats.sessionCount === 0
               ? 'Nothing running'
               : `${stats.sessionCount} session${stats.sessionCount === 1 ? '' : 's'} on ${
-                  stats.machineCount
-                } machine${stats.machineCount === 1 ? '' : 's'}`}
+                  stats.machineCount === 1 ? stats.machineName : `${stats.machineCount} machines`
+                }`}
           </span>
         </span>
       </button>
@@ -83,7 +99,7 @@ function ProjectTile({
 }
 
 /**
- * The home screen: every project as a tile, General always first.
+ * The home screen: every project as a tile, in the user's saved order.
  *
  * Loading and "no projects yet" are not distinguished here — every user always
  * has General, seeded by the hub the moment their account is first seen, so an
@@ -103,17 +119,29 @@ export function ProjectTiles({
   onEdit(project: ProjectInfo): void
   onCreate(): void
 }) {
+  const projectIds = projects.map((project) => project.projectId)
+  const preference = useProjectOrder(projectIds)
+  const byId = new Map(projects.map((project) => [project.projectId, project]))
+  const ordered = preference.order.flatMap((id) => {
+    const project = byId.get(id)
+    return project ? [project] : []
+  })
+
   return (
     <div className="flex flex-col gap-2">
-      {projects.map((project) => (
-        <ProjectTile
-          key={project.projectId}
-          project={project}
-          machines={machines}
-          onOpen={onOpen}
-          onEdit={onEdit}
-        />
-      ))}
+      <SortableList ids={preference.order} onMove={preference.move}>
+        <div className="flex flex-col gap-2">
+          {ordered.map((project) => (
+            <ProjectTile
+              key={project.projectId}
+              project={project}
+              machines={machines}
+              onOpen={onOpen}
+              onEdit={onEdit}
+            />
+          ))}
+        </div>
+      </SortableList>
 
       <button
         type="button"

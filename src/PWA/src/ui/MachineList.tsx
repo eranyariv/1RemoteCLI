@@ -6,6 +6,9 @@ import { GENERAL_PROJECT_ID, type Projects } from '../relay/projects'
 import { labelFor } from '../terminal/catalog'
 import { shortOs, shortPath, uptime } from './format'
 import { Empty } from './Chrome'
+import { moveId, orderByPreference, useProjectLayout } from './preferences'
+import { sortableStyle, useSortable } from './sortableItem'
+import { SortableGrip, SortableList } from './sorting'
 
 /** What the list can do to a session besides open it. */
 export interface SessionActions {
@@ -160,6 +163,7 @@ function SessionRow({
   subtitle,
   actions,
   onOpen,
+  dragHandle,
 }: {
   machineId: string
   session: SessionInfo
@@ -169,6 +173,7 @@ function SessionRow({
   subtitle?: string
   actions: SessionActions
   onOpen(session: SessionInfo): void
+  dragHandle?: React.ReactNode
 }) {
   // Re-rendered on a timer so "2m" does not sit there saying "2m" for an hour.
   const [now, setNow] = useState(() => new Date())
@@ -182,6 +187,8 @@ function SessionRow({
   return (
     <>
       <div className="flex items-center">
+        {dragHandle}
+
         <button
           type="button"
           disabled={disabled}
@@ -253,6 +260,36 @@ function SessionRow({
   )
 }
 
+function SortableSessionRow({
+  machine,
+  session,
+  projects,
+  actions,
+  onOpenSession,
+}: {
+  machine: MachineInfo
+  session: SessionInfo
+  projects: Projects
+  actions: SessionActions
+  onOpenSession(machine: MachineInfo, session: SessionInfo): void
+}) {
+  const sortable = useSortable({ id: session.sessionId })
+
+  return (
+    <div ref={sortable.setNodeRef} style={sortableStyle(sortable)}>
+      <SessionRow
+        machineId={machine.machineId}
+        session={session}
+        projects={projects}
+        disabled={false}
+        actions={actions}
+        onOpen={(selected) => onOpenSession(machine, selected)}
+        dragHandle={<SortableGrip sortable={sortable} label={`Reorder ${sessionLabel(session)}`} />}
+      />
+    </div>
+  )
+}
+
 /**
  * Everything the user pinned, above every machine.
  *
@@ -310,22 +347,60 @@ function PinnedCard({
 
 function MachineCard({
   machine,
+  sessionOrder,
+  collapsed,
   projects,
   actions,
+  onToggle,
+  onMoveSession,
   onOpenSession,
 }: {
   machine: MachineInfo
+  sessionOrder: readonly string[]
+  collapsed: boolean
   projects: Projects
   actions: SessionActions
+  onToggle(): void
+  onMoveSession(activeId: string, overId: string): void
   onOpenSession(machine: MachineInfo, session: SessionInfo): void
 }) {
   // Shown above, so not shown twice. The count in the header still includes them:
   // it answers "what is running on that machine", which pinning does not change.
-  const listed = machine.sessions.filter((session) => !session.pinned)
+  const listed = orderByPreference(
+    machine.sessions,
+    sessionOrder,
+    (session) => session.sessionId,
+  ).filter((session) => !session.pinned)
+  const sortable = useSortable({ id: machine.machineId })
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60">
-      <header className="flex items-center gap-3 border-b border-slate-800 px-4 py-3">
+    <section
+      ref={sortable.setNodeRef}
+      style={sortableStyle(sortable)}
+      className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60"
+    >
+      <header
+        className={`flex items-center gap-2 px-3 py-3 ${collapsed ? '' : 'border-b border-slate-800'}`}
+      >
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${machine.displayName}`}
+          aria-expanded={!collapsed}
+          className="flex min-h-10 w-9 shrink-0 items-center justify-center rounded-lg text-slate-500 transition hover:text-slate-300 active:bg-slate-800"
+        >
+          <svg
+            viewBox="0 0 20 20"
+            className={`size-5 transition-transform ${collapsed ? '-rotate-90' : ''}`}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            aria-hidden
+          >
+            <path d="m5 7 5 5 5-5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+
         <span
           className={`size-2.5 shrink-0 rounded-full ${
             machine.online ? 'bg-emerald-400' : 'bg-slate-600'
@@ -348,62 +423,71 @@ function MachineCard({
             ? '—'
             : `${machine.sessions.length} session${machine.sessions.length === 1 ? '' : 's'}`}
         </span>
+
+        <SortableGrip sortable={sortable} label={`Reorder ${machine.displayName}`} />
       </header>
 
-      <div className="p-1.5">
-        {machine.online ? (
-          listed.length > 0 ? (
-            listed.map((session) => (
-              <SessionRow
-                key={session.sessionId}
-                machineId={machine.machineId}
-                session={session}
-                projects={projects}
-                disabled={false}
-                actions={actions}
-                onOpen={(s) => onOpenSession(machine, s)}
-              />
-            ))
-          ) : machine.sessions.length > 0 ? (
-            // Everything it has is pinned, and so is showing above. Saying "nothing
-            // running" here would be a lie the user can see through.
-            <p className="px-3 py-4 text-[13px] text-slate-500">
-              {machine.sessions.length === 1 ? 'Its session is' : 'All of its sessions are'} pinned
-              above.
-            </p>
+      {collapsed ? null : (
+        <div className="p-1.5">
+          {machine.online ? (
+            listed.length > 0 ? (
+              <SortableList ids={listed.map((session) => session.sessionId)} onMove={onMoveSession}>
+                {listed.map((session) => (
+                  <SortableSessionRow
+                    key={session.sessionId}
+                    machine={machine}
+                    session={session}
+                    projects={projects}
+                    actions={actions}
+                    onOpenSession={onOpenSession}
+                  />
+                ))}
+              </SortableList>
+            ) : machine.sessions.length > 0 ? (
+              // Everything it has is pinned, and so is showing above. Saying "nothing
+              // running" here would be a lie the user can see through.
+              <p className="px-3 py-4 text-[13px] text-slate-500">
+                {machine.sessions.length === 1 ? 'Its session is' : 'All of its sessions are'}{' '}
+                pinned above.
+              </p>
+            ) : (
+              <p className="px-3 py-4 text-[13px] text-slate-500">
+                Nothing running. Start one with{' '}
+                <code className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-xs text-slate-300">
+                  1remote pwsh
+                </code>{' '}
+                at the machine.
+              </p>
+            )
           ) : (
+            // Not "no sessions": a session cannot outlive its wrapper, so an offline
+            // machine has none by definition, and saying so as though it were news
+            // would imply the machine is up and idle.
             <p className="px-3 py-4 text-[13px] text-slate-500">
-              Nothing running. Start one with{' '}
-              <code className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-xs text-slate-300">
-                1remote pwsh
-              </code>{' '}
-              at the machine.
+              The agent on this machine is not connected. Sessions reappear when it comes back.
             </p>
-          )
-        ) : (
-          // Not "no sessions": a session cannot outlive its wrapper, so an offline
-          // machine has none by definition, and saying so as though it were news
-          // would imply the machine is up and idle.
-          <p className="px-3 py-4 text-[13px] text-slate-500">
-            The agent on this machine is not connected. Sessions reappear when it comes back.
-          </p>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </section>
   )
 }
 
 export function MachineList({
+  projectId,
   machines,
   projects,
   actions,
   onOpenSession,
 }: {
+  projectId: string
   machines: Machines
   projects: Projects
   actions: SessionActions
   onOpenSession(machine: MachineInfo, session: SessionInfo): void
 }) {
+  const [layout, setLayout] = useProjectLayout(projectId)
+
   if (machines.length === 0) {
     return (
       <Empty title="No machines yet">
@@ -413,19 +497,106 @@ export function MachineList({
     )
   }
 
+  const preferredMachines = orderByPreference(
+    machines,
+    layout.machineOrder,
+    (machine) => machine.machineId,
+  )
+  const orderedMachines = [
+    ...preferredMachines.filter((machine) => machine.sessions.length > 0),
+    ...preferredMachines.filter((machine) => machine.sessions.length === 0),
+  ]
+  const activeMachines = orderedMachines.filter((machine) => machine.sessions.length > 0)
+  const inactiveMachines = orderedMachines.filter((machine) => machine.sessions.length === 0)
+
+  const moveMachine = (
+    group: readonly MachineInfo[],
+    activeId: string,
+    overId: string,
+  ) => {
+    const groupOrder = moveId(
+      group.map((machine) => machine.machineId),
+      activeId,
+      overId,
+    )
+    const activeOrder =
+      group === activeMachines
+        ? groupOrder
+        : activeMachines.map((machine) => machine.machineId)
+    const inactiveOrder =
+      group === inactiveMachines
+        ? groupOrder
+        : inactiveMachines.map((machine) => machine.machineId)
+
+    setLayout((current) => ({
+      ...current,
+      machineOrder: [...activeOrder, ...inactiveOrder],
+    }))
+  }
+
+  const machineCard = (machine: MachineInfo) => (
+    <MachineCard
+      key={machine.machineId}
+      machine={machine}
+      sessionOrder={layout.sessionOrder[machine.machineId] ?? []}
+      collapsed={layout.collapsedMachines[machine.machineId] ?? machine.sessions.length === 0}
+      projects={projects}
+      actions={actions}
+      onToggle={() =>
+        setLayout((current) => {
+          const collapsed =
+            current.collapsedMachines[machine.machineId] ?? machine.sessions.length === 0
+          return {
+            ...current,
+            collapsedMachines: {
+              ...current.collapsedMachines,
+              [machine.machineId]: !collapsed,
+            },
+          }
+        })
+      }
+      onMoveSession={(activeId, overId) =>
+        setLayout((current) => {
+          const listedIds = orderByPreference(
+            machine.sessions.filter((session) => !session.pinned),
+            current.sessionOrder[machine.machineId] ?? [],
+            (session) => session.sessionId,
+          ).map((session) => session.sessionId)
+
+          return {
+            ...current,
+            sessionOrder: {
+              ...current.sessionOrder,
+              [machine.machineId]: moveId(listedIds, activeId, overId),
+            },
+          }
+        })
+      }
+      onOpenSession={onOpenSession}
+    />
+  )
+
   return (
     <div className="flex flex-col gap-3">
       <PinnedCard machines={machines} projects={projects} actions={actions} onOpenSession={onOpenSession} />
 
-      {machines.map((machine) => (
-        <MachineCard
-          key={machine.machineId}
-          machine={machine}
-          projects={projects}
-          actions={actions}
-          onOpenSession={onOpenSession}
-        />
-      ))}
+      <SortableList
+        ids={activeMachines.map((machine) => machine.machineId)}
+        onMove={(activeId, overId) => moveMachine(activeMachines, activeId, overId)}
+      >
+        <div className="flex flex-col gap-3">
+          {activeMachines.map(machineCard)}
+        </div>
+      </SortableList>
+
+      <SortableList
+        ids={inactiveMachines.map((machine) => machine.machineId)}
+        onMove={(activeId, overId) => moveMachine(inactiveMachines, activeId, overId)}
+      >
+        <div className="flex flex-col gap-3">
+          {inactiveMachines.map(machineCard)}
+        </div>
+      </SortableList>
     </div>
   )
 }

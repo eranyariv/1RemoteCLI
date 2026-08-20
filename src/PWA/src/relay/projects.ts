@@ -48,6 +48,7 @@ export function findProject(projects: Projects, projectId: string | null): Proje
 export interface ProjectStats {
   sessionCount: number
   machineCount: number
+  machineName: string | null
   awaitingInputCount: number
 }
 
@@ -74,7 +75,12 @@ export function projectStats(machines: Machines, projectId: string): ProjectStat
     }
   }
 
-  return { sessionCount, machineCount: machineIds.size, awaitingInputCount }
+  const machineName =
+    machineIds.size === 1
+      ? (machines.find((machine) => machineIds.has(machine.machineId))?.displayName ?? null)
+      : null
+
+  return { sessionCount, machineCount: machineIds.size, machineName, awaitingInputCount }
 }
 
 /**

@@ -12,6 +12,7 @@ import { Banner, StatusPill, VersionLine } from './ui/Chrome'
 import { MachineList } from './ui/MachineList'
 import { NotificationsCard } from './ui/NotificationsCard'
 import { ProjectEditor } from './ui/ProjectEditor'
+import { ProjectDetails } from './ui/ProjectDetails'
 import { ProjectTiles } from './ui/ProjectTiles'
 import { SignInScreen } from './ui/SignInScreen'
 
@@ -237,12 +238,17 @@ export default function App() {
         ) : null}
 
         {selectedProjectId ? (
-          <MachineList
-            machines={scopedMachines}
-            projects={relay.projects}
-            actions={sessionActions}
-            onOpenSession={openSession}
-          />
+          <>
+            {selectedProject ? <ProjectDetails project={selectedProject} /> : null}
+            <MachineList
+              key={selectedProjectId}
+              projectId={selectedProjectId}
+              machines={scopedMachines}
+              projects={relay.projects}
+              actions={sessionActions}
+              onOpenSession={openSession}
+            />
+          </>
         ) : (
           <ProjectTiles
             projects={relay.projects}

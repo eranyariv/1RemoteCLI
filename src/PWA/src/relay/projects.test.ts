@@ -136,6 +136,7 @@ describe('projectStats', () => {
     expect(projectStats(machines, 'work')).toEqual({
       sessionCount: 3,
       machineCount: 2,
+      machineName: null,
       awaitingInputCount: 0,
     })
   })
@@ -165,8 +166,20 @@ describe('projectStats', () => {
     expect(projectStats(machines, 'idle')).toEqual({
       sessionCount: 0,
       machineCount: 0,
+      machineName: null,
       awaitingInputCount: 0,
     })
+  })
+
+  it('names the machine when every session is on one machine', () => {
+    const machines = replaceAllMachines([
+      machine('desk', {
+        displayName: 'Office desktop',
+        sessions: [session('s1', { projectId: 'work' }), session('s2', { projectId: 'work' })],
+      }),
+    ])
+
+    expect(projectStats(machines, 'work').machineName).toBe('Office desktop')
   })
 })
 

@@ -91,8 +91,10 @@ internal sealed class SettingsWindow
     private const int IdSendFeedback = 105;
     private const int IdUpdate = 106;
     private const int IdCheckForUpdates = 107;
-    private const int IdTabs = 108;
+    private const int IdStatusTab = 108;
     private const int IdHideArchivedSessions = 109;
+    private const int IdSessionsTab = 110;
+    private const int IdSettingsTab = 111;
 
     private const int Style =
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX |
@@ -159,7 +161,9 @@ internal sealed class SettingsWindow
     private IntPtr _strongFont;
     private IntPtr _captionFont;
     private Theme _theme = Theme.Current();
-    private IntPtr _tabs;
+    private IntPtr _statusTab;
+    private IntPtr _sessionsTab;
+    private IntPtr _settingsTab;
     private IntPtr _pageBackground;
     private IntPtr _accountOrb;
     private IntPtr _accountLabel;
@@ -469,7 +473,7 @@ internal sealed class SettingsWindow
         var commonControls = new INITCOMMONCONTROLSEX
         {
             dwSize = Marshal.SizeOf<INITCOMMONCONTROLSEX>(),
-            dwICC = ICC_LINK_CLASS | ICC_TAB_CLASSES | ICC_LISTVIEW_CLASSES,
+            dwICC = ICC_LINK_CLASS | ICC_LISTVIEW_CLASSES,
         };
 
         if (!InitCommonControlsEx(ref commonControls))
@@ -477,18 +481,36 @@ internal sealed class SettingsWindow
             throw new InvalidOperationException("Windows did not initialize the Settings controls.");
         }
 
-        _tabs = Create(
+        _statusTab = Create(
             instance,
-            "SysTabControl32",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            "BUTTON",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_AUTORADIOBUTTON | BS_PUSHLIKE,
             0,
             0,
             100,
+            ButtonHeight,
+            IdStatusTab,
+            SettingsPresenter.StatusTabLabel);
+        _sessionsTab = Create(
+            instance,
+            "BUTTON",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON | BS_PUSHLIKE,
+            0,
+            0,
+            128,
+            ButtonHeight,
+            IdSessionsTab,
+            SettingsPresenter.SessionsTabLabel);
+        _settingsTab = Create(
+            instance,
+            "BUTTON",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON | BS_PUSHLIKE,
+            0,
+            0,
             100,
-            IdTabs);
-        InsertTab(SettingsPage.Status, SettingsPresenter.StatusTabLabel);
-        InsertTab(SettingsPage.Sessions, SettingsPresenter.SessionsTabLabel);
-        InsertTab(SettingsPage.Settings, SettingsPresenter.SettingsTabLabel);
+            ButtonHeight,
+            IdSettingsTab,
+            SettingsPresenter.SettingsTabLabel);
         _pageBackground = Create(
             instance,
             "STATIC",
@@ -634,21 +656,9 @@ internal sealed class SettingsWindow
             BS_DEFPUSHBUTTON);
 
         _page = (SettingsPage)_layout.ActiveTab;
-        SendMessage(_tabs, TCM_SETCURSEL, (IntPtr)_layout.ActiveTab, IntPtr.Zero);
         ShowPage(_page, persist: false);
         UpdateSortIndicator();
         LayoutControls();
-    }
-
-    private void InsertTab(SettingsPage page, string text)
-    {
-        var item = new TCITEM
-        {
-            mask = TCIF_TEXT,
-            pszText = text,
-            cchTextMax = text.Length,
-        };
-        SendMessageTabItem(_tabs, TCM_INSERTITEMW, (IntPtr)(int)page, ref item);
     }
 
     private void InsertSessionColumns()
@@ -683,6 +693,9 @@ internal sealed class SettingsWindow
     private void ShowPage(SettingsPage page, bool persist = true)
     {
         _page = page;
+        Check(_statusTab, page == SettingsPage.Status);
+        Check(_sessionsTab, page == SettingsPage.Sessions);
+        Check(_settingsTab, page == SettingsPage.Settings);
         ShowPageControls(_statusControls, page == SettingsPage.Status);
         ShowPageControls(_sessionControls, page == SettingsPage.Sessions);
         ShowPageControls(_settingsControls, page == SettingsPage.Settings);
@@ -707,7 +720,7 @@ internal sealed class SettingsWindow
 
     private void LayoutControls()
     {
-        if (_window == IntPtr.Zero || _tabs == IntPtr.Zero ||
+        if (_window == IntPtr.Zero || _statusTab == IntPtr.Zero ||
             !GetClientRect(_window, out RECT client))
         {
             return;
@@ -722,8 +735,23 @@ internal sealed class SettingsWindow
         int pageY = Margin + 52;
         int pageBottom = Margin + tabHeight - 16;
 
-        Move(_tabs, Margin, Margin, content, tabHeight);
-        Move(_pageBackground, Margin + 2, Margin + 26, content - 4, tabHeight - 28);
+        const int statusTabWidth = 100;
+        const int sessionsTabWidth = 128;
+        const int settingsTabWidth = 100;
+        Move(_statusTab, Margin, Margin, statusTabWidth, ButtonHeight);
+        Move(_sessionsTab, Margin + statusTabWidth + Tight, Margin, sessionsTabWidth, ButtonHeight);
+        Move(
+            _settingsTab,
+            Margin + statusTabWidth + Tight + sessionsTabWidth + Tight,
+            Margin,
+            settingsTabWidth,
+            ButtonHeight);
+        Move(
+            _pageBackground,
+            Margin,
+            Margin + ButtonHeight + Tight,
+            content,
+            tabHeight - ButtonHeight - Tight);
         Move(_close, clientWidth - Margin - 104, clientHeight - Margin - ButtonHeight, 104, ButtonHeight);
 
         const int orbWidth = 18;
@@ -1151,17 +1179,6 @@ internal sealed class SettingsWindow
                     return IntPtr.Zero;
                 }
 
-                if (notification.hwndFrom == _tabs && notification.code == TCN_SELCHANGE)
-                {
-                    int selected = (int)SendMessage(_tabs, TCM_GETCURSEL, IntPtr.Zero, IntPtr.Zero);
-                    if (Enum.IsDefined((SettingsPage)selected))
-                    {
-                        ShowPage((SettingsPage)selected);
-                    }
-
-                    return IntPtr.Zero;
-                }
-
                 return DefWindowProc(window, message, wParam, lParam);
 
             case WM_TIMER:
@@ -1208,8 +1225,8 @@ internal sealed class SettingsWindow
 
             case WM_CTLCOLORSTATIC:
                 // The page background and its labels share one layer brush. Keeping
-                // both explicit avoids depending on the stock tab's slightly different
-                // fill colour, which otherwise outlines every label rectangle.
+                // both explicit makes labels disappear into the page instead of showing
+                // a rectangle around every line of text.
                 SetBkMode(wParam, TRANSPARENT);
                 SetTextColor(
                     wParam,
@@ -1381,6 +1398,18 @@ internal sealed class SettingsWindow
                 OnHideArchivedSessionsToggled();
                 break;
 
+            case IdStatusTab:
+                ShowPage(SettingsPage.Status);
+                break;
+
+            case IdSessionsTab:
+                ShowPage(SettingsPage.Sessions);
+                break;
+
+            case IdSettingsTab:
+                ShowPage(SettingsPage.Settings);
+                break;
+
             case IdWrapShortcut:
                 OnWrapShortcut();
                 break;
@@ -1549,7 +1578,9 @@ internal sealed class SettingsWindow
         _statusControls.Clear();
         _sessionControls.Clear();
         _settingsControls.Clear();
-        _tabs = IntPtr.Zero;
+        _statusTab = IntPtr.Zero;
+        _sessionsTab = IntPtr.Zero;
+        _settingsTab = IntPtr.Zero;
         _pageBackground = IntPtr.Zero;
         _accountOrb = IntPtr.Zero;
         _accountLabel = IntPtr.Zero;

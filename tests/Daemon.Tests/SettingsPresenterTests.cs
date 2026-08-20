@@ -209,6 +209,10 @@ public sealed class SettingsPresenterTests
         Assert.Equal($"Version {ProductVersion.Current}", View().Version);
     }
 
+    [Fact]
+    public void ArchivedSessionPreferenceHasTheRequestedLabel() =>
+        Assert.Equal("Hide archived sessions", SettingsPresenter.HideArchivedSessionsLabel);
+
     private static SettingsView WithUpdate(UpdateStatus update) =>
         SettingsPresenter.Present(AgentState.Connected, "ada@example.com", [], Now, update);
 

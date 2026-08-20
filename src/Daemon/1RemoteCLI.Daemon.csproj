@@ -35,8 +35,10 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.28" />
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="8.0.28" />
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="8.0.28" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
     <PackageReference Include="Microsoft.Identity.Client" Version="4.66.2" />
+    <PackageReference Include="SQLitePCLRaw.bundle_winsqlite3" Version="2.1.6" />
     <!-- Draws the tray icon. Worth checking before adding anything here: this package
          is GDI+ and nothing else, so it does not pull in the Windows Desktop runtime
          the way a Windows Forms reference does. -->

@@ -24,6 +24,9 @@ public sealed class AcpProvider(Action<string>? log = null) : IAsyncDisposable
     private IAgentChatSink? _sink;
     private int _activeTurns;
 
+    /// <summary>Raised when the discovered chat count changes.</summary>
+    public event Action? Changed;
+
     public int Count => _sessions.Count;
 
     public int ActiveTurns => Volatile.Read(ref _activeTurns);
@@ -216,6 +219,7 @@ public sealed class AcpProvider(Action<string>? log = null) : IAsyncDisposable
     {
         JsonElement result = await Client.CallAsync("session/list", new JsonObject(), cancellationToken)
             .ConfigureAwait(false);
+        bool changed = false;
 
         DateTimeOffset cutoff = DateTimeOffset.UtcNow - RecentWindow;
         List<SessionMetadata> latest = result.TryGetProperty("sessions", out JsonElement sessions)
@@ -250,6 +254,7 @@ public sealed class AcpProvider(Action<string>? log = null) : IAsyncDisposable
                 _settings.Program,
                 _settings.CliType);
             _sessions[item.SessionId] = added;
+            changed = true;
 
             if (_sink is not null)
             {
@@ -259,10 +264,20 @@ public sealed class AcpProvider(Action<string>? log = null) : IAsyncDisposable
 
         foreach ((string id, AcpSession session) in _sessions)
         {
-            if (!visible.Contains(id) && _sessions.TryRemove(id, out _) && _sink is not null)
+            if (!visible.Contains(id) && _sessions.TryRemove(id, out _))
             {
-                await _sink.OnChatClosedAsync(session, cancellationToken).ConfigureAwait(false);
+                changed = true;
+
+                if (_sink is not null)
+                {
+                    await _sink.OnChatClosedAsync(session, cancellationToken).ConfigureAwait(false);
+                }
             }
+        }
+
+        if (changed)
+        {
+            Changed?.Invoke();
         }
     }
 

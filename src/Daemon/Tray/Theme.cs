@@ -100,6 +100,14 @@ internal sealed class Theme : IDisposable
 
     internal uint Border { get; }
 
+    internal uint StatusColor(StatusTone tone) => tone switch
+    {
+        StatusTone.Error => Dark ? 0x00A499FFu : 0x001C2BC4u,
+        StatusTone.Connecting => 0x000C63F7u,
+        StatusTone.Good => Dark ? 0x005FCB6Cu : 0x000F7B0Fu,
+        _ => SecondaryText,
+    };
+
     internal IntPtr SurfaceBrush { get; }
 
     internal IntPtr LayerBrush { get; }

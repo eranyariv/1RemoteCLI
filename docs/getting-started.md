@@ -131,18 +131,16 @@ An important boundary: 1RemoteCLI can answer permissions raised by a turn you st
 
 ## 6. The settings window
 
-Double-click the tray icon, or right-click it and choose **Settings…**. Everything the
-agent knows about itself is on one window:
+Double-click the tray icon, or right-click it and choose **Settings…**. The window is
+split into three tabs:
 
-- **Who is signed in**, and whether the hub connection is up. If your phone cannot see
-  this machine, the second line says why and what it means — a machine that is
-  reconnecting keeps its sessions running, and it says so.
-- **The sessions on this machine**, live: what each one is, how long it has been there,
-  and whether it is sitting at a prompt waiting for an answer. It is the same judgement
-  that decides whether to notify your phone.
-- **Start when I sign in to Windows** — a checkbox, and it is read from Task Scheduler
-  and the registry every time the window opens rather than remembered. If somebody
-  turned the agent off in Task Manager's Startup tab, this shows it.
+- **Status** shows the signed-in account and hub connection with separate status
+  indicators, plus the installed version, change history, and update controls.
+- **Local sessions** lists wrapped terminals and ACP-discovered Copilot or Claude chats
+  together, and holds the shortcut-wrapping action.
+- **Settings** contains user-controlled options. **Start when I sign in to Windows** is
+  read from Task Scheduler and the registry every time the window opens rather than
+  remembered.
 - **Wrap a desktop shortcut…**, below.
 - The version, the logs and **Send feedback…**.
 

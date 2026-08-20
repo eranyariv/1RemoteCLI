@@ -4,9 +4,18 @@ using OneRemoteCli.Protocol.Hub;
 
 namespace OneRemoteCli.Daemon.Tray;
 
+/// <summary>The semantic colour of a status orb in the settings window.</summary>
+public enum StatusTone
+{
+    Disabled,
+    Connecting,
+    Good,
+    Error,
+}
+
 /// <summary>One live session, reduced to what the settings window shows.</summary>
 /// <param name="DisplayName">What the user called it, or the program name.</param>
-/// <param name="StartedUtc">When it began.</param>
+/// <param name="StartedUtc">When a terminal began, or when an agent chat was last updated.</param>
 /// <param name="AwaitingInput">
 /// Whether it looks like it is waiting for an answer right now. The same judgement
 /// that decides whether to notify a phone, asked again rather than remembered: the
@@ -19,16 +28,22 @@ namespace OneRemoteCli.Daemon.Tray;
 /// where it is corrected. <see cref="Protocol.Hub.CliType.Generic"/> is written as
 /// nothing at all — see <see cref="SettingsPresenter.Describe(SessionSummary, DateTimeOffset)"/>.
 /// </param>
+/// <param name="Kind">Whether this is a wrapped terminal or an ACP-backed chat.</param>
+/// <param name="Program">The ACP provider name for a chat.</param>
 public readonly record struct SessionSummary(
     string DisplayName,
     DateTimeOffset StartedUtc,
     bool AwaitingInput,
-    CliType CliType = CliType.Generic);
+    CliType CliType = CliType.Generic,
+    SessionKind Kind = SessionKind.Terminal,
+    string Program = "");
 
 /// <summary>Everything the settings window reads, as text.</summary>
 /// <param name="Account">Who is signed in, or that nobody is.</param>
 /// <param name="Connection">Whether the phone can see this machine, and what to do if not.</param>
 /// <param name="SignedIn">Which of sign-in and sign-out to offer.</param>
+/// <param name="AccountTone">The account status orb.</param>
+/// <param name="ConnectionTone">The hub connection status orb.</param>
 /// <param name="HasSessions">
 /// False when <paramref name="Sessions"/> holds the empty-state sentence rather than
 /// sessions, so the window can show it without making it look selectable.
@@ -44,6 +59,8 @@ public readonly record struct SettingsView(
     string Account,
     string Connection,
     bool SignedIn,
+    StatusTone AccountTone,
+    StatusTone ConnectionTone,
     bool HasSessions,
     IReadOnlyList<string> Sessions,
     string Version,
@@ -67,7 +84,13 @@ public static class SettingsPresenter
 
     public const string SignOutLabel = "Sign out";
 
-    public const string SessionsLabel = "Sessions on this machine";
+    public const string StatusTabLabel = "Status";
+
+    public const string SessionsTabLabel = "Local sessions";
+
+    public const string SettingsTabLabel = "Settings";
+
+    public const string SessionsLabel = "Sessions discovered on this machine";
 
     /// <summary>
     /// Worded as the thing that happens rather than as a setting name. "Start at
@@ -89,13 +112,16 @@ public static class SettingsPresenter
     /// Shown in place of the list. It names the command, because somebody looking at
     /// an empty list has not yet worked out that sessions are something they start.
     /// </summary>
-    public const string NoSessions = "No sessions. Run '1remote pwsh' to share one.";
+    public const string NoSessions =
+        "No local sessions. Run '1remote pwsh' or start a Copilot or Claude chat.";
 
     /// <summary>
     /// The update button. It says what will happen rather than what state the machine
     /// is in, because the line above it already says the state.
     /// </summary>
     public const string UpdateLabel = "Update now";
+
+    public const string CheckForUpdatesLabel = "Check for updates";
 
     public static SettingsView Present(
         AgentState state,
@@ -124,6 +150,13 @@ public static class SettingsPresenter
             signedIn ? $"Signed in as {account}" : "Not signed in",
             connection,
             signedIn,
+            signedIn ? StatusTone.Good : StatusTone.Disabled,
+            state switch
+            {
+                AgentState.Connected => StatusTone.Good,
+                AgentState.Reconnecting => StatusTone.Connecting,
+                _ => StatusTone.Disabled,
+            },
             lines.Length > 0,
             lines.Length > 0 ? lines : [NoSessions],
             $"Version {ProductVersion.Current}",
@@ -177,11 +210,26 @@ public static class SettingsPresenter
     /// </summary>
     public static string Describe(SessionSummary session, DateTimeOffset now)
     {
-        string kind = session.CliType == CliType.Generic
-            ? string.Empty
-            : $"{CliTypes.Label(session.CliType)} \u2014 ";
+        string kind;
+        string age;
 
-        string line = $"{session.DisplayName} \u2014 {kind}started {Since(now - session.StartedUtc)}";
+        if (session.Kind == SessionKind.AgentChat)
+        {
+            string provider = string.IsNullOrWhiteSpace(session.Program)
+                ? CliTypes.Label(session.CliType)
+                : session.Program;
+            kind = $"{provider} chat \u2014 ";
+            age = $"updated {Since(now - session.StartedUtc)}";
+        }
+        else
+        {
+            kind = session.CliType == CliType.Generic
+                ? string.Empty
+                : $"{CliTypes.Label(session.CliType)} \u2014 ";
+            age = $"started {Since(now - session.StartedUtc)}";
+        }
+
+        string line = $"{session.DisplayName} \u2014 {kind}{age}";
 
         return session.AwaitingInput ? $"{line} \u2014 waiting for input" : line;
     }

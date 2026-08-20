@@ -67,7 +67,14 @@ internal static partial class NativeMethods
 
     internal const int NM_CLICK = -2;
     internal const int NM_RETURN = -4;
+    internal const int TCN_SELCHANGE = -551;
     internal const int ICC_LINK_CLASS = 0x00008000;
+    internal const int ICC_TAB_CLASSES = 0x00000008;
+
+    internal const int TCM_FIRST = 0x1300;
+    internal const int TCM_GETCURSEL = TCM_FIRST + 11;
+    internal const int TCM_INSERTITEMW = TCM_FIRST + 62;
+    internal const int TCIF_TEXT = 0x0001;
 
     internal const int NIM_ADD = 0x00000000;
     internal const int NIM_MODIFY = 0x00000001;
@@ -177,6 +184,21 @@ internal static partial class NativeMethods
     {
         public int dwSize;
         public int dwICC;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    internal struct TCITEM
+    {
+        public int mask;
+        public int dwState;
+        public int dwStateMask;
+
+        [MarshalAs(UnmanagedType.LPWStr)]
+        public string pszText;
+
+        public int cchTextMax;
+        public int iImage;
+        public IntPtr lParam;
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -358,6 +380,7 @@ internal static partial class NativeMethods
     internal const int BS_DEFPUSHBUTTON = 0x00000001;
     internal const int BS_AUTOCHECKBOX = 0x00000003;
     internal const int SS_LEFT = 0x00000000;
+    internal const int SS_CENTER = 0x00000001;
     internal const int SS_ENDELLIPSIS = 0x00004000;
 
     /// <summary>
@@ -590,6 +613,9 @@ internal static partial class NativeMethods
     [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode)]
     internal static extern IntPtr SendMessageString(IntPtr hWnd, int msg, IntPtr wParam, string lParam);
 
+    [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode)]
+    internal static extern IntPtr SendMessageTabItem(IntPtr hWnd, int msg, IntPtr wParam, ref TCITEM lParam);
+
     [DllImport("user32.dll", EntryPoint = "SetWindowTextW", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool SetWindowText(IntPtr hWnd, string text);
@@ -639,14 +665,6 @@ internal static partial class NativeMethods
     [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool AdjustWindowRect(ref RECT rect, int style, [MarshalAs(UnmanagedType.Bool)] bool hasMenu);
-
-    /// <summary>
-    /// Where the window is now, in screen coordinates, so growing it can leave its
-    /// top-left where the user put it.
-    /// </summary>
-    [LibraryImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    internal static partial bool GetWindowRect(IntPtr hWnd, out RECT rect);
 
     [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

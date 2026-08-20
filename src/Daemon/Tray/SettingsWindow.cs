@@ -41,10 +41,8 @@ public readonly record struct SettingsNotice(string Text, NoticeKind Kind);
 /// because the update outlives the click by a minute or two.
 /// </param>
 /// <param name="CheckForUpdate">
-/// Asks for the periodic check to happen now, once, as the window opens. Someone who
-/// has come here to look at the agent is the one person who wants an answer that is
-/// current, and without this the first check is two minutes after logon and the next
-/// one a day later — so the window would spend most of its life reporting yesterday.
+/// Asks for the periodic check to happen now, both when the window opens and when the
+/// user presses the always-available check button.
 /// </param>
 public sealed record SettingsActions(
     Func<SettingsView> Read,
@@ -87,12 +85,12 @@ internal sealed class SettingsWindow
     private const int IdOpenLogs = 104;
     private const int IdSendFeedback = 105;
     private const int IdUpdate = 106;
+    private const int IdCheckForUpdates = 107;
+    private const int IdTabs = 108;
 
     /// <summary>
     /// No resize border and no maximise box: the layout is fixed arithmetic, so a
-    /// window the user could stretch would only ever show more grey. Named here rather
-    /// than where the window is created because the height changes when the update row
-    /// appears, and re-measuring the frame needs the same style back.
+    /// window the user could stretch would only ever show more grey.
     /// </summary>
     private const int Style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
 
@@ -111,7 +109,9 @@ internal sealed class SettingsWindow
     /// </summary>
     private const int Margin = 20;
 
-    private const int ClientWidth = 480;
+    private const int ClientWidth = 520;
+
+    private const int ClientHeight = 432;
 
     /// <summary>Between two groups. Inside one, things sit <see cref="Tight"/> apart.</summary>
     private const int Gap = 20;
@@ -123,7 +123,9 @@ internal sealed class SettingsWindow
 
     private const int ButtonHeight = 32;
 
-    private const int SessionsHeight = 140;
+    private const int SessionsHeight = 210;
+
+    private const int TabHeight = 348;
 
     /// <summary>
     /// Fluent's Body size, in pixels at 96 DPI. The Win32 shell dialog font is 9pt,
@@ -150,6 +152,9 @@ internal sealed class SettingsWindow
     /// </para>
     /// </summary>
     private readonly List<(IntPtr Control, int X, int Y, int Width, int Height)> _controls = [];
+    private readonly List<IntPtr> _statusControls = [];
+    private readonly List<IntPtr> _sessionControls = [];
+    private readonly List<IntPtr> _settingsControls = [];
 
     private bool _classRegistered;
     private int _dpi = 96;
@@ -159,7 +164,10 @@ internal sealed class SettingsWindow
     private IntPtr _strongFont;
     private IntPtr _captionFont;
     private Theme _theme = Theme.Current();
+    private IntPtr _tabs;
+    private IntPtr _accountOrb;
     private IntPtr _accountLabel;
+    private IntPtr _connectionOrb;
     private IntPtr _connectionLabel;
     private IntPtr _sessionsLabel;
     private IntPtr _signInOut;
@@ -169,23 +177,13 @@ internal sealed class SettingsWindow
     private IntPtr _changeHistory;
     private IntPtr _updateLabel;
     private IntPtr _update;
+    private IntPtr _checkForUpdates;
+    private StatusTone _accountTone = StatusTone.Disabled;
+    private StatusTone _connectionTone = StatusTone.Disabled;
+    private SettingsPage _page;
 
     /// <summary>Where the list box sits, in 96-DPI units, so its hairline can be drawn.</summary>
     private (int X, int Y, int Width, int Height) _sessionsBounds;
-
-    /// <summary>
-    /// The height the layout came out at, so the frame can be sized to fit it rather
-    /// than to a constant somebody has to remember to update.
-    /// </summary>
-    private int _clientHeight = 432;
-
-    /// <summary>Heights with and without the update row. See <see cref="ShowUpdate"/>.</summary>
-    private int _collapsedHeight;
-
-    private int _expandedHeight;
-
-    /// <summary>Whether the update row is on screen, so an unchanged state costs nothing.</summary>
-    private bool _updateShown;
 
     /// <summary>
     /// What the list currently shows. Kept so the refresh can leave the box alone when
@@ -193,6 +191,13 @@ internal sealed class SettingsWindow
     /// once a second would make a list of more than a few sessions unreadable.
     /// </summary>
     private IReadOnlyList<string> _shown = [];
+
+    private enum SettingsPage
+    {
+        Status,
+        Sessions,
+        Settings,
+    }
 
     internal SettingsWindow(SettingsActions actions)
     {
@@ -212,9 +217,7 @@ internal sealed class SettingsWindow
     internal void Show()
     {
         // Before anything is drawn, and on every open rather than only the first: the
-        // answer arrives through the same once-a-second refresh as everything else, so
-        // by the time someone has read the account line the update row is either there
-        // or the machine really is current.
+        // answer arrives through the same once-a-second refresh as everything else.
         _actions.CheckForUpdate?.Invoke();
 
         if (_window != IntPtr.Zero)
@@ -418,14 +421,12 @@ internal sealed class SettingsWindow
 
 
     /// <summary>Sizes to the client area we want, then centres on the screen.</summary>
-    private void Size(int style) => Size(style, centre: true);
-
-    private void Size(int style, bool centre)
+    private void Size(int style)
     {
         var bounds = new RECT
         {
             right = Scale(ClientWidth),
-            bottom = Scale(_clientHeight),
+            bottom = Scale(ClientHeight),
         };
 
         // The caption and borders are not part of what we laid out, and they differ by
@@ -437,16 +438,6 @@ internal sealed class SettingsWindow
 
         int x = Math.Max(0, (GetSystemMetrics(SM_CXSCREEN) - width) / 2);
         int y = Math.Max(0, (GetSystemMetrics(SM_CYSCREEN) - height) / 2);
-
-        // Growing an open window keeps its top-left where the user put it. The update
-        // row appears minutes after the window opened, and a dialog that jumps back to
-        // the middle of the screen while somebody is reading it is worse than the row
-        // it made space for.
-        if (!centre && GetWindowRect(_window, out RECT current))
-        {
-            x = current.left;
-            y = current.top;
-        }
 
         MoveWindow(
             _window,
@@ -462,7 +453,7 @@ internal sealed class SettingsWindow
         var commonControls = new INITCOMMONCONTROLSEX
         {
             dwSize = Marshal.SizeOf<INITCOMMONCONTROLSEX>(),
-            dwICC = ICC_LINK_CLASS,
+            dwICC = ICC_LINK_CLASS | ICC_TAB_CLASSES,
         };
 
         if (!InitCommonControlsEx(ref commonControls))
@@ -471,159 +462,221 @@ internal sealed class SettingsWindow
         }
 
         int content = ClientWidth - (Margin * 2);
+        int pageX = Margin + 16;
+        int pageWidth = content - 32;
+        int pageY = Margin + 52;
+
+        _tabs = Create(
+            instance,
+            "SysTabControl32",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            Margin,
+            Margin,
+            content,
+            TabHeight,
+            IdTabs);
+        InsertTab(SettingsPage.Status, SettingsPresenter.StatusTabLabel);
+        InsertTab(SettingsPage.Sessions, SettingsPresenter.SessionsTabLabel);
+        InsertTab(SettingsPage.Settings, SettingsPresenter.SettingsTabLabel);
+
+        const int orbWidth = 18;
         const int signInWidth = 112;
-        int y = Margin;
+        int textX = pageX + orbWidth + Tight;
+        int textWidth = pageWidth - orbWidth - Tight - signInWidth - Gap;
+        int y = pageY;
 
-        // Row one: who, and the button that changes it. The button is on the same line
-        // because signing in or out is the one thing this line ever leads to, and it is
-        // set in Body Strong because it is the answer to the question the window was
-        // opened to ask.
-        int textWidth = content - signInWidth - Gap;
+        _accountOrb = PageControl(
+            _statusControls,
+            Static(instance, pageX, y + 5, orbWidth, RowHeight, "\u25cf", SS_CENTER));
+        _accountLabel = PageControl(
+            _statusControls,
+            Static(instance, textX, y + 5, textWidth, RowHeight, font: _strongFont));
+        _signInOut = PageControl(
+            _statusControls,
+            Button(instance, IdSignInOut, pageX + pageWidth - signInWidth, y, signInWidth, ButtonHeight));
 
-        _accountLabel = Static(instance, Margin, y, textWidth, RowHeight, font: _strongFont);
-        _signInOut = Button(instance, IdSignInOut, ClientWidth - Margin - signInWidth, y, signInWidth, ButtonHeight);
+        y += ButtonHeight + Gap;
+        _connectionOrb = PageControl(
+            _statusControls,
+            Static(instance, pageX, y + 2, orbWidth, RowHeight, "\u25cf", SS_CENTER));
+        _connectionLabel = PageControl(
+            _statusControls,
+            Static(instance, textX, y, pageWidth - orbWidth - Tight, RowHeight * 2, style: SS_LEFT));
 
-        // Directly under the account, inside the same group, because signed out is one
-        // of the reasons the phone cannot see this machine. Two rows tall and without
-        // the ellipsis style, so the longest of these sentences wraps rather than losing
-        // its ending — which in one case is the part that says sessions still work.
-        y += RowHeight + Tight;
-        _connectionLabel = Static(instance, Margin, y, textWidth, RowHeight * 2, style: SS_LEFT);
         y += (RowHeight * 2) + Gap;
+        const int versionWidth = 96;
+        const int historyWidth = 112;
+        const int checkWidth = 140;
 
-        _sessionsLabel = Static(
-            instance,
-            Margin,
-            y,
-            content,
-            RowHeight,
-            SettingsPresenter.SessionsLabel,
-            font: _strongFont);
+        _versionLabel = PageControl(
+            _statusControls,
+            Static(
+                instance,
+                pageX,
+                y + ((ButtonHeight - RowHeight) / 2),
+                versionWidth,
+                RowHeight,
+                font: _captionFont));
+        _changeHistory = PageControl(
+            _statusControls,
+            Create(
+                instance,
+                "SysLink",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                pageX + versionWidth + Tight,
+                y + ((ButtonHeight - RowHeight) / 2),
+                historyWidth,
+                RowHeight,
+                IntPtr.Zero,
+                $"<a>{SettingsPresenter.ChangeHistoryLabel}</a>",
+                _captionFont));
+        _checkForUpdates = PageControl(
+            _statusControls,
+            Button(
+                instance,
+                IdCheckForUpdates,
+                pageX + pageWidth - checkWidth,
+                y,
+                checkWidth,
+                ButtonHeight,
+                SettingsPresenter.CheckForUpdatesLabel));
+
+        y += ButtonHeight + Tight;
+        const int updateWidth = 112;
+        const int updateTextHeight = RowHeight * 2;
+
+        _updateLabel = PageControl(
+            _statusControls,
+            Static(instance, pageX, y, pageWidth - updateWidth - Gap, updateTextHeight, style: SS_LEFT));
+        _update = PageControl(
+            _statusControls,
+            Button(
+                instance,
+                IdUpdate,
+                pageX + pageWidth - updateWidth,
+                y + ((updateTextHeight - ButtonHeight) / 2),
+                updateWidth,
+                ButtonHeight,
+                SettingsPresenter.UpdateLabel));
+
+        y += updateTextHeight + Gap;
+        const int utilityWidth = 116;
+
+        PageControl(
+            _statusControls,
+            Button(instance, IdOpenLogs, pageX, y, utilityWidth, ButtonHeight, SettingsPresenter.OpenLogsLabel));
+        PageControl(
+            _statusControls,
+            Button(
+                instance,
+                IdSendFeedback,
+                pageX + utilityWidth + Tight,
+                y,
+                utilityWidth,
+                ButtonHeight,
+                SettingsPresenter.SendFeedbackLabel));
+
+        y = pageY;
+        _sessionsLabel = PageControl(
+            _sessionControls,
+            Static(
+                instance,
+                pageX,
+                y,
+                pageWidth,
+                RowHeight,
+                SettingsPresenter.SessionsLabel,
+                font: _strongFont));
         y += RowHeight + Tight;
 
-        // No WS_BORDER. That border is drawn by Windows in a system colour that stays
-        // light in dark mode; the hairline is drawn in WM_PAINT instead, in the theme's
-        // own stroke colour.
-        _sessionsBounds = (Margin, y, content, SessionsHeight);
-        _sessions = Create(
-            instance,
-            "LISTBOX",
-            WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_TABSTOP | LBS_NOSEL | LBS_NOINTEGRALHEIGHT,
-            Margin,
-            y,
-            content,
-            SessionsHeight,
-            IntPtr.Zero);
+        _sessionsBounds = (pageX, y, pageWidth, SessionsHeight);
+        _sessions = PageControl(
+            _sessionControls,
+            Create(
+                instance,
+                "LISTBOX",
+                WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_TABSTOP | LBS_NOSEL | LBS_NOINTEGRALHEIGHT,
+                pageX,
+                y,
+                pageWidth,
+                SessionsHeight,
+                IntPtr.Zero));
         y += SessionsHeight + Gap;
 
-        _startAtLogon = Create(
-            instance,
-            "BUTTON",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-            Margin,
-            y,
-            content,
-            RowHeight + 4,
-            IdStartAtLogon,
-            SettingsPresenter.StartAtLogonLabel);
-        y += RowHeight + 4 + Gap;
+        PageControl(
+            _sessionControls,
+            Button(
+                instance,
+                IdWrapShortcut,
+                pageX,
+                y,
+                188,
+                ButtonHeight,
+                SettingsPresenter.WrapShortcutLabel));
 
-        // The one row of actions. Wrapping a shortcut lives here rather than in the
-        // tray menu (issue #66): it is a rare, deliberate act, and the tray menu is for
-        // the things that are needed in a hurry.
-        const int wrapWidth = 188;
-        const int logsWidth = 104;
-        int feedbackX = Margin + wrapWidth + Tight + logsWidth + Tight;
+        _startAtLogon = PageControl(
+            _settingsControls,
+            Create(
+                instance,
+                "BUTTON",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+                pageX,
+                pageY,
+                pageWidth,
+                RowHeight + 4,
+                IdStartAtLogon,
+                SettingsPresenter.StartAtLogonLabel));
 
-        Button(instance, IdWrapShortcut, Margin, y, wrapWidth, ButtonHeight, SettingsPresenter.WrapShortcutLabel);
-        Button(instance, IdOpenLogs, Margin + wrapWidth + Tight, y, logsWidth, ButtonHeight, SettingsPresenter.OpenLogsLabel);
-        Button(
-            instance,
-            IdSendFeedback,
-            feedbackX,
-            y,
-            ClientWidth - Margin - feedbackX,
-            ButtonHeight,
-            SettingsPresenter.SendFeedbackLabel);
-        y += ButtonHeight + Gap;
-
-        // The version is the first thing any bug report needs. Its adjacent link answers
-        // the next question: whether the build already contains a particular change.
         const int closeWidth = 104;
-        const int versionWidth = 96;
-        const int historyWidth = 104;
-
-        _versionLabel = Static(
-            instance,
-            Margin,
-            y + ((ButtonHeight - RowHeight) / 2),
-            versionWidth,
-            RowHeight,
-            font: _captionFont);
-
-        _changeHistory = Create(
-            instance,
-            "SysLink",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-            Margin + versionWidth + Tight,
-            y + ((ButtonHeight - RowHeight) / 2),
-            historyWidth,
-            RowHeight,
-            IntPtr.Zero,
-            $"<a>{SettingsPresenter.ChangeHistoryLabel}</a>",
-            _captionFont);
-
         Button(
             instance,
             IdClose,
             ClientWidth - Margin - closeWidth,
-            y,
+            Margin + TabHeight + 12,
             closeWidth,
             ButtonHeight,
             SettingsPresenter.CloseLabel,
             BS_DEFPUSHBUTTON);
 
-        y += ButtonHeight;
-        _collapsedHeight = y + Margin;
+        ShowPage(SettingsPage.Status);
+    }
 
-        // Last, and hidden until there is something to say — which is almost never.
-        //
-        // Last specifically so that appearing and disappearing costs one call to resize
-        // the window and nothing else. Anywhere further up, every control below it would
-        // have to be moved each time the agent finished a check, and a window whose
-        // buttons shift under the pointer while it is open is worse than one that is a
-        // row taller than it needs to be.
-        //
-        // Below the version rather than above it because the two say the same kind of
-        // thing, and "Version 0.12" reading directly above "Version 0.13 is available"
-        // is what makes the second sentence mean anything.
-        const int updateWidth = 112;
-        const int updateTextHeight = RowHeight * 2;
+    private void InsertTab(SettingsPage page, string text)
+    {
+        var item = new TCITEM
+        {
+            mask = TCIF_TEXT,
+            pszText = text,
+            cchTextMax = text.Length,
+        };
+        SendMessageTabItem(_tabs, TCM_INSERTITEMW, (IntPtr)(int)page, ref item);
+    }
 
-        y += Gap;
+    private static IntPtr PageControl(List<IntPtr> page, IntPtr control)
+    {
+        if (control != IntPtr.Zero)
+        {
+            page.Add(control);
+        }
 
-        _updateLabel = Static(
-            instance,
-            Margin,
-            y,
-            content - updateWidth - Gap,
-            updateTextHeight,
-            style: SS_LEFT);
+        return control;
+    }
 
-        _update = Button(
-            instance,
-            IdUpdate,
-            ClientWidth - Margin - updateWidth,
-            y + ((updateTextHeight - ButtonHeight) / 2),
-            updateWidth,
-            ButtonHeight,
-            SettingsPresenter.UpdateLabel);
+    private void ShowPage(SettingsPage page)
+    {
+        _page = page;
+        ShowPageControls(_statusControls, page == SettingsPage.Status);
+        ShowPageControls(_sessionControls, page == SettingsPage.Sessions);
+        ShowPageControls(_settingsControls, page == SettingsPage.Settings);
+        InvalidateRect(_window, IntPtr.Zero, true);
+    }
 
-        ShowWindow(_updateLabel, SW_HIDE);
-        ShowWindow(_update, SW_HIDE);
-
-        _expandedHeight = y + updateTextHeight + Margin;
-        _clientHeight = _collapsedHeight;
+    private static void ShowPageControls(IEnumerable<IntPtr> controls, bool show)
+    {
+        foreach (IntPtr control in controls)
+        {
+            ShowWindow(control, show ? SW_SHOW : SW_HIDE);
+        }
     }
 
     private IntPtr Static(
@@ -743,7 +796,15 @@ internal sealed class SettingsWindow
 
         SetWindowText(_updateLabel, view.Update);
         EnableWindow(_update, view.CanUpdate);
-        ShowUpdate(view.Update.Length > 0);
+        EnableWindow(_checkForUpdates, _actions.CheckForUpdate is not null);
+
+        if (_accountTone != view.AccountTone || _connectionTone != view.ConnectionTone)
+        {
+            _accountTone = view.AccountTone;
+            _connectionTone = view.ConnectionTone;
+            InvalidateRect(_accountOrb, IntPtr.Zero, true);
+            InvalidateRect(_connectionOrb, IntPtr.Zero, true);
+        }
 
         if (!_shown.SequenceEqual(view.Sessions))
         {
@@ -753,33 +814,6 @@ internal sealed class SettingsWindow
         if (reread)
         {
             Check(_startAtLogon, Ask(_actions.ReadStartAtLogon));
-        }
-    }
-
-    /// <summary>
-    /// Puts the update row on screen, or takes it away, growing the window to match.
-    /// <para>
-    /// Only on a change. This is called once a second from the refresh, and resizing a
-    /// window that is already the right size makes it flicker for as long as it is open.
-    /// </para>
-    /// </summary>
-    private void ShowUpdate(bool show)
-    {
-        if (show == _updateShown)
-        {
-            return;
-        }
-
-        _updateShown = show;
-
-        ShowWindow(_updateLabel, show ? SW_SHOW : SW_HIDE);
-        ShowWindow(_update, show ? SW_SHOW : SW_HIDE);
-
-        _clientHeight = show ? _expandedHeight : _collapsedHeight;
-
-        if (_window != IntPtr.Zero)
-        {
-            Size(Style, centre: false);
         }
     }
 
@@ -817,6 +851,17 @@ internal sealed class SettingsWindow
                     return IntPtr.Zero;
                 }
 
+                if (notification.hwndFrom == _tabs && notification.code == TCN_SELCHANGE)
+                {
+                    int selected = (int)SendMessage(_tabs, TCM_GETCURSEL, IntPtr.Zero, IntPtr.Zero);
+                    if (Enum.IsDefined((SettingsPage)selected))
+                    {
+                        ShowPage((SettingsPage)selected);
+                    }
+
+                    return IntPtr.Zero;
+                }
+
                 return DefWindowProc(window, message, wParam, lParam);
 
             case WM_TIMER:
@@ -842,7 +887,12 @@ internal sealed class SettingsWindow
                 // light rectangles on a dark surface. The version line is the one thing
                 // here that is deliberately quieter than the rest.
                 SetBkMode(wParam, TRANSPARENT);
-                SetTextColor(wParam, lParam == _versionLabel ? _theme.SecondaryText : _theme.Text);
+                SetTextColor(
+                    wParam,
+                    lParam == _accountOrb ? _theme.StatusColor(_accountTone)
+                    : lParam == _connectionOrb ? _theme.StatusColor(_connectionTone)
+                    : lParam == _versionLabel || lParam == _updateLabel ? _theme.SecondaryText
+                    : _theme.Text);
                 SetBkColor(wParam, _theme.Surface);
                 return _theme.SurfaceBrush;
 
@@ -896,7 +946,7 @@ internal sealed class SettingsWindow
     {
         IntPtr context = BeginPaint(window, out PAINTSTRUCT paint);
 
-        if (context != IntPtr.Zero)
+        if (context != IntPtr.Zero && _page == SettingsPage.Sessions)
         {
             (int x, int y, int width, int height) = _sessionsBounds;
 
@@ -1049,6 +1099,13 @@ internal sealed class SettingsWindow
             case IdUpdate:
                 OffThread(_actions.Update);
                 break;
+
+            case IdCheckForUpdates:
+                if (_actions.CheckForUpdate is not null)
+                {
+                    OffThread(_actions.CheckForUpdate);
+                }
+                break;
         }
     }
 
@@ -1159,7 +1216,13 @@ internal sealed class SettingsWindow
 
         _window = IntPtr.Zero;
         _controls.Clear();
+        _statusControls.Clear();
+        _sessionControls.Clear();
+        _settingsControls.Clear();
+        _tabs = IntPtr.Zero;
+        _accountOrb = IntPtr.Zero;
         _accountLabel = IntPtr.Zero;
+        _connectionOrb = IntPtr.Zero;
         _connectionLabel = IntPtr.Zero;
         _sessionsLabel = IntPtr.Zero;
         _signInOut = IntPtr.Zero;
@@ -1167,6 +1230,9 @@ internal sealed class SettingsWindow
         _startAtLogon = IntPtr.Zero;
         _versionLabel = IntPtr.Zero;
         _changeHistory = IntPtr.Zero;
+        _updateLabel = IntPtr.Zero;
+        _update = IntPtr.Zero;
+        _checkForUpdates = IntPtr.Zero;
         _shown = [];
     }
 

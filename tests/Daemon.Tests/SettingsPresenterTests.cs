@@ -34,6 +34,8 @@ public sealed class SettingsPresenterTests
 
         Assert.Equal("Not signed in", view.Account);
         Assert.False(view.SignedIn);
+        Assert.Equal(StatusTone.Disabled, view.AccountTone);
+        Assert.Equal(StatusTone.Disabled, view.ConnectionTone);
         Assert.Contains("cannot see this machine", view.Connection, StringComparison.Ordinal);
     }
 
@@ -64,7 +66,13 @@ public sealed class SettingsPresenterTests
 
         Assert.True(view.SignedIn);
         Assert.Equal("Signed in as ada@example.com", view.Account);
+        Assert.Equal(StatusTone.Good, view.AccountTone);
+        Assert.Equal(StatusTone.Connecting, view.ConnectionTone);
     }
+
+    [Fact]
+    public void ConnectedHubUsesTheHealthyStatusTone() =>
+        Assert.Equal(StatusTone.Good, View().ConnectionTone);
 
     [Fact]
     public void NoSessionsSaysHowToStartOne()
@@ -124,6 +132,24 @@ public sealed class SettingsPresenterTests
             Now);
 
         Assert.EndsWith("\u2014 waiting for input", line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentChatNamesItsProviderAndUsesItsLastUpdate()
+    {
+        string line = SettingsPresenter.Describe(
+            new SessionSummary(
+                "Fix settings",
+                Now.AddMinutes(-3),
+                AwaitingInput: false,
+                CliType.CopilotCli,
+                SessionKind.AgentChat,
+                "GitHub Copilot"),
+            Now);
+
+        Assert.Equal(
+            "Fix settings \u2014 GitHub Copilot chat \u2014 updated 3 minutes ago",
+            line);
     }
 
     [Fact]

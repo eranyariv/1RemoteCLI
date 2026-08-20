@@ -20,6 +20,7 @@ using OneRemoteCli.Daemon.Update;
 using OneRemoteCli.Daemon.Wrapper;
 using OneRemoteCli.Protocol;
 using OneRemoteCli.Protocol.Diagnostics;
+using OneRemoteCli.Protocol.Hub;
 
 namespace OneRemoteCli.Daemon;
 
@@ -573,7 +574,7 @@ public static class Program
             UpdateOptions.Load(log: updateLogger.Update),
             log: updateLogger.Update);
 
-        using TrayIcon? tray = StartTray(identity, hub, host, accounts, updates, stopping);
+        using TrayIcon? tray = StartTray(identity, hub, host, chats, accounts, updates, stopping);
 
         // The hub loop runs alongside the pipe server rather than gating it: a machine
         // with no internet must still be able to run local sessions.
@@ -613,6 +614,7 @@ public static class Program
         MachineIdentity identity,
         AgentHubClient hub,
         AgentHost host,
+        AcpProvider chats,
         SignedInAccountWatcher accounts,
         UpdateService updates,
         CancellationTokenSource stopping)
@@ -637,6 +639,13 @@ public static class Program
                 session.StartedUtc,
                 host.AwaitingInput.IsAwaitingInput(session),
                 session.CliType)),
+            .. chats.Snapshot().Select(session => new SessionSummary(
+                session.Title,
+                session.UpdatedAt,
+                session.AwaitingInput,
+                session.CliType,
+                SessionKind.AgentChat,
+                session.Program)),
         ];
 
         var settings = new SettingsActions(
@@ -694,10 +703,15 @@ public static class Program
             return null;
         }
 
-        void Refresh() => tray.Update(State(), host.Sessions.Count, accounts.Account?.Description, updates.Status);
+        void Refresh() => tray.Update(
+            State(),
+            host.Sessions.Count + chats.Count,
+            accounts.Account?.Description,
+            updates.Status);
 
         hub.StateChanged += Refresh;
         host.Sessions.Changed += Refresh;
+        chats.Changed += Refresh;
         accounts.Changed += Refresh;
         updates.Changed += Refresh;
 

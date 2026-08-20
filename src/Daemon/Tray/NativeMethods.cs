@@ -18,11 +18,15 @@ internal static partial class NativeMethods
 {
     internal const int WM_NULL = 0x0000;
     internal const int WM_DESTROY = 0x0002;
+    internal const int WM_SIZE = 0x0005;
     internal const int WM_CLOSE = 0x0010;
+    internal const int WM_GETMINMAXINFO = 0x0024;
     internal const int WM_NOTIFY = 0x004E;
     internal const int WM_ERASEBKGND = 0x0014;
     internal const int WM_PAINT = 0x000F;
     internal const int WM_SETFONT = 0x0030;
+    internal const int SIZE_RESTORED = 0;
+    internal const int SPI_GETWORKAREA = 0x0030;
 
     /// <summary>
     /// Broadcast when a system-wide setting changes. The one that matters here arrives
@@ -35,8 +39,6 @@ internal static partial class NativeMethods
     internal const int WM_COMMAND = 0x0111;
     internal const int WM_TIMER = 0x0113;
     internal const int WM_CTLCOLORSTATIC = 0x0138;
-    internal const int WM_CTLCOLORLISTBOX = 0x0134;
-
     /// <summary>
     /// Sent when the window is dragged onto a monitor with a different scale factor.
     /// Only ever received by a per-monitor-v2 process, which this became in
@@ -68,13 +70,46 @@ internal static partial class NativeMethods
     internal const int NM_CLICK = -2;
     internal const int NM_RETURN = -4;
     internal const int TCN_SELCHANGE = -551;
+    internal const int LVN_COLUMNCLICK = -108;
     internal const int ICC_LINK_CLASS = 0x00008000;
     internal const int ICC_TAB_CLASSES = 0x00000008;
+    internal const int ICC_LISTVIEW_CLASSES = 0x00000001;
 
     internal const int TCM_FIRST = 0x1300;
     internal const int TCM_GETCURSEL = TCM_FIRST + 11;
+    internal const int TCM_SETCURSEL = TCM_FIRST + 12;
     internal const int TCM_INSERTITEMW = TCM_FIRST + 62;
     internal const int TCIF_TEXT = 0x0001;
+
+    internal const int LVM_FIRST = 0x1000;
+    internal const int LVM_SETEXTENDEDLISTVIEWSTYLE = LVM_FIRST + 54;
+    internal const int LVM_INSERTCOLUMNW = LVM_FIRST + 97;
+    internal const int LVM_INSERTITEMW = LVM_FIRST + 77;
+    internal const int LVM_SETITEMW = LVM_FIRST + 76;
+    internal const int LVM_DELETEALLITEMS = LVM_FIRST + 9;
+    internal const int LVM_ENSUREVISIBLE = LVM_FIRST + 19;
+    internal const int LVM_GETCOLUMNWIDTH = LVM_FIRST + 29;
+    internal const int LVM_SETCOLUMNWIDTH = LVM_FIRST + 30;
+    internal const int LVM_GETHEADER = LVM_FIRST + 31;
+    internal const int LVM_GETTOPINDEX = LVM_FIRST + 39;
+
+    internal const int LVS_EX_FULLROWSELECT = 0x00000020;
+    internal const int LVS_EX_LABELTIP = 0x00004000;
+    internal const int LVS_EX_DOUBLEBUFFER = 0x00010000;
+
+    internal const int LVCF_FMT = 0x0001;
+    internal const int LVCF_WIDTH = 0x0002;
+    internal const int LVCF_TEXT = 0x0004;
+    internal const int LVCF_SUBITEM = 0x0008;
+    internal const int LVCFMT_LEFT = 0x0000;
+    internal const int LVIF_TEXT = 0x0001;
+
+    internal const int HDM_FIRST = 0x1200;
+    internal const int HDM_GETITEMW = HDM_FIRST + 11;
+    internal const int HDM_SETITEMW = HDM_FIRST + 12;
+    internal const int HDI_FORMAT = 0x0004;
+    internal const int HDF_SORTDOWN = 0x0200;
+    internal const int HDF_SORTUP = 0x0400;
 
     internal const int NIM_ADD = 0x00000000;
     internal const int NIM_MODIFY = 0x00000001;
@@ -180,6 +215,19 @@ internal static partial class NativeMethods
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    internal struct NM_LISTVIEW
+    {
+        public NMHDR hdr;
+        public int iItem;
+        public int iSubItem;
+        public int uNewState;
+        public int uOldState;
+        public int uChanged;
+        public POINT ptAction;
+        public IntPtr lParam;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     internal struct INITCOMMONCONTROLSEX
     {
         public int dwSize;
@@ -199,6 +247,75 @@ internal static partial class NativeMethods
         public int cchTextMax;
         public int iImage;
         public IntPtr lParam;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    internal struct LVCOLUMN
+    {
+        public int mask;
+        public int fmt;
+        public int cx;
+
+        [MarshalAs(UnmanagedType.LPWStr)]
+        public string pszText;
+
+        public int cchTextMax;
+        public int iSubItem;
+        public int iImage;
+        public int iOrder;
+        public int cxMin;
+        public int cxDefault;
+        public int cxIdeal;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    internal struct LVITEM
+    {
+        public int mask;
+        public int iItem;
+        public int iSubItem;
+        public int state;
+        public int stateMask;
+
+        [MarshalAs(UnmanagedType.LPWStr)]
+        public string pszText;
+
+        public int cchTextMax;
+        public int iImage;
+        public IntPtr lParam;
+        public int iIndent;
+        public int iGroupId;
+        public int cColumns;
+        public IntPtr puColumns;
+        public IntPtr piColFmt;
+        public int iGroup;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    internal struct HDITEM
+    {
+        public int mask;
+        public int cxy;
+        public IntPtr pszText;
+        public IntPtr hbm;
+        public int cchTextMax;
+        public int fmt;
+        public IntPtr lParam;
+        public int iImage;
+        public int iOrder;
+        public int type;
+        public IntPtr pvFilter;
+        public int state;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct MINMAXINFO
+    {
+        public POINT ptReserved;
+        public POINT ptMaxSize;
+        public POINT ptMaxPosition;
+        public POINT ptMinTrackSize;
+        public POINT ptMaxTrackSize;
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -315,6 +432,14 @@ internal static partial class NativeMethods
     [LibraryImport("user32.dll")]
     internal static partial int GetSystemMetrics(int index);
 
+    [LibraryImport("user32.dll", EntryPoint = "SystemParametersInfoW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool SystemParametersInfo(
+        int action,
+        int parameter,
+        ref RECT data,
+        int update);
+
     /// <summary>
     /// Loads an image out of a module's resources, at a given size.
     /// <para>
@@ -369,6 +494,9 @@ internal static partial class NativeMethods
     internal const int WS_CAPTION = 0x00C00000;
     internal const int WS_SYSMENU = 0x00080000;
     internal const int WS_MINIMIZEBOX = 0x00020000;
+    internal const int WS_MAXIMIZEBOX = 0x00010000;
+    internal const int WS_THICKFRAME = 0x00040000;
+    internal const int WS_CLIPCHILDREN = 0x02000000;
     internal const int WS_VISIBLE = 0x10000000;
     internal const int WS_CHILD = 0x40000000;
     internal const int WS_TABSTOP = 0x00010000;
@@ -383,22 +511,8 @@ internal static partial class NativeMethods
     internal const int SS_CENTER = 0x00000001;
     internal const int SS_ENDELLIPSIS = 0x00004000;
 
-    /// <summary>
-    /// The list is a read-out, not a chooser: nothing in the window acts on a selected
-    /// session, and a highlight that leads nowhere invites clicking.
-    /// </summary>
-    internal const int LBS_NOSEL = 0x00004000;
-
-    /// <summary>
-    /// Keeps the box the height we asked for. By default a list box silently shrinks
-    /// to a whole number of rows, which would leave it out of line with the buttons.
-    /// </summary>
-    internal const int LBS_NOINTEGRALHEIGHT = 0x00000100;
-
-    internal const int LB_ADDSTRING = 0x0180;
-    internal const int LB_RESETCONTENT = 0x0184;
-    internal const int LB_SETTOPINDEX = 0x0197;
-    internal const int LB_GETTOPINDEX = 0x018E;
+    internal const int LVS_REPORT = 0x0001;
+    internal const int LVS_SHOWSELALWAYS = 0x0008;
 
     internal const int BM_GETCHECK = 0x00F0;
     internal const int BM_SETCHECK = 0x00F1;
@@ -408,6 +522,7 @@ internal static partial class NativeMethods
     internal const int SW_HIDE = 0;
     internal const int SW_SHOW = 5;
     internal const int SW_RESTORE = 9;
+    internal const int SIZE_MINIMIZED = 1;
 
     /// <summary>
     /// How a window is shown for the first time, when <c>ShowWindow</c> cannot be
@@ -616,6 +731,15 @@ internal static partial class NativeMethods
     [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode)]
     internal static extern IntPtr SendMessageTabItem(IntPtr hWnd, int msg, IntPtr wParam, ref TCITEM lParam);
 
+    [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode)]
+    internal static extern IntPtr SendMessageListColumn(IntPtr hWnd, int msg, IntPtr wParam, ref LVCOLUMN lParam);
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode)]
+    internal static extern IntPtr SendMessageListItem(IntPtr hWnd, int msg, IntPtr wParam, ref LVITEM lParam);
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode)]
+    internal static extern IntPtr SendMessageHeaderItem(IntPtr hWnd, int msg, IntPtr wParam, ref HDITEM lParam);
+
     [DllImport("user32.dll", EntryPoint = "SetWindowTextW", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool SetWindowText(IntPtr hWnd, string text);
@@ -642,6 +766,10 @@ internal static partial class NativeMethods
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool IsIconic(IntPtr hWnd);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool IsZoomed(IntPtr hWnd);
 
     [LibraryImport("user32.dll", SetLastError = true)]
     internal static partial IntPtr SetFocus(IntPtr hWnd);

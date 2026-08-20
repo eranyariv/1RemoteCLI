@@ -30,13 +30,23 @@ public enum StatusTone
 /// </param>
 /// <param name="Kind">Whether this is a wrapped terminal or an ACP-backed chat.</param>
 /// <param name="Program">The ACP provider name for a chat.</param>
+/// <param name="Cwd">The session's working directory.</param>
 public readonly record struct SessionSummary(
     string DisplayName,
     DateTimeOffset StartedUtc,
     bool AwaitingInput,
     CliType CliType = CliType.Generic,
     SessionKind Kind = SessionKind.Terminal,
-    string Program = "");
+    string Program = "",
+    string Cwd = "");
+
+public sealed record SessionRow(
+    string Name,
+    string Source,
+    string Folder,
+    string Status,
+    string Activity,
+    DateTimeOffset ActivityAt);
 
 /// <summary>Everything the settings window reads, as text.</summary>
 /// <param name="Account">Who is signed in, or that nobody is.</param>
@@ -48,7 +58,7 @@ public readonly record struct SessionSummary(
 /// False when <paramref name="Sessions"/> holds the empty-state sentence rather than
 /// sessions, so the window can show it without making it look selectable.
 /// </param>
-/// <param name="Sessions">One line per session, oldest first.</param>
+/// <param name="Sessions">Structured rows for the sortable local-session table.</param>
 /// <param name="Version">The build, which is the first thing any report needs.</param>
 /// <param name="Update">
 /// What the agent knows about newer releases, as a sentence. Empty when there is
@@ -62,7 +72,7 @@ public readonly record struct SettingsView(
     StatusTone AccountTone,
     StatusTone ConnectionTone,
     bool HasSessions,
-    IReadOnlyList<string> Sessions,
+    IReadOnlyList<SessionRow> Sessions,
     string Version,
     string Update = "",
     bool CanUpdate = false);
@@ -141,7 +151,7 @@ public static class SettingsPresenter
             _ => "Signed out. Your phone cannot see this machine.",
         };
 
-        string[] lines = [.. sessions.OrderBy(session => session.StartedUtc).Select(session => Describe(session, now))];
+        SessionRow[] rows = [.. sessions.Select(session => DescribeRow(session, now))];
 
         return new SettingsView(
             // Keyed off the account rather than the connection: a machine on a train is
@@ -157,8 +167,8 @@ public static class SettingsPresenter
                 AgentState.Reconnecting => StatusTone.Connecting,
                 _ => StatusTone.Disabled,
             },
-            lines.Length > 0,
-            lines.Length > 0 ? lines : [NoSessions],
+            rows.Length > 0,
+            rows,
             $"Version {ProductVersion.Current}",
             Describe(update),
             update.CanInstall);
@@ -215,10 +225,7 @@ public static class SettingsPresenter
 
         if (session.Kind == SessionKind.AgentChat)
         {
-            string provider = string.IsNullOrWhiteSpace(session.Program)
-                ? CliTypes.Label(session.CliType)
-                : session.Program;
-            kind = $"{provider} chat \u2014 ";
+            kind = $"{Provider(session)} chat \u2014 ";
             age = $"updated {Since(now - session.StartedUtc)}";
         }
         else
@@ -232,6 +239,40 @@ public static class SettingsPresenter
         string line = $"{session.DisplayName} \u2014 {kind}{age}";
 
         return session.AwaitingInput ? $"{line} \u2014 waiting for input" : line;
+    }
+
+    public static SessionRow DescribeRow(SessionSummary session, DateTimeOffset now)
+    {
+        bool chat = session.Kind == SessionKind.AgentChat;
+        string source = chat
+            ? $"{Provider(session)} chat"
+            : session.CliType == CliType.Generic
+                ? ProgramName(session.Program)
+                : CliTypes.Label(session.CliType);
+
+        return new SessionRow(
+            session.DisplayName,
+            source,
+            session.Cwd,
+            session.AwaitingInput ? "Waiting for input" : chat ? "Available" : "Running",
+            $"{(chat ? "Updated" : "Started")} {Since(now - session.StartedUtc)}",
+            session.StartedUtc);
+    }
+
+    private static string Provider(SessionSummary session) =>
+        string.IsNullOrWhiteSpace(session.Program) ? CliTypes.Label(session.CliType) : session.Program;
+
+    private static string ProgramName(string program)
+    {
+        try
+        {
+            string name = Path.GetFileNameWithoutExtension(program);
+            return string.IsNullOrWhiteSpace(name) ? "Terminal" : name;
+        }
+        catch (ArgumentException)
+        {
+            return string.IsNullOrWhiteSpace(program) ? "Terminal" : program;
+        }
     }
 
     /// <summary>

@@ -574,7 +574,18 @@ public static class Program
             UpdateOptions.Load(log: updateLogger.Update),
             log: updateLogger.Update);
 
-        using TrayIcon? tray = StartTray(identity, hub, host, chats, accounts, updates, stopping);
+        var windowLayout = new SettingsWindowLayoutStore(
+            log: loggers.CreateLogger("Settings").Update);
+
+        using TrayIcon? tray = StartTray(
+            identity,
+            hub,
+            host,
+            chats,
+            accounts,
+            updates,
+            windowLayout,
+            stopping);
 
         // The hub loop runs alongside the pipe server rather than gating it: a machine
         // with no internet must still be able to run local sessions.
@@ -617,6 +628,7 @@ public static class Program
         AcpProvider chats,
         SignedInAccountWatcher accounts,
         UpdateService updates,
+        SettingsWindowLayoutStore windowLayout,
         CancellationTokenSource stopping)
     {
         if (!Environment.UserInteractive)
@@ -638,14 +650,17 @@ public static class Program
                 session.DisplayName,
                 session.StartedUtc,
                 host.AwaitingInput.IsAwaitingInput(session),
-                session.CliType)),
+                session.CliType,
+                Program: session.Program,
+                Cwd: session.Cwd)),
             .. chats.Snapshot().Select(session => new SessionSummary(
                 session.Title,
                 session.UpdatedAt,
                 session.AwaitingInput,
                 session.CliType,
                 SessionKind.AgentChat,
-                session.Program)),
+                session.Program,
+                session.Cwd)),
         ];
 
         var settings = new SettingsActions(
@@ -683,7 +698,9 @@ public static class Program
 
             // Cheap — it only cuts short the wait the check loop is already in — so the
             // window can afford to ask every time it opens.
-            CheckForUpdate: updates.CheckSoon);
+            CheckForUpdate: updates.CheckSoon,
+            ReadLayout: windowLayout.Load,
+            WriteLayout: windowLayout.Save);
 
         TrayIcon tray;
 

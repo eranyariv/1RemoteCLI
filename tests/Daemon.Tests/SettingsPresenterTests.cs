@@ -80,11 +80,11 @@ public sealed class SettingsPresenterTests
         SettingsView view = View();
 
         Assert.False(view.HasSessions);
-        Assert.Equal([SettingsPresenter.NoSessions], view.Sessions);
+        Assert.Empty(view.Sessions);
 
         // Names the command, because somebody looking at an empty list has not worked
         // out that sessions are a thing they start.
-        Assert.Contains("1remote pwsh", view.Sessions[0], StringComparison.Ordinal);
+        Assert.Contains("1remote pwsh", SettingsPresenter.NoSessions, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -94,7 +94,8 @@ public sealed class SettingsPresenterTests
             sessions: new SessionSummary("Claude Code", Now.AddMinutes(-4), false));
 
         Assert.True(view.HasSessions);
-        Assert.Equal("Claude Code \u2014 started 4 minutes ago", view.Sessions[0]);
+        Assert.Equal("Claude Code", view.Sessions[0].Name);
+        Assert.Equal("Started 4 minutes ago", view.Sessions[0].Activity);
     }
 
     [Fact]
@@ -153,19 +154,25 @@ public sealed class SettingsPresenterTests
     }
 
     [Fact]
-    public void SessionsAreOldestFirst()
+    public void SessionRowsCarryTheColumnsTheNativeTableNeeds()
     {
-        // Stable ordering, so a list that refreshes once a second does not reshuffle
-        // itself under someone reading it.
         SettingsView view = View(
             sessions:
             [
-                new SessionSummary("newest", Now.AddMinutes(-1), false),
-                new SessionSummary("oldest", Now.AddHours(-5), false),
+                new SessionSummary(
+                    "build",
+                    Now.AddMinutes(-1),
+                    AwaitingInput: true,
+                    CliType.PowerShell,
+                    Program: "pwsh.exe",
+                    Cwd: @"C:\source\app"),
             ]);
 
-        Assert.StartsWith("oldest", view.Sessions[0], StringComparison.Ordinal);
-        Assert.StartsWith("newest", view.Sessions[1], StringComparison.Ordinal);
+        SessionRow row = Assert.Single(view.Sessions);
+        Assert.Equal("PowerShell", row.Source);
+        Assert.Equal(@"C:\source\app", row.Folder);
+        Assert.Equal("Waiting for input", row.Status);
+        Assert.Equal(Now.AddMinutes(-1), row.ActivityAt);
     }
 
     [Theory]

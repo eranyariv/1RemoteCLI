@@ -136,8 +136,10 @@ split into three tabs:
 
 - **Status** shows the signed-in account and hub connection with separate status
   indicators, plus the installed version, change history, and update controls.
-- **Local sessions** lists wrapped terminals and ACP-discovered Copilot or Claude chats
-  together, and holds the shortcut-wrapping action.
+- **Local sessions** shows wrapped terminals and ACP-discovered Copilot or Claude chats
+  in a sortable table. Drag a column edge to resize it; select a heading to sort in
+  either direction. The table layout, active tab, and resizable window size are kept
+  locally for the next time the dialog opens.
 - **Settings** contains user-controlled options. **Start when I sign in to Windows** is
   read from Task Scheduler and the registry every time the window opens rather than
   remembered.

@@ -55,7 +55,9 @@ public sealed record SettingsActions(
     Action OpenChangeHistory,
     Func<IntPtr, SettingsNotice?> WrapShortcut,
     Action Update,
-    Action? CheckForUpdate = null);
+    Action? CheckForUpdate = null,
+    Func<SettingsWindowLayout>? ReadLayout = null,
+    Action<SettingsWindowLayout>? WriteLayout = null);
 
 /// <summary>
 /// The agent's settings window.
@@ -88,14 +90,14 @@ internal sealed class SettingsWindow
     private const int IdCheckForUpdates = 107;
     private const int IdTabs = 108;
 
-    /// <summary>
-    /// No resize border and no maximise box: the layout is fixed arithmetic, so a
-    /// window the user could stretch would only ever show more grey.
-    /// </summary>
-    private const int Style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+    private const int Style =
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX |
+        WS_MAXIMIZEBOX | WS_THICKFRAME | WS_CLIPCHILDREN;
 
     private const int RefreshTimer = 1;
+    private const int PersistTimer = 2;
     private const uint RefreshMilliseconds = 1000;
+    private const uint PersistMilliseconds = 500;
 
     /// <summary>
     /// Layout at 96 DPI, scaled from there, on Fluent's four-pixel grid.
@@ -109,10 +111,6 @@ internal sealed class SettingsWindow
     /// </summary>
     private const int Margin = 20;
 
-    private const int ClientWidth = 520;
-
-    private const int ClientHeight = 432;
-
     /// <summary>Between two groups. Inside one, things sit <see cref="Tight"/> apart.</summary>
     private const int Gap = 20;
 
@@ -122,10 +120,6 @@ internal sealed class SettingsWindow
     private const int RowHeight = 20;
 
     private const int ButtonHeight = 32;
-
-    private const int SessionsHeight = 210;
-
-    private const int TabHeight = 348;
 
     /// <summary>
     /// Fluent's Body size, in pixels at 96 DPI. The Win32 shell dialog font is 9pt,
@@ -142,16 +136,13 @@ internal sealed class SettingsWindow
     private readonly string _className = $"1RemoteCLI.Settings.{Environment.ProcessId}";
 
     /// <summary>
-    /// Every child, with the rectangle it was laid out at in 96-DPI units.
+    /// Every child, so fonts and themes can be reapplied as one set.
     /// <para>
-    /// Kept so the window can be laid out again at a different scale. Under
-    /// per-monitor-v2 awareness — which <c>app.manifest</c> asks for — dragging the
-    /// window to a monitor at another scale sends <c>WM_DPICHANGED</c> and the window
-    /// is expected to resize itself; without this list the only thing it could do is
-    /// stretch, which is the blur that awareness was turned on to remove.
+    /// The geometry is recomputed from the current client rectangle; only membership
+    /// lives here.
     /// </para>
     /// </summary>
-    private readonly List<(IntPtr Control, int X, int Y, int Width, int Height)> _controls = [];
+    private readonly List<IntPtr> _controls = [];
     private readonly List<IntPtr> _statusControls = [];
     private readonly List<IntPtr> _sessionControls = [];
     private readonly List<IntPtr> _settingsControls = [];
@@ -172,25 +163,29 @@ internal sealed class SettingsWindow
     private IntPtr _sessionsLabel;
     private IntPtr _signInOut;
     private IntPtr _sessions;
+    private IntPtr _sessionsEmpty;
+    private IntPtr _wrapShortcut;
     private IntPtr _startAtLogon;
     private IntPtr _versionLabel;
     private IntPtr _changeHistory;
     private IntPtr _updateLabel;
     private IntPtr _update;
     private IntPtr _checkForUpdates;
+    private IntPtr _openLogs;
+    private IntPtr _sendFeedback;
+    private IntPtr _close;
     private StatusTone _accountTone = StatusTone.Disabled;
     private StatusTone _connectionTone = StatusTone.Disabled;
     private SettingsPage _page;
-
-    /// <summary>Where the list box sits, in 96-DPI units, so its hairline can be drawn.</summary>
-    private (int X, int Y, int Width, int Height) _sessionsBounds;
+    private SettingsWindowLayout _layout = SettingsWindowLayout.Default;
+    private SessionTableColumn _sortColumn = SessionTableColumn.Activity;
+    private bool _sortDescending = true;
 
     /// <summary>
-    /// What the list currently shows. Kept so the refresh can leave the box alone when
-    /// nothing changed: refilling a list box scrolls it back to the top, and doing that
-    /// once a second would make a list of more than a few sessions unreadable.
+    /// What the table currently shows. Kept so the refresh can leave it alone when
+    /// nothing changed: refilling it scrolls back to the top.
     /// </summary>
-    private IReadOnlyList<string> _shown = [];
+    private IReadOnlyList<SessionRow> _shown = [];
 
     private enum SettingsPage
     {
@@ -230,6 +225,10 @@ internal sealed class SettingsWindow
             SetForegroundWindow(_window);
             return;
         }
+
+        _layout = (_actions.ReadLayout?.Invoke() ?? SettingsWindowLayout.Default).Normalize();
+        _sortColumn = _layout.SortColumn;
+        _sortDescending = _layout.SortDescending;
 
         try
         {
@@ -272,6 +271,7 @@ internal sealed class SettingsWindow
     {
         if (_window != IntPtr.Zero)
         {
+            PersistLayout();
             DestroyWindow(_window);
         }
     }
@@ -338,8 +338,6 @@ internal sealed class SettingsWindow
             _classRegistered = true;
         }
 
-        // No resize border and no maximise box: the layout is fixed arithmetic, so a
-        // window the user can stretch would only ever show more grey.
         _window = CreateWindowEx(
             WS_EX_APPWINDOW,
             _className,
@@ -425,8 +423,8 @@ internal sealed class SettingsWindow
     {
         var bounds = new RECT
         {
-            right = Scale(ClientWidth),
-            bottom = Scale(ClientHeight),
+            right = Scale(_layout.ClientWidth),
+            bottom = Scale(_layout.ClientHeight),
         };
 
         // The caption and borders are not part of what we laid out, and they differ by
@@ -436,8 +434,20 @@ internal sealed class SettingsWindow
         int width = bounds.right - bounds.left;
         int height = bounds.bottom - bounds.top;
 
-        int x = Math.Max(0, (GetSystemMetrics(SM_CXSCREEN) - width) / 2);
-        int y = Math.Max(0, (GetSystemMetrics(SM_CYSCREEN) - height) / 2);
+        var workArea = new RECT
+        {
+            right = GetSystemMetrics(SM_CXSCREEN),
+            bottom = GetSystemMetrics(SM_CYSCREEN),
+        };
+        SystemParametersInfo(SPI_GETWORKAREA, 0, ref workArea, 0);
+
+        int availableWidth = workArea.right - workArea.left;
+        int availableHeight = workArea.bottom - workArea.top;
+        width = Math.Min(width, availableWidth);
+        height = Math.Min(height, availableHeight);
+
+        int x = workArea.left + Math.Max(0, (availableWidth - width) / 2);
+        int y = workArea.top + Math.Max(0, (availableHeight - height) / 2);
 
         MoveWindow(
             _window,
@@ -453,79 +463,54 @@ internal sealed class SettingsWindow
         var commonControls = new INITCOMMONCONTROLSEX
         {
             dwSize = Marshal.SizeOf<INITCOMMONCONTROLSEX>(),
-            dwICC = ICC_LINK_CLASS | ICC_TAB_CLASSES,
+            dwICC = ICC_LINK_CLASS | ICC_TAB_CLASSES | ICC_LISTVIEW_CLASSES,
         };
 
         if (!InitCommonControlsEx(ref commonControls))
         {
-            throw new InvalidOperationException("Windows did not initialize the Settings link control.");
+            throw new InvalidOperationException("Windows did not initialize the Settings controls.");
         }
-
-        int content = ClientWidth - (Margin * 2);
-        int pageX = Margin + 16;
-        int pageWidth = content - 32;
-        int pageY = Margin + 52;
 
         _tabs = Create(
             instance,
             "SysTabControl32",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-            Margin,
-            Margin,
-            content,
-            TabHeight,
+            0,
+            0,
+            100,
+            100,
             IdTabs);
         InsertTab(SettingsPage.Status, SettingsPresenter.StatusTabLabel);
         InsertTab(SettingsPage.Sessions, SettingsPresenter.SessionsTabLabel);
         InsertTab(SettingsPage.Settings, SettingsPresenter.SettingsTabLabel);
 
-        const int orbWidth = 18;
-        const int signInWidth = 112;
-        int textX = pageX + orbWidth + Tight;
-        int textWidth = pageWidth - orbWidth - Tight - signInWidth - Gap;
-        int y = pageY;
-
         _accountOrb = PageControl(
             _statusControls,
-            Static(instance, pageX, y + 5, orbWidth, RowHeight, "\u25cf", SS_CENTER));
+            Static(instance, 0, 0, 18, RowHeight, "\u25cf", SS_CENTER));
         _accountLabel = PageControl(
             _statusControls,
-            Static(instance, textX, y + 5, textWidth, RowHeight, font: _strongFont));
+            Static(instance, 0, 0, 100, RowHeight, font: _strongFont));
         _signInOut = PageControl(
             _statusControls,
-            Button(instance, IdSignInOut, pageX + pageWidth - signInWidth, y, signInWidth, ButtonHeight));
-
-        y += ButtonHeight + Gap;
+            Button(instance, IdSignInOut, 0, 0, 112, ButtonHeight));
         _connectionOrb = PageControl(
             _statusControls,
-            Static(instance, pageX, y + 2, orbWidth, RowHeight, "\u25cf", SS_CENTER));
+            Static(instance, 0, 0, 18, RowHeight, "\u25cf", SS_CENTER));
         _connectionLabel = PageControl(
             _statusControls,
-            Static(instance, textX, y, pageWidth - orbWidth - Tight, RowHeight * 2, style: SS_LEFT));
-
-        y += (RowHeight * 2) + Gap;
-        const int versionWidth = 96;
-        const int historyWidth = 112;
-        const int checkWidth = 140;
-
+            Static(instance, 0, 0, 100, RowHeight * 2, style: SS_LEFT));
         _versionLabel = PageControl(
             _statusControls,
-            Static(
-                instance,
-                pageX,
-                y + ((ButtonHeight - RowHeight) / 2),
-                versionWidth,
-                RowHeight,
-                font: _captionFont));
+            Static(instance, 0, 0, 96, RowHeight, font: _captionFont));
         _changeHistory = PageControl(
             _statusControls,
             Create(
                 instance,
                 "SysLink",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-                pageX + versionWidth + Tight,
-                y + ((ButtonHeight - RowHeight) / 2),
-                historyWidth,
+                0,
+                0,
+                112,
                 RowHeight,
                 IntPtr.Zero,
                 $"<a>{SettingsPresenter.ChangeHistoryLabel}</a>",
@@ -535,84 +520,64 @@ internal sealed class SettingsWindow
             Button(
                 instance,
                 IdCheckForUpdates,
-                pageX + pageWidth - checkWidth,
-                y,
-                checkWidth,
+                0,
+                0,
+                140,
                 ButtonHeight,
                 SettingsPresenter.CheckForUpdatesLabel));
-
-        y += ButtonHeight + Tight;
-        const int updateWidth = 112;
-        const int updateTextHeight = RowHeight * 2;
-
         _updateLabel = PageControl(
             _statusControls,
-            Static(instance, pageX, y, pageWidth - updateWidth - Gap, updateTextHeight, style: SS_LEFT));
+            Static(instance, 0, 0, 100, RowHeight * 2, style: SS_LEFT));
         _update = PageControl(
             _statusControls,
             Button(
                 instance,
                 IdUpdate,
-                pageX + pageWidth - updateWidth,
-                y + ((updateTextHeight - ButtonHeight) / 2),
-                updateWidth,
+                0,
+                0,
+                112,
                 ButtonHeight,
                 SettingsPresenter.UpdateLabel));
-
-        y += updateTextHeight + Gap;
-        const int utilityWidth = 116;
-
-        PageControl(
+        _openLogs = PageControl(
             _statusControls,
-            Button(instance, IdOpenLogs, pageX, y, utilityWidth, ButtonHeight, SettingsPresenter.OpenLogsLabel));
-        PageControl(
+            Button(instance, IdOpenLogs, 0, 0, 116, ButtonHeight, SettingsPresenter.OpenLogsLabel));
+        _sendFeedback = PageControl(
             _statusControls,
-            Button(
-                instance,
-                IdSendFeedback,
-                pageX + utilityWidth + Tight,
-                y,
-                utilityWidth,
-                ButtonHeight,
-                SettingsPresenter.SendFeedbackLabel));
+            Button(instance, IdSendFeedback, 0, 0, 116, ButtonHeight, SettingsPresenter.SendFeedbackLabel));
 
-        y = pageY;
         _sessionsLabel = PageControl(
             _sessionControls,
             Static(
                 instance,
-                pageX,
-                y,
-                pageWidth,
+                0,
+                0,
+                100,
                 RowHeight,
                 SettingsPresenter.SessionsLabel,
                 font: _strongFont));
-        y += RowHeight + Tight;
-
-        _sessionsBounds = (pageX, y, pageWidth, SessionsHeight);
         _sessions = PageControl(
             _sessionControls,
             Create(
                 instance,
-                "LISTBOX",
-                WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_TABSTOP | LBS_NOSEL | LBS_NOINTEGRALHEIGHT,
-                pageX,
-                y,
-                pageWidth,
-                SessionsHeight,
+                "SysListView32",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | LVS_REPORT | LVS_SHOWSELALWAYS,
+                0,
+                0,
+                100,
+                100,
                 IntPtr.Zero));
-        y += SessionsHeight + Gap;
-
-        PageControl(
+        SendMessage(
+            _sessions,
+            LVM_SETEXTENDEDLISTVIEWSTYLE,
+            IntPtr.Zero,
+            (IntPtr)(LVS_EX_FULLROWSELECT | LVS_EX_LABELTIP | LVS_EX_DOUBLEBUFFER));
+        InsertSessionColumns();
+        _sessionsEmpty = PageControl(
             _sessionControls,
-            Button(
-                instance,
-                IdWrapShortcut,
-                pageX,
-                y,
-                188,
-                ButtonHeight,
-                SettingsPresenter.WrapShortcutLabel));
+            Static(instance, 0, 0, 100, RowHeight, SettingsPresenter.NoSessions, SS_CENTER));
+        _wrapShortcut = PageControl(
+            _sessionControls,
+            Button(instance, IdWrapShortcut, 0, 0, 188, ButtonHeight, SettingsPresenter.WrapShortcutLabel));
 
         _startAtLogon = PageControl(
             _settingsControls,
@@ -620,25 +585,28 @@ internal sealed class SettingsWindow
                 instance,
                 "BUTTON",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-                pageX,
-                pageY,
-                pageWidth,
+                0,
+                0,
+                100,
                 RowHeight + 4,
                 IdStartAtLogon,
                 SettingsPresenter.StartAtLogonLabel));
 
-        const int closeWidth = 104;
-        Button(
+        _close = Button(
             instance,
             IdClose,
-            ClientWidth - Margin - closeWidth,
-            Margin + TabHeight + 12,
-            closeWidth,
+            0,
+            0,
+            104,
             ButtonHeight,
             SettingsPresenter.CloseLabel,
             BS_DEFPUSHBUTTON);
 
-        ShowPage(SettingsPage.Status);
+        _page = (SettingsPage)_layout.ActiveTab;
+        SendMessage(_tabs, TCM_SETCURSEL, (IntPtr)_layout.ActiveTab, IntPtr.Zero);
+        ShowPage(_page, persist: false);
+        UpdateSortIndicator();
+        LayoutControls();
     }
 
     private void InsertTab(SettingsPage page, string text)
@@ -652,6 +620,25 @@ internal sealed class SettingsWindow
         SendMessageTabItem(_tabs, TCM_INSERTITEMW, (IntPtr)(int)page, ref item);
     }
 
+    private void InsertSessionColumns()
+    {
+        string[] headings = ["Name", "Source", "Folder", "Status", "Activity"];
+
+        for (int index = 0; index < headings.Length; index++)
+        {
+            var column = new LVCOLUMN
+            {
+                mask = LVCF_FMT | LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM,
+                fmt = LVCFMT_LEFT,
+                cx = Scale(_layout.ColumnWidths[index]),
+                pszText = headings[index],
+                cchTextMax = headings[index].Length,
+                iSubItem = index,
+            };
+            SendMessageListColumn(_sessions, LVM_INSERTCOLUMNW, (IntPtr)index, ref column);
+        }
+    }
+
     private static IntPtr PageControl(List<IntPtr> page, IntPtr control)
     {
         if (control != IntPtr.Zero)
@@ -662,13 +649,21 @@ internal sealed class SettingsWindow
         return control;
     }
 
-    private void ShowPage(SettingsPage page)
+    private void ShowPage(SettingsPage page, bool persist = true)
     {
         _page = page;
         ShowPageControls(_statusControls, page == SettingsPage.Status);
         ShowPageControls(_sessionControls, page == SettingsPage.Sessions);
         ShowPageControls(_settingsControls, page == SettingsPage.Settings);
+        ShowWindow(
+            _sessionsEmpty,
+            page == SettingsPage.Sessions && _shown.Count == 0 ? SW_SHOW : SW_HIDE);
         InvalidateRect(_window, IntPtr.Zero, true);
+
+        if (persist)
+        {
+            SchedulePersist();
+        }
     }
 
     private static void ShowPageControls(IEnumerable<IntPtr> controls, bool show)
@@ -676,6 +671,78 @@ internal sealed class SettingsWindow
         foreach (IntPtr control in controls)
         {
             ShowWindow(control, show ? SW_SHOW : SW_HIDE);
+        }
+    }
+
+    private void LayoutControls()
+    {
+        if (_window == IntPtr.Zero || _tabs == IntPtr.Zero ||
+            !GetClientRect(_window, out RECT client))
+        {
+            return;
+        }
+
+        int clientWidth = Unscale(client.right);
+        int clientHeight = Unscale(client.bottom);
+        int content = clientWidth - (Margin * 2);
+        int tabHeight = clientHeight - (Margin * 2) - ButtonHeight - 12;
+        int pageX = Margin + 16;
+        int pageWidth = content - 32;
+        int pageY = Margin + 52;
+        int pageBottom = Margin + tabHeight - 16;
+
+        Move(_tabs, Margin, Margin, content, tabHeight);
+        Move(_close, clientWidth - Margin - 104, clientHeight - Margin - ButtonHeight, 104, ButtonHeight);
+
+        const int orbWidth = 18;
+        const int signInWidth = 112;
+        int textX = pageX + orbWidth + Tight;
+        int textWidth = pageWidth - orbWidth - Tight - signInWidth - Gap;
+        int y = pageY;
+
+        Move(_accountOrb, pageX, y + 5, orbWidth, RowHeight);
+        Move(_accountLabel, textX, y + 5, textWidth, RowHeight);
+        Move(_signInOut, pageX + pageWidth - signInWidth, y, signInWidth, ButtonHeight);
+
+        y += ButtonHeight + Gap;
+        Move(_connectionOrb, pageX, y + 2, orbWidth, RowHeight);
+        Move(_connectionLabel, textX, y, pageWidth - orbWidth - Tight, RowHeight * 2);
+
+        y += (RowHeight * 2) + Gap;
+        const int versionWidth = 96;
+        const int historyWidth = 112;
+        const int checkWidth = 140;
+
+        Move(_versionLabel, pageX, y + 6, versionWidth, RowHeight);
+        Move(_changeHistory, pageX + versionWidth + Tight, y + 6, historyWidth, RowHeight);
+        Move(_checkForUpdates, pageX + pageWidth - checkWidth, y, checkWidth, ButtonHeight);
+
+        y += ButtonHeight + Tight;
+        const int updateWidth = 112;
+        Move(_updateLabel, pageX, y, pageWidth - updateWidth - Gap, RowHeight * 2);
+        Move(_update, pageX + pageWidth - updateWidth, y + 4, updateWidth, ButtonHeight);
+
+        y += (RowHeight * 2) + Gap;
+        Move(_openLogs, pageX, y, 116, ButtonHeight);
+        Move(_sendFeedback, pageX + 116 + Tight, y, 116, ButtonHeight);
+
+        y = pageY;
+        Move(_sessionsLabel, pageX, y, pageWidth, RowHeight);
+        int tableY = y + RowHeight + Tight;
+        int wrapY = pageBottom - ButtonHeight;
+        int tableHeight = Math.Max(RowHeight * 3, wrapY - Gap - tableY);
+        Move(_sessions, pageX, tableY, pageWidth, tableHeight);
+        Move(_sessionsEmpty, pageX + 12, tableY + 40, pageWidth - 24, RowHeight);
+        Move(_wrapShortcut, pageX, wrapY, 188, ButtonHeight);
+
+        Move(_startAtLogon, pageX, pageY, pageWidth, RowHeight + 4);
+    }
+
+    private void Move(IntPtr control, int x, int y, int width, int height)
+    {
+        if (control != IntPtr.Zero)
+        {
+            MoveWindow(control, Scale(x), Scale(y), Scale(width), Scale(height), false);
         }
     }
 
@@ -751,11 +818,11 @@ internal sealed class SettingsWindow
             return control;
         }
 
-        _controls.Add((control, x, y, width, height));
+        _controls.Add(control);
 
         SetFont(control, font);
 
-        // Buttons, checkboxes and the list box draw themselves, so their colours cannot
+        // Buttons, checkboxes and the table draw themselves, so their colours cannot
         // be set with a brush the way a label's can. Handing them the dark Explorer
         // theme is how comctl32 is told to use the artwork it already has.
         _theme.ApplyToControl(control);
@@ -776,6 +843,118 @@ internal sealed class SettingsWindow
     }
 
     private int Scale(int value) => value * _dpi / 96;
+
+    private int Unscale(int value) => value * 96 / _dpi;
+
+    private void SchedulePersist()
+    {
+        if (_window != IntPtr.Zero && _actions.WriteLayout is not null)
+        {
+            SetTimer(_window, PersistTimer, PersistMilliseconds, IntPtr.Zero);
+        }
+    }
+
+    private void PersistLayout()
+    {
+        if (_window == IntPtr.Zero)
+        {
+            return;
+        }
+
+        KillTimer(_window, PersistTimer);
+
+        if (_actions.WriteLayout is null)
+        {
+            return;
+        }
+
+        int clientWidth = _layout.ClientWidth;
+        int clientHeight = _layout.ClientHeight;
+
+        if (!IsZoomed(_window) && !IsIconic(_window) && GetClientRect(_window, out RECT client))
+        {
+            clientWidth = Unscale(client.right);
+            clientHeight = Unscale(client.bottom);
+        }
+
+        _layout = new SettingsWindowLayout
+        {
+            ClientWidth = clientWidth,
+            ClientHeight = clientHeight,
+            ActiveTab = (int)_page,
+            ColumnWidths = ReadColumnWidths(),
+            SortColumn = _sortColumn,
+            SortDescending = _sortDescending,
+        }.Normalize();
+
+        _actions.WriteLayout(_layout);
+    }
+
+    private void RememberRestoredSize()
+    {
+        if (GetClientRect(_window, out RECT client))
+        {
+            _layout = _layout with
+            {
+                ClientWidth = Unscale(client.right),
+                ClientHeight = Unscale(client.bottom),
+            };
+        }
+    }
+
+    private int[] ReadColumnWidths()
+    {
+        if (_sessions == IntPtr.Zero)
+        {
+            return [.. _layout.ColumnWidths];
+        }
+
+        int[] widths = new int[5];
+
+        for (int index = 0; index < widths.Length; index++)
+        {
+            int physical = (int)SendMessage(_sessions, LVM_GETCOLUMNWIDTH, (IntPtr)index, IntPtr.Zero);
+            widths[index] = Math.Clamp(
+                Unscale(physical),
+                SettingsWindowLayout.MinimumColumnWidth,
+                SettingsWindowLayout.MaximumColumnWidth);
+        }
+
+        return widths;
+    }
+
+    private void SetColumnWidths(IReadOnlyList<int> widths)
+    {
+        if (_sessions == IntPtr.Zero)
+        {
+            return;
+        }
+
+        for (int index = 0; index < Math.Min(5, widths.Count); index++)
+        {
+            SendMessage(_sessions, LVM_SETCOLUMNWIDTH, (IntPtr)index, (IntPtr)Scale(widths[index]));
+        }
+    }
+
+    private void SetMinimumSize(IntPtr lParam)
+    {
+        if (lParam == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var minimum = new RECT
+        {
+            right = Scale(SettingsWindowLayout.MinimumClientWidth),
+            bottom = Scale(SettingsWindowLayout.MinimumClientHeight),
+        };
+        AdjustWindowRect(ref minimum, Style, false);
+
+        MINMAXINFO limits = Marshal.PtrToStructure<MINMAXINFO>(lParam);
+        limits.ptMinTrackSize.x = minimum.right - minimum.left;
+        limits.ptMinTrackSize.y = minimum.bottom - minimum.top;
+        Marshal.StructureToPtr(limits, lParam, fDeleteOld: false);
+    }
 
     /// <summary>
     /// Pulls the current state in and puts it on screen.
@@ -811,27 +990,96 @@ internal sealed class SettingsWindow
             FillSessions(view.Sessions);
         }
 
+        if (!_layout.ColumnWidths.SequenceEqual(ReadColumnWidths()))
+        {
+            SchedulePersist();
+        }
+
         if (reread)
         {
             Check(_startAtLogon, Ask(_actions.ReadStartAtLogon));
         }
     }
 
-    private void FillSessions(IReadOnlyList<string> lines)
-    {        // Preserved across the rebuild, so a session ending three rows up does not yank
-        // the list out from under someone reading the bottom of it.
-        IntPtr top = SendMessage(_sessions, LB_GETTOPINDEX, IntPtr.Zero, IntPtr.Zero);
+    private void FillSessions(IReadOnlyList<SessionRow> rows)
+    {
+        int top = (int)SendMessage(_sessions, LVM_GETTOPINDEX, IntPtr.Zero, IntPtr.Zero);
+        SendMessage(_sessions, LVM_DELETEALLITEMS, IntPtr.Zero, IntPtr.Zero);
 
-        SendMessage(_sessions, LB_RESETCONTENT, IntPtr.Zero, IntPtr.Zero);
+        IReadOnlyList<SessionRow> sorted = SessionTableSorter.Sort(rows, _sortColumn, _sortDescending);
 
-        foreach (string line in lines)
+        for (int rowIndex = 0; rowIndex < sorted.Count; rowIndex++)
         {
-            SendMessageString(_sessions, LB_ADDSTRING, IntPtr.Zero, line);
+            SessionRow row = sorted[rowIndex];
+            string[] cells = [row.Name, row.Source, row.Folder, row.Status, row.Activity];
+
+            for (int columnIndex = 0; columnIndex < cells.Length; columnIndex++)
+            {
+                var item = new LVITEM
+                {
+                    mask = LVIF_TEXT,
+                    iItem = rowIndex,
+                    iSubItem = columnIndex,
+                    pszText = cells[columnIndex],
+                    cchTextMax = cells[columnIndex].Length,
+                };
+
+                SendMessageListItem(
+                    _sessions,
+                    columnIndex == 0 ? LVM_INSERTITEMW : LVM_SETITEMW,
+                    IntPtr.Zero,
+                    ref item);
+            }
         }
 
-        SendMessage(_sessions, LB_SETTOPINDEX, top, IntPtr.Zero);
+        if (top > 0 && sorted.Count > 0)
+        {
+            SendMessage(_sessions, LVM_ENSUREVISIBLE, (IntPtr)Math.Min(top, sorted.Count - 1), IntPtr.Zero);
+        }
 
-        _shown = lines;
+        _shown = [.. rows];
+        ShowWindow(
+            _sessionsEmpty,
+            _page == SettingsPage.Sessions && rows.Count == 0 ? SW_SHOW : SW_HIDE);
+    }
+
+    private void OnColumnClicked(int column)
+    {
+        if (!Enum.IsDefined((SessionTableColumn)column))
+        {
+            return;
+        }
+
+        SessionTableColumn selected = (SessionTableColumn)column;
+        _sortDescending = selected == _sortColumn ? !_sortDescending : false;
+        _sortColumn = selected;
+        UpdateSortIndicator();
+        FillSessions(_shown);
+        SchedulePersist();
+    }
+
+    private void UpdateSortIndicator()
+    {
+        IntPtr header = SendMessage(_sessions, LVM_GETHEADER, IntPtr.Zero, IntPtr.Zero);
+
+        if (header == IntPtr.Zero)
+        {
+            return;
+        }
+
+        for (int index = 0; index < 5; index++)
+        {
+            var item = new HDITEM { mask = HDI_FORMAT };
+            SendMessageHeaderItem(header, HDM_GETITEMW, (IntPtr)index, ref item);
+            item.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
+
+            if (index == (int)_sortColumn)
+            {
+                item.fmt |= _sortDescending ? HDF_SORTDOWN : HDF_SORTUP;
+            }
+
+            SendMessageHeaderItem(header, HDM_SETITEMW, (IntPtr)index, ref item);
+        }
     }
 
     private IntPtr HandleMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam)
@@ -851,6 +1099,12 @@ internal sealed class SettingsWindow
                     return IntPtr.Zero;
                 }
 
+                if (notification.hwndFrom == _sessions && notification.code == LVN_COLUMNCLICK)
+                {
+                    OnColumnClicked(Marshal.PtrToStructure<NM_LISTVIEW>(lParam).iSubItem);
+                    return IntPtr.Zero;
+                }
+
                 if (notification.hwndFrom == _tabs && notification.code == TCN_SELCHANGE)
                 {
                     int selected = (int)SendMessage(_tabs, TCM_GETCURSEL, IntPtr.Zero, IntPtr.Zero);
@@ -865,7 +1119,35 @@ internal sealed class SettingsWindow
                 return DefWindowProc(window, message, wParam, lParam);
 
             case WM_TIMER:
-                Refresh(reread: false);
+                if ((int)wParam == PersistTimer)
+                {
+                    PersistLayout();
+                }
+                else
+                {
+                    Refresh(reread: false);
+                }
+
+                return IntPtr.Zero;
+
+            case WM_SIZE:
+                int sizeState = (int)wParam;
+
+                if (sizeState != SIZE_MINIMIZED)
+                {
+                    LayoutControls();
+                }
+
+                if (sizeState == SIZE_RESTORED)
+                {
+                    RememberRestoredSize();
+                    SchedulePersist();
+                }
+
+                return IntPtr.Zero;
+
+            case WM_GETMINMAXINFO:
+                SetMinimumSize(lParam);
                 return IntPtr.Zero;
 
             case WM_ERASEBKGND:
@@ -877,10 +1159,6 @@ internal sealed class SettingsWindow
                 }
 
                 return 1;
-
-            case WM_PAINT:
-                OnPaint(window);
-                return IntPtr.Zero;
 
             case WM_CTLCOLORSTATIC:
                 // Labels and the checkbox paint their own background otherwise, leaving
@@ -895,13 +1173,6 @@ internal sealed class SettingsWindow
                     : _theme.Text);
                 SetBkColor(wParam, _theme.Surface);
                 return _theme.SurfaceBrush;
-
-            case WM_CTLCOLORLISTBOX:
-                // One step off the surface, which is how Fluent separates a list from
-                // the window it sits in now that the border is a hairline.
-                SetTextColor(wParam, _theme.Text);
-                SetBkColor(wParam, _theme.Layer);
-                return _theme.LayerBrush;
 
             case WM_SETTINGCHANGE:
                 // Broadcast for every system setting there is, so the payload has to be
@@ -922,7 +1193,7 @@ internal sealed class SettingsWindow
                 return IntPtr.Zero;
 
             case WM_CLOSE:
-                DestroyWindow(window);
+                Close();
                 return IntPtr.Zero;
 
             case WM_DESTROY:
@@ -932,36 +1203,6 @@ internal sealed class SettingsWindow
             default:
                 return DefWindowProc(window, message, wParam, lParam);
         }
-    }
-
-    /// <summary>
-    /// Draws the hairline around the session list.
-    /// <para>
-    /// A <c>WS_BORDER</c> would be one call instead of this, and would stay light in
-    /// dark mode: that border is drawn by Windows in a system colour, and there is no
-    /// message asking us what colour it should be.
-    /// </para>
-    /// </summary>
-    private void OnPaint(IntPtr window)
-    {
-        IntPtr context = BeginPaint(window, out PAINTSTRUCT paint);
-
-        if (context != IntPtr.Zero && _page == SettingsPage.Sessions)
-        {
-            (int x, int y, int width, int height) = _sessionsBounds;
-
-            var frame = new RECT
-            {
-                left = Scale(x) - 1,
-                top = Scale(y) - 1,
-                right = Scale(x + width) + 1,
-                bottom = Scale(y + height) + 1,
-            };
-
-            FrameRect(context, ref frame, _theme.BorderBrush);
-        }
-
-        EndPaint(window, ref paint);
     }
 
     /// <summary>
@@ -990,7 +1231,7 @@ internal sealed class SettingsWindow
         _theme.ApplyToWindow(_window);
         Theme.AllowSystemThemedMenus();
 
-        foreach ((IntPtr control, _, _, _, _) in _controls)
+        foreach (IntPtr control in _controls)
         {
             _theme.ApplyToControl(control);
         }
@@ -1019,6 +1260,7 @@ internal sealed class SettingsWindow
     /// </summary>
     private void OnDpiChanged(int dpi, IntPtr suggested)
     {
+        int[] columnWidths = ReadColumnWidths();
         _dpi = dpi == 0 ? 96 : dpi;
 
         CreateFonts();
@@ -1037,12 +1279,13 @@ internal sealed class SettingsWindow
                 SWP_NOZORDER);
         }
 
-        foreach ((IntPtr control, int x, int y, int width, int height) in _controls)
+        foreach (IntPtr control in _controls)
         {
-            MoveWindow(control, Scale(x), Scale(y), Scale(width), Scale(height), false);
             SetFont(control, FontFor(control));
         }
 
+        SetColumnWidths(columnWidths);
+        LayoutControls();
         RedrawWindow(_window, IntPtr.Zero, IntPtr.Zero, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
     }
 
@@ -1210,6 +1453,7 @@ internal sealed class SettingsWindow
         if (_window != IntPtr.Zero)
         {
             KillTimer(_window, RefreshTimer);
+            KillTimer(_window, PersistTimer);
         }
 
         DeleteFonts();
@@ -1227,12 +1471,17 @@ internal sealed class SettingsWindow
         _sessionsLabel = IntPtr.Zero;
         _signInOut = IntPtr.Zero;
         _sessions = IntPtr.Zero;
+        _sessionsEmpty = IntPtr.Zero;
+        _wrapShortcut = IntPtr.Zero;
         _startAtLogon = IntPtr.Zero;
         _versionLabel = IntPtr.Zero;
         _changeHistory = IntPtr.Zero;
         _updateLabel = IntPtr.Zero;
         _update = IntPtr.Zero;
         _checkForUpdates = IntPtr.Zero;
+        _openLogs = IntPtr.Zero;
+        _sendFeedback = IntPtr.Zero;
+        _close = IntPtr.Zero;
         _shown = [];
     }
 

@@ -210,18 +210,20 @@ public sealed class AcpProvider : IAsyncDisposable
 
         try
         {
-            session.Loaded = false;
-            session.Reset();
-            await Client.CallAsync(
-                "session/load",
-                new JsonObject
-                {
-                    ["sessionId"] = session.SessionId,
-                    ["cwd"] = session.Cwd,
-                    ["mcpServers"] = new JsonArray(),
-                },
-                cancellationToken).ConfigureAwait(false);
-            session.Loaded = true;
+            if (!session.Loaded)
+            {
+                session.Reset();
+                await CallAsync(
+                    "session/load",
+                    new JsonObject
+                    {
+                        ["sessionId"] = session.SessionId,
+                        ["cwd"] = session.Cwd,
+                        ["mcpServers"] = new JsonArray(),
+                    },
+                    cancellationToken).ConfigureAwait(false);
+                session.Loaded = true;
+            }
 
             if (_sink is not null)
             {

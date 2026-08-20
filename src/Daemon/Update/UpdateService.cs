@@ -5,7 +5,10 @@ namespace OneRemoteCli.Daemon.Update;
 /// <summary>What the agent currently knows about newer releases.</summary>
 public enum UpdateStage
 {
-    /// <summary>Nothing to say: not checked yet, or this is the current release.</summary>
+    /// <summary>No check has completed since this agent started.</summary>
+    NotChecked,
+
+    /// <summary>The most recent check found that this is the current release.</summary>
     UpToDate,
 
     /// <summary>Asking github.com right now.</summary>
@@ -40,12 +43,18 @@ public enum UpdateStage
 /// <param name="Version">The newer release, without its <c>v</c>, when there is one.</param>
 /// <param name="Message">What went wrong, for <see cref="UpdateStage.Failed"/>.</param>
 public readonly record struct UpdateStatus(
-    UpdateStage Stage = UpdateStage.UpToDate,
+    UpdateStage Stage = UpdateStage.NotChecked,
     string? Version = null,
     string? Message = null)
 {
     /// <summary>Whether there is something a click would do right now.</summary>
     public bool CanInstall => Stage == UpdateStage.Available;
+
+    /// <summary>Whether starting another check is valid right now.</summary>
+    public bool CanCheck =>
+        Stage is not UpdateStage.Checking and
+        not UpdateStage.Installing and
+        not UpdateStage.Restart;
 }
 
 /// <summary>
@@ -77,23 +86,11 @@ public sealed class UpdateService
     private readonly Action<string>? _log;
 
     /// <summary>
-    /// One update at a time. The loop and a click can arrive together, and two installs
-    /// racing over the same executable is the one way this could break a machine that
-    /// was working.
+    /// One update operation at a time. The periodic check and either button can arrive
+    /// together; serializing checks and installs keeps their status transitions from
+    /// overwriting one another and prevents two installers racing over the executable.
     /// </summary>
     private readonly SemaphoreSlim _gate = new(1, 1);
-
-    /// <summary>
-    /// Released to cut a wait short, so a click does not sit behind up to a day of
-    /// sleeping.
-    /// <para>
-    /// A semaphore rather than a cancellation token, which is what the hub's reconnect
-    /// loop uses for the same job: a token can only be cancelled once, so waking this
-    /// loop would mean replacing the source each time round and disposing one the
-    /// sleeping side may still be linked to. Counting to one has neither problem.
-    /// </para>
-    /// </summary>
-    private readonly SemaphoreSlim _wake = new(0, 1);
 
     private readonly object _statusLock = new();
 
@@ -149,12 +146,12 @@ public sealed class UpdateService
 
         try
         {
-            await SleepAsync(_options.StartupDelay, cancellationToken).ConfigureAwait(false);
+            await Task.Delay(_options.StartupDelay, cancellationToken).ConfigureAwait(false);
 
             while (!cancellationToken.IsCancellationRequested)
             {
                 await CheckAsync(cancellationToken).ConfigureAwait(false);
-                await SleepAsync(_options.Interval, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(_options.Interval, cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
@@ -178,48 +175,62 @@ public sealed class UpdateService
     /// </summary>
     public async Task<UpdateStatus> CheckAsync(CancellationToken cancellationToken = default)
     {
-        UpdateStatus before = Status;
-
-        if (before.Stage is UpdateStage.Installing or UpdateStage.Restart)
-        {
-            return before;
-        }
-
-        Publish(new UpdateStatus(UpdateStage.Checking));
-
-        string? tag;
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {
-            tag = await _latestTag(cancellationToken).ConfigureAwait(false);
+            UpdateStatus before = Status;
+
+            if (before.Stage is UpdateStage.Installing or UpdateStage.Restart)
+            {
+                return before;
+            }
+
+            UpdateStatus baseline = before;
+
+            if (before.Stage != UpdateStage.Checking)
+            {
+                Publish(new UpdateStatus(UpdateStage.Checking));
+            }
+
+            string? tag;
+
+            try
+            {
+                tag = await _latestTag(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                Publish(baseline);
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // A TaskCanceledException that is not this token is an HttpClient timeout,
+                // which is an ordinary failed check and must not end the loop. Treating
+                // every cancellation as shutdown would let one slow response stop a machine
+                // ever checking again.
+                _log?.Invoke($"update: could not reach github.com ({ex.Message}).");
+
+                return Publish(baseline.Stage == UpdateStage.Available
+                    ? baseline
+                    : new UpdateStatus(UpdateStage.Failed, Message: $"Could not check for updates: {ex.Message}"));
+            }
+
+            if (!ReleaseVersion.IsUpgrade(tag, _currentVersion))
+            {
+                return Publish(new UpdateStatus(UpdateStage.UpToDate));
+            }
+
+            ReleaseVersion.TryParse(tag, out ReleaseVersion version);
+            _log?.Invoke($"update: {version.Text} is available (this is {_currentVersion}).");
+
+            return Publish(new UpdateStatus(UpdateStage.Available, version.Text));
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        finally
         {
-            Publish(before);
-            throw;
+            _gate.Release();
         }
-        catch (Exception ex)
-        {
-            // A TaskCanceledException that is not this token is an HttpClient timeout,
-            // which is an ordinary failed check and must not end the loop. Treating
-            // every cancellation as shutdown would let one slow response stop a machine
-            // ever checking again.
-            _log?.Invoke($"update: could not reach github.com ({ex.Message}).");
-
-            return Publish(before.Stage == UpdateStage.Available
-                ? before
-                : new UpdateStatus(UpdateStage.Failed, Message: $"Could not check for updates: {ex.Message}"));
-        }
-
-        if (!ReleaseVersion.IsUpgrade(tag, _currentVersion))
-        {
-            return Publish(new UpdateStatus(UpdateStage.UpToDate));
-        }
-
-        ReleaseVersion.TryParse(tag, out ReleaseVersion version);
-        _log?.Invoke($"update: {version.Text} is available (this is {_currentVersion}).");
-
-        return Publish(new UpdateStatus(UpdateStage.Available, version.Text));
     }
 
     /// <summary>
@@ -234,15 +245,15 @@ public sealed class UpdateService
     /// </summary>
     public async Task<UpdateStatus> InstallAsync(CancellationToken cancellationToken = default)
     {
-        if (Status is not { Stage: UpdateStage.Available, Version: { Length: > 0 } version })
-        {
-            return Status;
-        }
-
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {
+            if (Status is not { Stage: UpdateStage.Available, Version: { Length: > 0 } version })
+            {
+                return Status;
+            }
+
             Publish(new UpdateStatus(UpdateStage.Installing, version));
 
             UpdateResult result;
@@ -302,28 +313,37 @@ public sealed class UpdateService
         }
     }
 
-    /// <summary>Cuts the current wait short, so the next check happens now.</summary>
+    /// <summary>Starts a serialized check now, independently of the periodic timer.</summary>
     public void CheckSoon()
     {
-        try
+        if (!_options.Check)
         {
-            _wake.Release();
+            Publish(new UpdateStatus(
+                UpdateStage.Failed,
+                Message: "Update checks are disabled by configuration."));
+            return;
         }
-        catch (SemaphoreFullException)
+
+        if (Status.Stage is UpdateStage.Checking or UpdateStage.Installing or UpdateStage.Restart)
         {
-            // Already awake, or already asked to be. Two clicks are one check.
+            return;
         }
+
+        _ = CheckRequestedAsync();
     }
 
-    private async Task SleepAsync(TimeSpan delay, CancellationToken cancellationToken)
+    private async Task CheckRequestedAsync()
     {
         try
         {
-            await _wake.WaitAsync(delay, cancellationToken).ConfigureAwait(false);
+            await CheckAsync().ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch (Exception ex)
         {
-            // Shutting down. The loop's own check ends it.
+            _log?.Invoke($"update: the requested check stopped ({ex.Message}).");
+            Publish(new UpdateStatus(
+                UpdateStage.Failed,
+                Message: $"Could not check for updates: {ex.Message}"));
         }
     }
 

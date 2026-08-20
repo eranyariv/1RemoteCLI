@@ -39,8 +39,9 @@ public sealed class UpdateServiceTests
     {
         UpdateService updates = Service();
 
-        Assert.Equal(UpdateStage.UpToDate, updates.Status.Stage);
+        Assert.Equal(UpdateStage.NotChecked, updates.Status.Stage);
         Assert.False(updates.Status.CanInstall);
+        Assert.True(updates.Status.CanCheck);
 
         await Task.CompletedTask;
     }
@@ -114,6 +115,70 @@ public sealed class UpdateServiceTests
         Assert.Equal(UpdateStage.Available, status.Stage);
         Assert.Equal("0.13", status.Version);
         Assert.True(status.CanInstall);
+    }
+
+    [Fact]
+    public async Task ARequestedFailedCheckDoesNotWithdrawAReleaseItAlreadyFoundAsync()
+    {
+        bool reachable = true;
+        var failedCheck = new TaskCompletionSource<string?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        UpdateService updates = Service(_ => reachable
+            ? Task.FromResult<string?>("v0.13")
+            : failedCheck.Task);
+
+        await updates.CheckAsync();
+        reachable = false;
+        var restored = new TaskCompletionSource<UpdateStatus>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        updates.Changed += () =>
+        {
+            if (updates.Status.Stage == UpdateStage.Available)
+            {
+                restored.TrySetResult(updates.Status);
+            }
+        };
+        updates.CheckSoon();
+
+        Assert.Equal(UpdateStage.Checking, updates.Status.Stage);
+        Assert.False(updates.Status.CanCheck);
+
+        failedCheck.SetException(new HttpRequestException("no route to host"));
+        UpdateStatus status = await restored.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(UpdateStage.Available, status.Stage);
+        Assert.Equal("0.13", status.Version);
+    }
+
+    [Fact]
+    public async Task UpdateClickWaitsForAnActiveCheckToConfirmTheReleaseAsync()
+    {
+        int checks = 0;
+        var recheck = new TaskCompletionSource<string?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        bool installed = false;
+        UpdateService updates = Service(
+            latestTag: _ => ++checks == 1
+                ? Task.FromResult<string?>("v0.13")
+                : recheck.Task,
+            install: (_, _) =>
+            {
+                installed = true;
+                return Task.FromResult(new UpdateResult(true, "Updated.", Replaced: true));
+            });
+
+        await updates.CheckAsync();
+        Task<UpdateStatus> checking = updates.CheckAsync();
+
+        Assert.Equal(UpdateStage.Checking, updates.Status.Stage);
+
+        Task<UpdateStatus> installing = updates.InstallAsync();
+        recheck.SetResult("v0.13");
+        await checking;
+        UpdateStatus status = await installing;
+
+        Assert.True(installed);
+        Assert.Equal(UpdateStage.Restart, status.Stage);
     }
 
     /// <summary>
@@ -405,11 +470,28 @@ public sealed class UpdateServiceTests
     }
 
     [Fact]
-    public void AskingForACheckTwiceIsOneCheck()
+    public async Task AskingForACheckImmediatelyPublishesProgressAsync()
     {
-        UpdateService updates = Service();
+        var response = new TaskCompletionSource<string?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        UpdateService updates = Service(_ => response.Task);
+        var completed = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        updates.Changed += () =>
+        {
+            if (updates.Status.Stage == UpdateStage.Available)
+            {
+                completed.TrySetResult();
+            }
+        };
 
         updates.CheckSoon();
         updates.CheckSoon();
+
+        Assert.Equal(UpdateStage.Checking, updates.Status.Stage);
+        Assert.False(updates.Status.CanCheck);
+
+        response.SetResult("v0.13");
+        await completed.Task.WaitAsync(TimeSpan.FromSeconds(1));
     }
 }

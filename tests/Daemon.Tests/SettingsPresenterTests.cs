@@ -98,6 +98,13 @@ public sealed class SettingsPresenterTests
         Assert.Equal("Started 4 minutes ago", view.Sessions[0].Activity);
     }
 
+    [Theory]
+    [InlineData(0, "0 sessions discovered on this machine")]
+    [InlineData(1, "1 session discovered on this machine")]
+    [InlineData(16, "16 sessions discovered on this machine")]
+    public void SessionHeadingIncludesTheCount(int count, string expected) =>
+        Assert.Equal(expected, SettingsPresenter.SessionsHeading(count));
+
     [Fact]
     public void ASessionSaysWhatItIsRunningWhenWeKnow()
     {
@@ -206,9 +213,8 @@ public sealed class SettingsPresenterTests
         SettingsPresenter.Present(AgentState.Connected, "ada@example.com", [], Now, update);
 
     /// <summary>
-    /// The window is silent about updates until there is something to say. A permanent
-    /// "no updates available" line is one more thing to read in a window somebody opened
-    /// because something else was wrong.
+    /// The window is silent until the first check completes; it must not claim the
+    /// machine is current before it has reached the release service.
     /// </summary>
     [Fact]
     public void SaysNothingAboutUpdatesWhenThereIsNothingToSay()
@@ -217,7 +223,14 @@ public sealed class SettingsPresenterTests
 
         Assert.Equal(string.Empty, view.Update);
         Assert.False(view.CanUpdate);
+        Assert.True(view.CanCheckForUpdates);
     }
+
+    [Fact]
+    public void ConfirmsWhenTheInstalledVersionIsCurrent() =>
+        Assert.Equal(
+            "You're up to date.",
+            WithUpdate(new UpdateStatus(UpdateStage.UpToDate)).Update);
 
     [Fact]
     public void NamesTheVersionThatIsWaiting()
@@ -241,6 +254,21 @@ public sealed class SettingsPresenterTests
     [InlineData(UpdateStage.Failed)]
     public void TheButtonIsDeadWhileThereIsNothingToClick(UpdateStage stage) =>
         Assert.False(WithUpdate(new UpdateStatus(stage, "0.13", "something")).CanUpdate);
+
+    [Theory]
+    [InlineData(UpdateStage.Checking)]
+    [InlineData(UpdateStage.Installing)]
+    [InlineData(UpdateStage.Restart)]
+    public void AnotherCheckIsDisabledWhileUpdateWorkIsInProgress(UpdateStage stage) =>
+        Assert.False(WithUpdate(new UpdateStatus(stage, "0.13")).CanCheckForUpdates);
+
+    [Theory]
+    [InlineData(UpdateStage.NotChecked)]
+    [InlineData(UpdateStage.UpToDate)]
+    [InlineData(UpdateStage.Available)]
+    [InlineData(UpdateStage.Failed)]
+    public void AnotherCheckIsAllowedWhenNoUpdateWorkIsInProgress(UpdateStage stage) =>
+        Assert.True(WithUpdate(new UpdateStatus(stage, "0.13")).CanCheckForUpdates);
 
     [Fact]
     public void SaysWhatItIsDoing()

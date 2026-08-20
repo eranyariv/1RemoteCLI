@@ -65,6 +65,7 @@ public sealed record SessionRow(
 /// nothing to say, so the window can leave the line out rather than print "no update".
 /// </param>
 /// <param name="CanUpdate">Whether the update button does anything right now.</param>
+/// <param name="CanCheckForUpdates">Whether another update check can start now.</param>
 public readonly record struct SettingsView(
     string Account,
     string Connection,
@@ -75,7 +76,8 @@ public readonly record struct SettingsView(
     IReadOnlyList<SessionRow> Sessions,
     string Version,
     string Update = "",
-    bool CanUpdate = false);
+    bool CanUpdate = false,
+    bool CanCheckForUpdates = true);
 
 /// <summary>
 /// What the settings window says.
@@ -99,8 +101,6 @@ public static class SettingsPresenter
     public const string SessionsTabLabel = "Local sessions";
 
     public const string SettingsTabLabel = "Settings";
-
-    public const string SessionsLabel = "Sessions discovered on this machine";
 
     /// <summary>
     /// Worded as the thing that happens rather than as a setting name. "Start at
@@ -171,16 +171,20 @@ public static class SettingsPresenter
             rows,
             $"Version {ProductVersion.Current}",
             Describe(update),
-            update.CanInstall);
+            update.CanInstall,
+            update.CanCheck);
     }
+
+    public static string SessionsHeading(int count) =>
+        count == 1
+            ? "1 session discovered on this machine"
+            : $"{count} sessions discovered on this machine";
 
     /// <summary>
     /// What the window says about newer releases.
     /// <para>
-    /// Empty for the state the machine is in almost all the time. A permanent "you are
-    /// up to date" is a line that is read once and then never again, and its cost is
-    /// that the one time it says something else, it is in a place the reader's eye has
-    /// learned to skip.
+    /// Empty only before the first check. Once the user asks, every outcome remains
+    /// visible so a completed no-op cannot look like an ignored click.
     /// </para>
     /// <para>
     /// A failed check does say so. It is the difference between an agent that has
@@ -190,6 +194,7 @@ public static class SettingsPresenter
     /// </summary>
     public static string Describe(UpdateStatus update) => update.Stage switch
     {
+        UpdateStage.UpToDate => "You're up to date.",
         UpdateStage.Checking => "Checking for updates\u2026",
 
         // The version, not "an update": it is what tells somebody whether this is the

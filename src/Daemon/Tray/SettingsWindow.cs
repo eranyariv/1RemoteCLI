@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using OneRemoteCli.Daemon.Update;
 using static OneRemoteCli.Daemon.Tray.NativeMethods;
 
 namespace OneRemoteCli.Daemon.Tray;
@@ -156,6 +157,7 @@ internal sealed class SettingsWindow
     private IntPtr _captionFont;
     private Theme _theme = Theme.Current();
     private IntPtr _tabs;
+    private IntPtr _pageBackground;
     private IntPtr _accountOrb;
     private IntPtr _accountLabel;
     private IntPtr _connectionOrb;
@@ -483,6 +485,15 @@ internal sealed class SettingsWindow
         InsertTab(SettingsPage.Status, SettingsPresenter.StatusTabLabel);
         InsertTab(SettingsPage.Sessions, SettingsPresenter.SessionsTabLabel);
         InsertTab(SettingsPage.Settings, SettingsPresenter.SettingsTabLabel);
+        _pageBackground = Create(
+            instance,
+            "STATIC",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            0,
+            100,
+            100,
+            IntPtr.Zero);
 
         _accountOrb = PageControl(
             _statusControls,
@@ -553,7 +564,7 @@ internal sealed class SettingsWindow
                 0,
                 100,
                 RowHeight,
-                SettingsPresenter.SessionsLabel,
+                SettingsPresenter.SessionsHeading(0),
                 font: _strongFont));
         _sessions = PageControl(
             _sessionControls,
@@ -692,6 +703,7 @@ internal sealed class SettingsWindow
         int pageBottom = Margin + tabHeight - 16;
 
         Move(_tabs, Margin, Margin, content, tabHeight);
+        Move(_pageBackground, Margin + 2, Margin + 26, content - 4, tabHeight - 28);
         Move(_close, clientWidth - Margin - 104, clientHeight - Margin - ButtonHeight, 104, ButtonHeight);
 
         const int orbWidth = 18;
@@ -971,11 +983,14 @@ internal sealed class SettingsWindow
         SetWindowText(_accountLabel, view.Account);
         SetWindowText(_connectionLabel, view.Connection);
         SetWindowText(_versionLabel, view.Version);
+        SetWindowText(_sessionsLabel, SettingsPresenter.SessionsHeading(view.Sessions.Count));
         SetWindowText(_signInOut, view.SignedIn ? SettingsPresenter.SignOutLabel : SettingsPresenter.SignInLabel);
 
         SetWindowText(_updateLabel, view.Update);
         EnableWindow(_update, view.CanUpdate);
-        EnableWindow(_checkForUpdates, _actions.CheckForUpdate is not null);
+        EnableWindow(
+            _checkForUpdates,
+            _actions.CheckForUpdate is not null && view.CanCheckForUpdates);
 
         if (_accountTone != view.AccountTone || _connectionTone != view.ConnectionTone)
         {
@@ -1161,9 +1176,9 @@ internal sealed class SettingsWindow
                 return 1;
 
             case WM_CTLCOLORSTATIC:
-                // Labels and the checkbox paint their own background otherwise, leaving
-                // light rectangles on a dark surface. The version line is the one thing
-                // here that is deliberately quieter than the rest.
+                // The page background and its labels share one layer brush. Keeping
+                // both explicit avoids depending on the stock tab's slightly different
+                // fill colour, which otherwise outlines every label rectangle.
                 SetBkMode(wParam, TRANSPARENT);
                 SetTextColor(
                     wParam,
@@ -1171,8 +1186,8 @@ internal sealed class SettingsWindow
                     : lParam == _connectionOrb ? _theme.StatusColor(_connectionTone)
                     : lParam == _versionLabel || lParam == _updateLabel ? _theme.SecondaryText
                     : _theme.Text);
-                SetBkColor(wParam, _theme.Surface);
-                return _theme.SurfaceBrush;
+                SetBkColor(wParam, _theme.Layer);
+                return _theme.LayerBrush;
 
             case WM_SETTINGCHANGE:
                 // Broadcast for every system setting there is, so the payload has to be
@@ -1340,12 +1355,19 @@ internal sealed class SettingsWindow
             // pumps the tray's messages would freeze the icon and the window with it.
             // The refresh timer picks the progress up a second later.
             case IdUpdate:
+                EnableWindow(_update, false);
+                EnableWindow(_checkForUpdates, false);
                 OffThread(_actions.Update);
                 break;
 
             case IdCheckForUpdates:
                 if (_actions.CheckForUpdate is not null)
                 {
+                    EnableWindow(_checkForUpdates, false);
+                    EnableWindow(_update, false);
+                    SetWindowText(
+                        _updateLabel,
+                        SettingsPresenter.Describe(new UpdateStatus(UpdateStage.Checking)));
                     OffThread(_actions.CheckForUpdate);
                 }
                 break;
@@ -1464,6 +1486,7 @@ internal sealed class SettingsWindow
         _sessionControls.Clear();
         _settingsControls.Clear();
         _tabs = IntPtr.Zero;
+        _pageBackground = IntPtr.Zero;
         _accountOrb = IntPtr.Zero;
         _accountLabel = IntPtr.Zero;
         _connectionOrb = IntPtr.Zero;

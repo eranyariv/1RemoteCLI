@@ -184,6 +184,10 @@ function SessionRow({
 
   const [editing, setEditing] = useState(false)
   const suggestion = suggestedProject(session, projects)
+  const chatSource =
+    session.kind === 'AgentChat'
+      ? `${session.program.trim() || labelFor(session.cliType)} chat`
+      : null
 
   return (
     <>
@@ -219,7 +223,7 @@ function SessionRow({
             <span className="mt-0.5 flex items-baseline gap-2">
               {session.kind === 'AgentChat' ? (
                 <span className="shrink-0 rounded bg-violet-500/15 px-1.5 py-0.5 text-[11px] font-medium text-violet-300">
-                  Chat
+                  {chatSource}
                 </span>
               ) : session.cliType === 'Generic' ? null : (
                 <span className="shrink-0 rounded bg-slate-700/60 px-1.5 py-0.5 text-[11px] font-medium text-slate-300">

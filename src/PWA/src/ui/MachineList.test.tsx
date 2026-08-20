@@ -133,4 +133,25 @@ describe('MachineList project layout', () => {
 
     expect(actions.onMove).toHaveBeenCalledWith('Active', 'session-a', 'remote-cli')
   })
+
+  it('labels an agent chat with the same provider source as agent settings', () => {
+    const chat = session('Release and deploy', {
+      program: 'GitHub Copilot',
+      cliType: 'CopilotCli',
+      kind: 'AgentChat',
+    })
+
+    render(
+      <MachineList
+        projectId={project.projectId}
+        machines={[machine('Active', [chat])]}
+        projects={[project]}
+        actions={actions}
+        onOpenSession={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('GitHub Copilot chat')).toBeTruthy()
+    expect(screen.queryByText('Chat')).toBeNull()
+  })
 })

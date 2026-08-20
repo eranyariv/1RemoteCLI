@@ -168,7 +168,7 @@ public sealed class RelayHub(
             return Error(ErrorCodes.MachineNotFound, "Register the machine first.");
         }
 
-        CorrectStaleProjectIfNeeded(address, notification.Session);
+        RestorePersistedProjectOrCorrectStale(address, notification.Session);
 
         // The session id goes in so open and close can be paired into a duration; it is
         // hashed on the way in and never comes back out. The session *name*, which is
@@ -211,7 +211,7 @@ public sealed class RelayHub(
                 notification.Session.SessionId);
         }
 
-        CorrectStaleProjectIfNeeded(address, notification.Session);
+        RestorePersistedProjectOrCorrectStale(address, notification.Session);
 
         await Clients.Clients(_registry.ClientsOf(address.UserKey)).SendAsync(
             HubMethods.Client.SessionUpdated,
@@ -237,6 +237,13 @@ public sealed class RelayHub(
         {
             return Error(ErrorCodes.SessionNotFound, "No such session on this machine.", notification.SessionId);
         }
+
+        _projects.TrySetSessionProject(
+            address.UserKey,
+            address.MachineId,
+            notification.SessionId,
+            projectId: null,
+            out _);
 
         _usage.SessionClosed(address.UserKey, notification.SessionId);
 
@@ -919,7 +926,33 @@ public sealed class RelayHub(
             request.SessionId,
             request.ProjectId,
             out LabelledSession? labelled,
+            out string? previousProjectId,
             out ErrorNotification? error);
+
+        if (!moved)
+        {
+            return Task.FromResult(error);
+        }
+
+        if (!_projects.TrySetSessionProject(
+                userKey,
+                request.MachineId,
+                request.SessionId,
+                request.ProjectId,
+                out string? persistenceError))
+        {
+            _registry.TryMoveSession(
+                Context.ConnectionId,
+                request.MachineId,
+                request.SessionId,
+                previousProjectId,
+                out _,
+                out _,
+                out _);
+
+            return Task.FromResult<ErrorNotification?>(
+                Error(persistenceError!, "The session project could not be saved.", request.SessionId));
+        }
 
         return AnnounceLabelAsync(moved, labelled, error);
     }
@@ -933,8 +966,19 @@ public sealed class RelayHub(
     /// on the two paths an agent can (re-)announce a session, rather than trusted to
     /// have been swept already.
     /// </summary>
-    private void CorrectStaleProjectIfNeeded(SessionAddress address, SessionInfo session)
+    private void RestorePersistedProjectOrCorrectStale(SessionAddress address, SessionInfo session)
     {
+        if (_projects.ProjectOfSession(address.UserKey, address.MachineId, session.SessionId) is { } persisted)
+        {
+            _registry.ApplyPersistedProject(
+                address.UserKey,
+                address.MachineId,
+                session.SessionId,
+                persisted);
+            session.ProjectId = persisted;
+            return;
+        }
+
         if (session.ProjectId is not { } projectId || _projects.Exists(address.UserKey, projectId))
         {
             return;

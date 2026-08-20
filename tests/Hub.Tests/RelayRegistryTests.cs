@@ -718,6 +718,22 @@ public sealed class RelayRegistryTests
     }
 
     [Fact]
+    public void ApplyingAPersistedProjectRestoresItToAReannouncedSession()
+    {
+        var registry = new RelayRegistry();
+
+        registry.Connect(Alice, "agent-a");
+        registry.RegisterMachine(Alice, "agent-a", Request("machine-a"));
+        registry.AddSession("agent-a", Session("session-1"));
+
+        registry.ApplyPersistedProject(Alice, "machine-a", "session-1", "project-1");
+
+        Assert.Equal(
+            "project-1",
+            Assert.Single(Assert.Single(registry.ListMachines(Alice)).Sessions).ProjectId);
+    }
+
+    [Fact]
     public void IgnoresAnUnknownConnection()
     {
         var registry = new RelayRegistry();

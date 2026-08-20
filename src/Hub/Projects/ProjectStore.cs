@@ -55,14 +55,28 @@ public sealed class ProjectRecord
     };
 }
 
+/// <summary>A durable project choice for one live session.</summary>
+public sealed class SessionProjectRecord
+{
+    public string MachineId { get; set; } = string.Empty;
+
+    public string SessionId { get; set; } = string.Empty;
+
+    public string ProjectId { get; set; } = string.Empty;
+}
+
 /// <summary>The whole store, on disk, in one JSON file. See <see cref="ProjectStore"/> for why.</summary>
 public sealed class ProjectState
 {
     /// <summary>Schema version, so a future shape change can be migrated rather than guessed at.</summary>
-    public int Schema { get; set; } = 1;
+    public int Schema { get; set; } = 2;
 
     /// <summary>User key to that user's projects, General included.</summary>
     public Dictionary<string, List<ProjectRecord>> Projects { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>User key to project assignments for sessions that may be re-announced after a restart.</summary>
+    public Dictionary<string, List<SessionProjectRecord>> SessionProjects { get; set; } =
+        new(StringComparer.Ordinal);
 }
 
 /// <summary>
@@ -181,6 +195,124 @@ public sealed class ProjectStore
             ProjectRecord? record = PartitionOf(userKey).Find(p => p.ProjectId == projectId);
             project = record?.ToInfo();
             return record is not null;
+        }
+    }
+
+    /// <summary>Returns a previously persisted non-General assignment for this session.</summary>
+    public string? ProjectOfSession(string userKey, string machineId, string sessionId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(userKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(machineId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+
+        lock (_gate)
+        {
+            SessionProjectRecord? assignment = SessionProjectsOf(userKey).Find(
+                record => record.MachineId == machineId && record.SessionId == sessionId);
+
+            return assignment is not null && PartitionOf(userKey).Exists(
+                project => project.ProjectId == assignment.ProjectId)
+                ? assignment.ProjectId
+                : null;
+        }
+    }
+
+    /// <summary>
+    /// Persists a live session's project. Null means General and removes the durable
+    /// override so a reused session id cannot inherit an old choice.
+    /// </summary>
+    public bool TrySetSessionProject(
+        string userKey,
+        string machineId,
+        string sessionId,
+        string? projectId,
+        out string? error)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(userKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(machineId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+
+        lock (_ioGate)
+        {
+            lock (_gate)
+            {
+                if (!_persistenceAvailable)
+                {
+                    error = ErrorCodes.InternalError;
+                    return false;
+                }
+
+                if (projectId is not null &&
+                    !PartitionOf(userKey).Exists(project => project.ProjectId == projectId))
+                {
+                    error = ErrorCodes.ProjectNotFound;
+                    return false;
+                }
+
+                List<SessionProjectRecord> assignments = SessionProjectsOf(userKey);
+                int index = assignments.FindIndex(
+                    record => record.MachineId == machineId && record.SessionId == sessionId);
+                SessionProjectRecord? previous = index >= 0 ? assignments[index] : null;
+
+                if (projectId is null)
+                {
+                    if (index < 0)
+                    {
+                        error = null;
+                        return true;
+                    }
+
+                    assignments.RemoveAt(index);
+                }
+                else if (previous is null)
+                {
+                    assignments.Add(new SessionProjectRecord
+                    {
+                        MachineId = machineId,
+                        SessionId = sessionId,
+                        ProjectId = projectId,
+                    });
+                }
+                else if (previous.ProjectId == projectId)
+                {
+                    error = null;
+                    return true;
+                }
+                else
+                {
+                    assignments[index] = new SessionProjectRecord
+                    {
+                        MachineId = machineId,
+                        SessionId = sessionId,
+                        ProjectId = projectId,
+                    };
+                }
+
+                _dirty = true;
+
+                if (!Flush())
+                {
+                    if (previous is null)
+                    {
+                        assignments.RemoveAll(
+                            record => record.MachineId == machineId && record.SessionId == sessionId);
+                    }
+                    else if (index >= 0 && index < assignments.Count)
+                    {
+                        assignments[index] = previous;
+                    }
+                    else
+                    {
+                        assignments.Insert(Math.Min(index, assignments.Count), previous);
+                    }
+
+                    error = ErrorCodes.InternalError;
+                    return false;
+                }
+
+                error = null;
+                return true;
+            }
         }
     }
 
@@ -368,12 +500,17 @@ public sealed class ProjectStore
                 }
 
                 ProjectRecord removed = partition[index];
+                List<SessionProjectRecord> assignments = SessionProjectsOf(userKey);
+                List<SessionProjectRecord> removedAssignments =
+                    assignments.Where(assignment => assignment.ProjectId == projectId).ToList();
                 partition.RemoveAt(index);
+                assignments.RemoveAll(assignment => assignment.ProjectId == projectId);
                 _dirty = true;
 
                 if (!Flush())
                 {
                     partition.Insert(index, removed);
+                    assignments.AddRange(removedAssignments);
                     error = ErrorCodes.InternalError;
                     return false;
                 }
@@ -660,6 +797,18 @@ public sealed class ProjectStore
         return partition;
     }
 
+    /// <summary>Caller must hold the gate.</summary>
+    private List<SessionProjectRecord> SessionProjectsOf(string userKey)
+    {
+        if (!_state.SessionProjects.TryGetValue(userKey, out List<SessionProjectRecord>? assignments))
+        {
+            assignments = [];
+            _state.SessionProjects[userKey] = assignments;
+        }
+
+        return assignments;
+    }
+
     /// <summary>
     /// Case-insensitive per-user uniqueness, General included - so nobody can create
     /// a second project that collides with the reserved one by name either.
@@ -811,7 +960,13 @@ public sealed class ProjectStore
                 return new ProjectState();
             }
 
-            return JsonSerializer.Deserialize<ProjectState>(File.ReadAllText(StatePath), Json) ?? new ProjectState();
+            ProjectState state =
+                JsonSerializer.Deserialize<ProjectState>(File.ReadAllText(StatePath), Json) ?? new ProjectState();
+            state.Schema = 2;
+            state.Projects ??= new Dictionary<string, List<ProjectRecord>>(StringComparer.Ordinal);
+            state.SessionProjects ??=
+                new Dictionary<string, List<SessionProjectRecord>>(StringComparer.Ordinal);
+            return state;
         }
         catch (JsonException error)
         {

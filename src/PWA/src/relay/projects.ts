@@ -1,4 +1,4 @@
-import type { MachineInfo, ProjectInfo } from '../protocol/wire'
+import type { MachineInfo, ProjectInfo, SessionInfo } from '../protocol/wire'
 import type { Machines } from './machines'
 
 /**
@@ -42,6 +42,67 @@ export function remove(projects: Projects, projectId: string): Projects {
 
 export function findProject(projects: Projects, projectId: string | null): ProjectInfo | undefined {
   return projects.find((p) => p.projectId === (projectId ?? GENERAL_PROJECT_ID))
+}
+
+const GENERIC_PATH_NAMES = new Set([
+  'code',
+  'home',
+  'project',
+  'projects',
+  'repo',
+  'repos',
+  'source',
+  'src',
+  'work',
+])
+
+function pathPattern(value: string): RegExp | null {
+  const chunks = value.match(/[a-z0-9]+/gi)
+  if (!chunks || chunks.join('').length < 4) return null
+  if (chunks.length === 1 && GENERIC_PATH_NAMES.has(chunks[0].toLowerCase())) return null
+
+  const expression = chunks
+    .map((chunk) => chunk.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('[\\s._-]*')
+
+  return new RegExp(`(?:^|[^a-z0-9])${expression}(?:$|[^a-z0-9])`, 'i')
+}
+
+function repoName(repoUrl: string | null): string | null {
+  if (!repoUrl) return null
+
+  try {
+    const segments = new URL(repoUrl).pathname.split('/').filter(Boolean)
+    return segments.at(-1)?.replace(/\.git$/i, '') ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Suggests one unambiguous project whose name or repository name appears as a
+ * complete component in an unmapped session's working/program path.
+ */
+export function suggestedProject(
+  session: SessionInfo,
+  projects: Projects,
+): ProjectInfo | undefined {
+  if (session.projectId !== null && session.projectId !== GENERAL_PROJECT_ID) return undefined
+
+  const paths = [session.cwd, session.program, ...session.args].join('\n')
+  const matches = projects
+    .filter((project) => !project.isGeneral)
+    .map((project) => {
+      const repository = repoName(project.repoUrl)
+      const repoMatches = repository ? (pathPattern(repository)?.test(paths) ?? false) : false
+      const nameMatches = pathPattern(project.name)?.test(paths) ?? false
+      return { project, score: (repoMatches ? 2 : 0) + (nameMatches ? 1 : 0) }
+    })
+    .filter((match) => match.score > 0)
+    .sort((a, b) => b.score - a.score)
+
+  if (matches.length === 0 || matches[0].score === matches[1]?.score) return undefined
+  return matches[0].project
 }
 
 /** What a project tile shows besides its name — computed here, not on the hub. */

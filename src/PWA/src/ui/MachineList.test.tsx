@@ -15,7 +15,14 @@ const project: ProjectInfo = {
   createdAt: new Date('2026-08-20T06:00:00Z'),
 }
 
-function session(id: string): SessionInfo {
+const general: ProjectInfo = {
+  ...project,
+  projectId: 'general',
+  name: 'General',
+  isGeneral: true,
+}
+
+function session(id: string, overrides: Partial<SessionInfo> = {}): SessionInfo {
   return {
     sessionId: id,
     program: 'pwsh',
@@ -31,6 +38,7 @@ function session(id: string): SessionInfo {
     pinned: false,
     kind: 'Terminal',
     projectId: project.projectId,
+    ...overrides,
   }
 }
 
@@ -52,7 +60,10 @@ const actions: SessionActions = {
 }
 
 describe('MachineList project layout', () => {
-  beforeEach(() => window.localStorage.clear())
+  beforeEach(() => {
+    window.localStorage.clear()
+    vi.clearAllMocks()
+  })
   afterEach(cleanup)
 
   it('lists active machines first and collapses empty machines by default', () => {
@@ -94,5 +105,32 @@ describe('MachineList project layout', () => {
     first.unmount()
     render(<MachineList {...props} />)
     expect(screen.getByRole('button', { name: 'Collapse Idle' })).toBeTruthy()
+  })
+
+  it('offers an inferred project move only for an unmapped General session', () => {
+    const candidate = {
+      ...project,
+      projectId: 'remote-cli',
+      name: '1RemoteCLI',
+      repoUrl: 'https://github.com/eranyariv/1RemoteCLI',
+    }
+    const unmapped = session('session-a', {
+      cwd: 'C:\\Users\\me\\.copilot\\repos\\1RemoteCLI',
+      projectId: null,
+    })
+
+    render(
+      <MachineList
+        projectId={general.projectId}
+        machines={[machine('Active', [unmapped])]}
+        projects={[general, candidate]}
+        actions={actions}
+        onOpenSession={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move to project 1RemoteCLI' }))
+
+    expect(actions.onMove).toHaveBeenCalledWith('Active', 'session-a', 'remote-cli')
   })
 })

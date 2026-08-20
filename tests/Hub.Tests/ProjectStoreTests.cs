@@ -235,6 +235,47 @@ public class ProjectStoreTests
         });
     }
 
+    [Fact]
+    public void SessionProjectAssignmentsComeBackAfterARestartAndCanBeCleared()
+    {
+        Use((path, iconRoot) =>
+        {
+            ProjectStore first = Open(path);
+            Assert.True(first.TryCreate(
+                UserA, "Website", null, null, null, out ProjectInfo? project, out _));
+            Assert.True(first.TrySetSessionProject(
+                UserA, "machine-a", "session-1", project!.ProjectId, out string? setError));
+            Assert.Null(setError);
+
+            ProjectStore second = Open(path);
+            Assert.Equal(
+                project.ProjectId,
+                second.ProjectOfSession(UserA, "machine-a", "session-1"));
+
+            Assert.True(second.TrySetSessionProject(
+                UserA, "machine-a", "session-1", projectId: null, out string? clearError));
+            Assert.Null(clearError);
+            Assert.Null(Open(path).ProjectOfSession(UserA, "machine-a", "session-1"));
+        });
+    }
+
+    [Fact]
+    public void DeletingAProjectDeletesItsDurableSessionAssignments()
+    {
+        Use((path, iconRoot) =>
+        {
+            ProjectStore store = Open(path);
+            store.TryCreate(UserA, "Website", null, null, null, out ProjectInfo? project, out _);
+            store.TrySetSessionProject(
+                UserA, "machine-a", "session-1", project!.ProjectId, out _);
+
+            Assert.True(store.TryDelete(UserA, project.ProjectId, out string? error));
+
+            Assert.Null(error);
+            Assert.Null(Open(path).ProjectOfSession(UserA, "machine-a", "session-1"));
+        });
+    }
+
     /// <summary>Starting fresh beats refusing to start - the same contract as <c>OperatorStateStore</c>.</summary>
     [Fact]
     public void AFileThatCannotBeParsedIsNotFatal()

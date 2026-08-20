@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import type { MachineInfo, SessionInfo } from '../protocol/wire'
 import { pinnedSessions, sessionLabel, type Machines } from '../relay/machines'
-import { GENERAL_PROJECT_ID, type Projects } from '../relay/projects'
+import { GENERAL_PROJECT_ID, suggestedProject, type Projects } from '../relay/projects'
 import { labelFor } from '../terminal/catalog'
 import { shortOs, shortPath, uptime } from './format'
 import { Empty } from './Chrome'
@@ -183,6 +183,7 @@ function SessionRow({
   }, [])
 
   const [editing, setEditing] = useState(false)
+  const suggestion = suggestedProject(session, projects)
 
   return (
     <>
@@ -246,6 +247,20 @@ function SessionRow({
           ⋯
         </button>
       </div>
+
+      {suggestion ? (
+        <div className="px-3 pb-2 pl-8">
+          <button
+            type="button"
+            onClick={() =>
+              actions.onMove(machineId, session.sessionId, suggestion.projectId)
+            }
+            className="min-h-8 rounded-full border border-sky-500/30 bg-sky-500/10 px-3 text-xs font-medium text-sky-300 transition hover:bg-sky-500/15 active:bg-sky-500/20"
+          >
+            Move to project {suggestion.name}
+          </button>
+        </div>
+      ) : null}
 
       {editing ? (
         <SessionEditor

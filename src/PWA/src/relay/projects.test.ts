@@ -9,6 +9,7 @@ import {
   projectStats,
   remove,
   replaceAll,
+  suggestedProject,
   upsert,
   type Projects,
 } from './projects'
@@ -120,6 +121,70 @@ describe('findProject', () => {
   it('treats null as General', () => {
     const projects = replaceAll([project(GENERAL_PROJECT_ID, { isGeneral: true }), project('a')])
     expect(findProject(projects, null)!.projectId).toBe(GENERAL_PROJECT_ID)
+  })
+})
+
+describe('suggestedProject', () => {
+  const general = project(GENERAL_PROJECT_ID, { name: 'General', isGeneral: true })
+
+  it('matches an ACP working directory against a repository URL', () => {
+    const candidate = project('remote', {
+      name: 'Remote sessions',
+      repoUrl: 'https://github.com/eranyariv/1RemoteCLI.git',
+    })
+
+    expect(
+      suggestedProject(
+        session('chat', { cwd: 'C:\\Users\\me\\.copilot\\repos\\1RemoteCLI', kind: 'AgentChat' }),
+        [general, candidate],
+      ),
+    ).toBe(candidate)
+  })
+
+  it('matches a shell program path against a project name', () => {
+    const candidate = project('terminal-tools', { name: 'Terminal Tools' })
+
+    expect(
+      suggestedProject(
+        session('shell', { program: 'C:\\Tools\\terminal-tools\\pwsh.exe', cwd: 'C:\\' }),
+        [general, candidate],
+      ),
+    ).toBe(candidate)
+  })
+
+  it('does not suggest anything for an already mapped session', () => {
+    const candidate = project('remote', { name: '1RemoteCLI' })
+
+    expect(
+      suggestedProject(
+        session('mapped', { cwd: 'C:\\Work\\1RemoteCLI', projectId: 'somewhere' }),
+        [general, candidate],
+      ),
+    ).toBeUndefined()
+  })
+
+  it('does not guess when two projects match equally well', () => {
+    const first = project('first', { name: 'Remote CLI' })
+    const second = project('second', { name: 'Remote-CLI' })
+
+    expect(
+      suggestedProject(session('ambiguous', { cwd: 'C:\\Work\\remote-cli' }), [
+        general,
+        first,
+        second,
+      ]),
+    ).toBeUndefined()
+  })
+
+  it('requires a complete path component rather than a substring', () => {
+    const candidate = project('remote', { name: 'RemoteCLI' })
+
+    expect(
+      suggestedProject(session('other', { cwd: 'C:\\Work\\MyRemoteCLIApp' }), [
+        general,
+        candidate,
+      ]),
+    ).toBeUndefined()
   })
 })
 

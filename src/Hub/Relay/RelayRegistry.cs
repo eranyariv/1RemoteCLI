@@ -505,13 +505,67 @@ public sealed class RelayRegistry
         string? projectId,
         out LabelledSession? result,
         out ErrorNotification? error) =>
-        TryEditLabel(
+        TryMoveSession(
             clientConnectionId,
             machineId,
             sessionId,
-            label => label.ProjectId = projectId,
+            projectId,
+            out result,
+            out _,
+            out error);
+
+    /// <summary>Moves a session and reports the old project so a failed durable write can be rolled back.</summary>
+    public bool TryMoveSession(
+        string clientConnectionId,
+        string machineId,
+        string sessionId,
+        string? projectId,
+        out LabelledSession? result,
+        out string? previousProjectId,
+        out ErrorNotification? error)
+    {
+        string? previous = null;
+        bool moved = TryEditLabel(
+            clientConnectionId,
+            machineId,
+            sessionId,
+            label =>
+            {
+                previous = label.ProjectId;
+                label.ProjectId = projectId;
+            },
             out result,
             out error);
+
+        previousProjectId = previous;
+        return moved;
+    }
+
+    /// <summary>Reapplies a durable assignment when a session returns after a hub restart.</summary>
+    public void ApplyPersistedProject(
+        string userKey,
+        string machineId,
+        string sessionId,
+        string projectId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(userKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(machineId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
+
+        lock (_gate)
+        {
+            if (!_partitions.TryGetValue(userKey, out UserPartition? partition) ||
+                !partition.Machines.TryGetValue(machineId, out RegisteredMachine? machine) ||
+                !machine.Sessions.TryGetValue(sessionId, out SessionInfo? session))
+            {
+                return;
+            }
+
+            machine.EditLabel(sessionId, label => label.ProjectId = projectId, _time.GetUtcNow());
+            machine.ApplyLabel(session);
+        }
+    }
 
     /// <summary>
     /// Reassigns every session under this project, on every machine this user owns -

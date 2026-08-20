@@ -10,12 +10,18 @@
 html {
   color-scheme: dark;
   background-color: var(--color-slate-950);
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-x: clip;
   /* Keeps the area under the iOS overscroll rubber-band the same colour. */
   overscroll-behavior-y: none;
 }
 
 body {
   margin: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-x: clip;
   background-color: var(--color-slate-950);
   color: var(--color-slate-200);
   font-family:
@@ -27,6 +33,13 @@ body {
   -webkit-font-smoothing: antialiased;
   /* Stops iOS Safari inflating text in landscape, which breaks a fixed layout. */
   -webkit-text-size-adjust: 100%;
+}
+
+#root {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 /* A tap on a button should not select the label underneath it. */

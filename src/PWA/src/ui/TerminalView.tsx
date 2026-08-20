@@ -9,6 +9,7 @@ import { CLI_TYPES, type CliType, type MachineInfo, type SessionInfo, type Termi
 import type { RelayClient } from '../relay/client'
 import { sessionLabel } from '../relay/machines'
 import { catalogFor, labelFor, type CommandDefinition } from '../terminal/catalog'
+import { needsOnScreenKeys } from '../terminal/device'
 import {
   ExtraKeys,
   KeyBarLayout,
@@ -72,6 +73,7 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
   const [showActions, setShowActions] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
   const [modifiers, setModifiers] = useState<Modifiers>(NoModifiers)
+  const [showOnScreenKeys] = useState(() => needsOnScreenKeys(window))
 
   // Read by the xterm callbacks, which are wired once and must see what is armed
   // *now* rather than what was armed on the render that registered them.
@@ -476,7 +478,7 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
         */}
         {showActions ? (
           <div className="border-b border-slate-800 px-2 py-2">
-            {catalog.shortcuts.length > 0 ? (
+            {showOnScreenKeys && catalog.shortcuts.length > 0 ? (
               <div className="flex items-center gap-1 overflow-x-auto pb-2">
                 {catalog.shortcuts.map((key) => (
                   <KeyButton key={key.name} definition={key} onPress={press} />
@@ -537,22 +539,26 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
         ) : null}
 
         <div className="flex items-center gap-1 overflow-x-auto px-2 py-2">
-          <ModifierButton
-            label="Ctrl"
-            armed={modifiers.ctrl}
-            onToggle={() => toggleModifier('ctrl')}
-          />
-          <ModifierButton
-            label="Alt"
-            armed={modifiers.alt}
-            onToggle={() => toggleModifier('alt')}
-          />
+          {showOnScreenKeys ? (
+            <>
+              <ModifierButton
+                label="Ctrl"
+                armed={modifiers.ctrl}
+                onToggle={() => toggleModifier('ctrl')}
+              />
+              <ModifierButton
+                label="Alt"
+                armed={modifiers.alt}
+                onToggle={() => toggleModifier('alt')}
+              />
 
-          <span className="mx-1 h-6 w-px shrink-0 bg-slate-700" aria-hidden="true" />
+              <span className="mx-1 h-6 w-px shrink-0 bg-slate-700" aria-hidden="true" />
 
-          {KeyBarLayout.map((key) => (
-            <KeyButton key={key.name} definition={key} onPress={press} />
-          ))}
+              {KeyBarLayout.map((key) => (
+                <KeyButton key={key.name} definition={key} onPress={press} />
+              ))}
+            </>
+          ) : null}
 
           <button
             type="button"
@@ -566,17 +572,19 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
             ⌘
           </button>
 
-          <button
-            type="button"
-            onClick={() => setShowExtras((v) => !v)}
-            aria-label="More keys"
-            className="min-h-10 shrink-0 rounded-lg px-3 font-mono text-sm text-slate-400 transition active:bg-slate-700"
-          >
-            {showExtras ? '×' : '···'}
-          </button>
+          {showOnScreenKeys ? (
+            <button
+              type="button"
+              onClick={() => setShowExtras((v) => !v)}
+              aria-label="More keys"
+              className="min-h-10 shrink-0 rounded-lg px-3 font-mono text-sm text-slate-400 transition active:bg-slate-700"
+            >
+              {showExtras ? '×' : '···'}
+            </button>
+          ) : null}
         </div>
 
-        {showExtras ? (
+        {showOnScreenKeys && showExtras ? (
           <div className="flex items-center gap-1 border-t border-slate-800 px-2 py-2">
             {ExtraKeys.map((key) => (
               <KeyButton key={key.name} definition={key} onPress={press} />

@@ -41,9 +41,14 @@ describe('key bar', () => {
   it('offers every key a phone keyboard cannot produce', () => {
     const shown = new Set([...KeyBarLayout, ...ExtraKeys].map((key) => key.label))
 
-    for (const label of ['Esc', 'Tab', '^C', '↑', '↓', '←', '→', '⏎']) {
+    for (const label of ['Enter ↵', 'Esc', 'Tab', '^C', '↑', '↓', '←', '→']) {
       expect(shown.has(label)).toBe(true)
     }
+  })
+
+  it('keeps a clearly labelled Enter key first on the always-visible row', () => {
+    expect(KeyBarLayout[0]).toBe(Keys.enter)
+    expect(Keys.enter.label).toBe('Enter ↵')
   })
 
   it('keeps the interrupt on the always-visible row', () => {
@@ -74,7 +79,7 @@ describe('key bar', () => {
       // "↑" must read as "Cursor up"; a screen reader announcing "up arrow
       // character" is not the same thing, and "^C" is unpronounceable.
       expect(key.name.length).toBeGreaterThanOrEqual(key.label.length)
-      expect(key.name).not.toMatch(/^[↑↓←→⏎]$/)
+      expect(key.name).not.toMatch(/^[↑↓←→↵]$/)
     }
   })
 })

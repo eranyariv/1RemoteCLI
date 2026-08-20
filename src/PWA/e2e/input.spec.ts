@@ -34,6 +34,17 @@ test.describe('answering a session', () => {
     expect(await screen(app)).not.toContain('E2E-PROCEEDING')
   })
 
+  test('sends a physical keyboard key to the remote CLI', async ({ app, desk }) => {
+    await desk('keyboard')
+    await attach(app, 'keyboard')
+    await expectScreen(app, 'Continue? (y/n)')
+
+    await app.locator('.xterm-helper-textarea').first().focus()
+    await app.keyboard.press('Escape')
+
+    await expectScreen(app, 'E2E-ESCAPE')
+  })
+
   test('sends a key from the accessory bar', async ({ app, desk }) => {
     await desk('keybar')
     await attach(app, 'keybar')
@@ -42,7 +53,10 @@ test.describe('answering a session', () => {
     // The bar exists because a phone keyboard has no Escape, no Tab and no arrows.
     // Whether those keys reach the desk is a different question from whether the
     // on-screen keyboard works, and needs its own answer.
-    await app.getByRole('button', { name: 'Return' }).click()
+    const enter = app.getByRole('button', { name: 'Enter' })
+    await expect(enter).toBeInViewport()
+    await expect(enter).toHaveText('Enter ↵')
+    await enter.click()
     await type(app, 'y')
 
     await expectScreen(app, 'E2E-PROCEEDING')

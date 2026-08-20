@@ -191,7 +191,7 @@ function SessionRow({
 
   return (
     <>
-      <div className="flex items-center">
+      <div className="flex min-w-0 items-center">
         {dragHandle}
 
         <button
@@ -259,7 +259,7 @@ function SessionRow({
             onClick={() =>
               actions.onMove(machineId, session.sessionId, suggestion.projectId)
             }
-            className="min-h-8 rounded-full border border-sky-500/30 bg-sky-500/10 px-3 text-xs font-medium text-sky-300 transition hover:bg-sky-500/15 active:bg-sky-500/20"
+            className="min-h-8 max-w-full truncate rounded-full border border-sky-500/30 bg-sky-500/10 px-3 text-xs font-medium text-sky-300 transition hover:bg-sky-500/15 active:bg-sky-500/20"
           >
             Move to project {suggestion.name}
           </button>
@@ -295,7 +295,7 @@ function SortableSessionRow({
   const sortable = useSortable({ id: session.sessionId })
 
   return (
-    <div ref={sortable.setNodeRef} style={sortableStyle(sortable)}>
+    <div ref={sortable.setNodeRef} style={sortableStyle(sortable)} className="min-w-0">
       <SessionRow
         machineId={machine.machineId}
         session={session}
@@ -396,7 +396,7 @@ function MachineCard({
     <section
       ref={sortable.setNodeRef}
       style={sortableStyle(sortable)}
-      className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60"
+      className="w-full min-w-0 overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60"
     >
       <header
         className={`flex items-center gap-2 px-3 py-3 ${collapsed ? '' : 'border-b border-slate-800'}`}
@@ -596,14 +596,14 @@ export function MachineList({
   )
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex w-full min-w-0 flex-col gap-3 overflow-x-clip">
       <PinnedCard machines={machines} projects={projects} actions={actions} onOpenSession={onOpenSession} />
 
       <SortableList
         ids={activeMachines.map((machine) => machine.machineId)}
         onMove={(activeId, overId) => moveMachine(activeMachines, activeId, overId)}
       >
-        <div className="flex flex-col gap-3">
+        <div className="flex min-w-0 flex-col gap-3">
           {activeMachines.map(machineCard)}
         </div>
       </SortableList>
@@ -612,7 +612,7 @@ export function MachineList({
         ids={inactiveMachines.map((machine) => machine.machineId)}
         onMove={(activeId, overId) => moveMachine(inactiveMachines, activeId, overId)}
       >
-        <div className="flex flex-col gap-3">
+        <div className="flex min-w-0 flex-col gap-3">
           {inactiveMachines.map(machineCard)}
         </div>
       </SortableList>

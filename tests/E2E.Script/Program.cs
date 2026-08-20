@@ -187,6 +187,12 @@ internal static class Program
                     Interrupted();
                     break;
 
+                case '\u001b':
+                    Console.WriteLine();
+                    Console.WriteLine("E2E-ESCAPE");
+                    Prompt();
+                    break;
+
                 case '\r':
                 case '\n':
                     Console.WriteLine();

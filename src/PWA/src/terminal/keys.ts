@@ -1,12 +1,12 @@
 /**
  * The byte sequences a phone keyboard cannot produce.
  *
- * A software keyboard has letters, digits and Return. It has no Ctrl, no Esc, no
- * Tab, and no arrow keys — and those are most of what operating a terminal actually
- * requires. Answering an agent's prompt needs Return; escaping a menu needs Esc;
- * recalling the last command needs cursor-up; stopping a runaway build needs Ctrl+C.
- * Without an on-screen row for these, the app can only read, and a read-only terminal
- * is not what anyone is away from their desk wishing for.
+ * A touch device may have no keyboard open at all, and its software keyboard still
+ * has no Ctrl, Esc, Tab or arrow keys. Those are most of what operating a terminal
+ * actually requires. Answering an agent's prompt needs Enter; escaping a menu needs
+ * Esc; recalling the last command needs cursor-up; stopping a runaway build needs
+ * Ctrl+C. Without an on-screen row for these, the app can only read, and a read-only
+ * terminal is not what anyone is away from their desk wishing for.
  *
  * These are the sequences a real terminal emits, byte for byte, because the whole
  * design rests on the PTY being unable to tell the difference between the phone and
@@ -78,27 +78,29 @@ export const Keys = {
   down: { label: '↓', name: 'Cursor down', bytes: seq(ESC, 0x5b, 0x42), csiFinal: 'B' },
   right: { label: '→', name: 'Cursor right', bytes: seq(ESC, 0x5b, 0x43), csiFinal: 'C' },
   left: { label: '←', name: 'Cursor left', bytes: seq(ESC, 0x5b, 0x44), csiFinal: 'D' },
-  enter: { label: '⏎', name: 'Return', bytes: seq(0x0d) },
+  enter: { label: 'Enter ↵', name: 'Enter — submit line', bytes: seq(0x0d) },
 } as const satisfies Record<string, KeyDefinition>
 
 /**
  * The row shown above the keyboard, in the order the spec draws it: the modifiers
- * first, because they change what the rest of the keyboard means; then the two keys a
- * phone is missing outright; then the arrows as a group, since they are used as one;
- * and the interrupt at the far end, alone, where a thumb lands and nothing else is.
+ * first, because they change what the rest of the keyboard means; then Enter where it
+ * is always visible; then the keys a phone is missing outright and the arrows as a
+ * group; and the interrupt at the far end, alone, where a thumb lands and nothing else
+ * is.
  *
  * The modifiers are not in this list. They are not keys — they send nothing — and
  * modelling them as `KeyDefinition`s would mean every consumer of this row had to
  * know which entries were real.
  */
 export const KeyBarLayout: KeyDefinition[] = [
+  // Keep Enter first so it remains visible without horizontally scrolling the bar.
+  Keys.enter,
   Keys.escape,
   Keys.tab,
   Keys.up,
   Keys.down,
   Keys.left,
   Keys.right,
-  Keys.enter,
   Keys.ctrlC,
 ]
 

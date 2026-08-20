@@ -28,6 +28,10 @@ Functional and technical specifications live in `specs/`.
 
 All Azure resources for this project deploy to **one** subscription: the one owned by the project owner's personal Microsoft account. This is the target for the relay hub and any supporting resources — do not provision into any other subscription or tenant.
 
+### Change history is a release gate
+
+Every deployed build must have a user-facing entry in `src/PWA/public/change-history.html` describing its major enhancements and bug fixes. Add the new version at the top of the page before bumping `VERSION`, tagging a release, or running `scripts/publish-hub.ps1`. Keep this history current on every deployment; do not ship user-visible changes under an existing released version.
+
 The account, tenant, and subscription identifiers are deliberately **not** in this repository (see the rule at the end of this section). They are recorded in `azure-target.local.md`, which is untracked and sits next to this file.
 
 Before provisioning anything, assert the identity — the machine-wide profile is a different account and silently deploying there would be hard to unwind. Print what the project-scoped profile is signed in to and compare it against `azure-target.local.md`; if any of the three differs, stop:

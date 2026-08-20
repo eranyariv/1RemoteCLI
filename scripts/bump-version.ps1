@@ -62,6 +62,14 @@ else {
     $next = '{0}.{1:00}' -f $major, $minor
 }
 
+$historyFile = Join-Path (Split-Path $PSScriptRoot -Parent) 'src\PWA\public\change-history.html'
+$historyMarker = "id=`"v$next`""
+
+if (-not (Test-Path $historyFile) -or
+    -not (Select-String -Path $historyFile -SimpleMatch $historyMarker -Quiet)) {
+    throw "Add the v$next entry to src/PWA/public/change-history.html before bumping VERSION."
+}
+
 if ($next -eq $current) {
     Write-Host "Already $current."
     return

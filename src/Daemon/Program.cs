@@ -663,6 +663,8 @@ public static class Program
             // A mailto: goes to the shell exactly like a URL does, so the user's own
             // mail client opens with the version already in the subject.
             SendFeedback: () => Launch(Feedback.MailTo),
+            OpenChangeHistory: () => Launch(
+                new Uri(HubEndpoint.AppUri(), "change-history.html").ToString()),
             WrapShortcut: PickAndWrap,
 
             // In this process, unlike sign-in: the update has to know how many sessions

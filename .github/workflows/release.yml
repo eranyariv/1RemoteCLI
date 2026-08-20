@@ -51,6 +51,11 @@ jobs:
             exit 1
           fi
 
+          if ! grep -Fq "id=\"v$version\"" src/PWA/public/change-history.html; then
+            echo "change-history.html has no v$version entry. Document the release before tagging it."
+            exit 1
+          fi
+
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   build:

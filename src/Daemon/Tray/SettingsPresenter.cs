@@ -81,6 +81,8 @@ public static class SettingsPresenter
 
     public const string SendFeedbackLabel = "Send feedback\u2026";
 
+    public const string ChangeHistoryLabel = "Change history";
+
     public const string CloseLabel = "Close";
 
     /// <summary>

@@ -87,6 +87,15 @@ export function VersionLine({ className = '' }: { className?: string }) {
     <p className={`text-center text-xs text-slate-600 ${className}`}>
       1RemoteCLI {__APP_VERSION__} ·{' '}
       <a
+        href="/change-history.html"
+        target="_blank"
+        rel="noopener"
+        className="underline decoration-slate-700 underline-offset-2"
+      >
+        Change history
+      </a>{' '}
+      ·{' '}
+      <a
         href={feedbackMailto(__APP_VERSION__)}
         className="underline decoration-slate-700 underline-offset-2"
       >

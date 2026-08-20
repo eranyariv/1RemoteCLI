@@ -19,6 +19,7 @@ internal static partial class NativeMethods
     internal const int WM_NULL = 0x0000;
     internal const int WM_DESTROY = 0x0002;
     internal const int WM_CLOSE = 0x0010;
+    internal const int WM_NOTIFY = 0x004E;
     internal const int WM_ERASEBKGND = 0x0014;
     internal const int WM_PAINT = 0x000F;
     internal const int WM_SETFONT = 0x0030;
@@ -63,6 +64,10 @@ internal static partial class NativeMethods
     /// other menu action deliberately runs off that thread.
     /// </summary>
     internal const int WM_TRAY_SETTINGS = WM_APP + 4;
+
+    internal const int NM_CLICK = -2;
+    internal const int NM_RETURN = -4;
+    internal const int ICC_LINK_CLASS = 0x00008000;
 
     internal const int NIM_ADD = 0x00000000;
     internal const int NIM_MODIFY = 0x00000001;
@@ -159,6 +164,21 @@ internal static partial class NativeMethods
         public POINT pt;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct NMHDR
+    {
+        public IntPtr hwndFrom;
+        public IntPtr idFrom;
+        public int code;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct INITCOMMONCONTROLSEX
+    {
+        public int dwSize;
+        public int dwICC;
+    }
+
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     internal struct WNDCLASSEX
     {
@@ -208,6 +228,10 @@ internal static partial class NativeMethods
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     internal static extern IntPtr DefWindowProc(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    [LibraryImport("comctl32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool InitCommonControlsEx(ref INITCOMMONCONTROLSEX controls);
 
     [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

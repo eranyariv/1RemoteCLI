@@ -270,6 +270,21 @@ footer a {
   white-space: nowrap;
 }
 
+.release h2 {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.release h2 time {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
 @media (max-width: 34rem) {
   body {
     font-size: 16px;
@@ -286,5 +301,11 @@ footer a {
   header img {
     width: 48px;
     height: 48px;
+  }
+
+  .release h2 {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.15rem;
   }
 }

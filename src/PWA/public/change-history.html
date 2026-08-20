@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#020617" />
+    <title>1RemoteCLI change history</title>
+    <meta
+      name="description"
+      content="The major enhancements and bug fixes in every 1RemoteCLI release."
+    />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="stylesheet" href="/doc.css" />
+  </head>
+
+  <body>
+    <main>
+      <header>
+        <img src="/icon-192.png" alt="" />
+        <div>
+          <h1>Change history</h1>
+          <p>The major enhancements and bug fixes in every build.</p>
+        </div>
+      </header>
+
+      <p>
+        This is the user-facing history, not a list of every internal change. Releases are shown
+        newest first.
+      </p>
+
+      <section class="release" aria-labelledby="v0.17">
+        <h2 id="v0.17">v0.17 <time datetime="2026-08-20">20 August 2026</time></h2>
+        <ul>
+          <li>
+            <strong>Enhancement.</strong> Added an icon picker to the new-project dialog, including
+            previewing and resizing the image before it is uploaded.
+          </li>
+        </ul>
+      </section>
+
+      <section class="release" aria-labelledby="v0.16">
+        <h2 id="v0.16">v0.16 <time datetime="2026-08-20">20 August 2026</time></h2>
+        <ul>
+          <li>
+            <strong>Bug fix.</strong> Corrected wrapped update-status text in the Windows agent
+            Settings window.
+          </li>
+        </ul>
+      </section>
+
+      <section class="release" aria-labelledby="v0.15">
+        <h2 id="v0.15">v0.15 <time datetime="2026-08-20">20 August 2026</time></h2>
+        <ul>
+          <li>
+            <strong>Enhancement.</strong> Added per-user projects for grouping sessions, with
+            project descriptions, links, icons, and session reassignment.
+          </li>
+          <li>
+            <strong>Bug fix.</strong> Hardened project persistence so interrupted writes cannot
+            corrupt saved project definitions.
+          </li>
+        </ul>
+      </section>
+
+      <section class="release" aria-labelledby="v0.14">
+        <h2 id="v0.14">v0.14 <time datetime="2026-08-19">19 August 2026</time></h2>
+        <ul>
+          <li>
+            <strong>Enhancement.</strong> Added ACP chat sessions: continue recent GitHub Copilot
+            or Claude Code conversations from a phone, including messages and eligible permission
+            responses.
+          </li>
+        </ul>
+      </section>
+
+      <section class="release" aria-labelledby="v0.13">
+        <h2 id="v0.13">v0.13 <time datetime="2026-08-19">19 August 2026</time></h2>
+        <ul>
+          <li>
+            <strong>Enhancement.</strong> Added verified agent self-update through the tray,
+            Settings window, and <code>1remote update</code>.
+          </li>
+          <li>
+            <strong>Enhancement.</strong> Added phone-side session naming and pinning.
+          </li>
+          <li>
+            <strong>Bug fix.</strong> Self-check now tolerates a temporary lock on its working
+            directory.
+          </li>
+        </ul>
+      </section>
+
+      <section class="release" aria-labelledby="v0.12">
+        <h2 id="v0.12">v0.12 <time datetime="2026-08-19">19 August 2026</time></h2>
+        <ul>
+          <li>
+            <strong>Bug fix.</strong> The agent starts without creating a visible console window.
+          </li>
+          <li>
+            <strong>Bug fix.</strong> Sessions correctly identify tools launched through desktop
+            shortcuts.
+          </li>
+        </ul>
+      </section>
+
+      <section class="release" aria-labelledby="v0.11">
+        <h2 id="v0.11">v0.11 <time datetime="2026-08-19">19 August 2026</time></h2>
+        <ul>
+          <li>
+            <strong>Enhancement.</strong> Sessions identify the CLI they are running so the phone
+            can offer controls appropriate to that tool.
+          </li>
+          <li>
+            <strong>Bug fix.</strong> Improved the Task Scheduler fallback and made Windows ASR
+            startup-block guidance more precise.
+          </li>
+        </ul>
+      </section>
+
+      <section class="release" aria-labelledby="v0.10">
+        <h2 id="v0.10">v0.10 <time datetime="2026-08-19">19 August 2026</time></h2>
+        <ul>
+          <li>
+            <strong>Enhancement.</strong> Updated the tray and Settings window with native Windows
+            11 styling.
+          </li>
+          <li>
+            <strong>Bug fix.</strong> Hardened installation and shutdown, including installation
+            when the GitHub API is unavailable.
+          </li>
+        </ul>
+      </section>
+
+      <section class="release" aria-labelledby="v0.09">
+        <h2 id="v0.09">v0.09 <time datetime="2026-08-18">18 August 2026</time></h2>
+        <ul>
+          <li>
+            <strong>Bug fix.</strong> Release executables are no longer compressed, avoiding
+            managed-device launch blocks.
+          </li>
+          <li>
+            <strong>Bug fix.</strong> Installation starts the agent immediately, so the machine
+            appears without another Windows sign-in.
+          </li>
+        </ul>
+      </section>
+
+      <section class="release" aria-labelledby="v0.08">
+        <h2 id="v0.08">v0.08 <time datetime="2026-08-18">18 August 2026</time></h2>
+        <ul>
+          <li>
+            <strong>Bug fix.</strong> Added clear Windows startup diagnostics, including why a
+            first run was blocked and whether waiting can resolve it.
+          </li>
+          <li>
+            <strong>Bug fix.</strong> Hid the console window created by the logon task.
+          </li>
+        </ul>
+      </section>
+
+      <section class="release" aria-labelledby="v0.07">
+        <h2 id="v0.07">v0.07 <time datetime="2026-08-18">18 August 2026</time></h2>
+        <ul>
+          <li>
+            <strong>Enhancement.</strong> Added the public getting-started page and a working
+            one-line installer.
+          </li>
+          <li>
+            <strong>Bug fix.</strong> Installation retries agent startup while Microsoft Defender
+            is still scanning a newly downloaded build.
+          </li>
+        </ul>
+      </section>
+
+      <section class="release" aria-labelledby="v0.06">
+        <h2 id="v0.06">v0.06 <time datetime="2026-08-18">18 August 2026</time></h2>
+        <ul>
+          <li>
+            <strong>Enhancement.</strong> Refined product branding across the tray icon and
+            Settings window.
+          </li>
+        </ul>
+      </section>
+
+      <section class="release" aria-labelledby="v0.05">
+        <h2 id="v0.05">v0.05 <time datetime="2026-08-18">18 August 2026</time></h2>
+        <ul>
+          <li>
+            <strong>Enhancement.</strong> The tray icon reflects connected, disconnected, and
+            reconnecting states.
+          </li>
+        </ul>
+      </section>
+
+      <section class="release" aria-labelledby="v0.04">
+        <h2 id="v0.04">v0.04 <time datetime="2026-08-18">18 August 2026</time></h2>
+        <ul>
+          <li><strong>Enhancement.</strong> The tray icon displays the live session count.</li>
+        </ul>
+      </section>
+
+      <section class="release" aria-labelledby="v0.03">
+        <h2 id="v0.03">v0.03 <time datetime="2026-08-18">18 August 2026</time></h2>
+        <ul>
+          <li>
+            <strong>Enhancement.</strong> Added a Settings window and the ability to create
+            shareable copies of desktop shortcuts.
+          </li>
+          <li>
+            <strong>Bug fix.</strong> Preserved UTF-8 console output and made Settings available
+            when the agent starts hidden.
+          </li>
+        </ul>
+      </section>
+
+      <section class="release" aria-labelledby="v0.02">
+        <h2 id="v0.02">v0.02 <time datetime="2026-08-18">18 August 2026</time></h2>
+        <ul>
+          <li>
+            <strong>Enhancement.</strong> Reduced the Windows agent package from roughly 70 MB to
+            13 MB and expanded its tray controls.
+          </li>
+          <li>
+            <strong>Bug fix.</strong> Improved trimmed-build installation and avoided self-checks
+            for a processor architecture the current machine cannot run.
+          </li>
+        </ul>
+      </section>
+
+      <section class="release" aria-labelledby="v0.01">
+        <h2 id="v0.01">v0.01 <time datetime="2026-08-17">17 August 2026</time></h2>
+        <ul>
+          <li>
+            <strong>Initial release.</strong> Securely share live Windows CLI sessions to a phone,
+            with Microsoft Entra sign-in, terminal output and input, reconnection, push
+            notifications, tray controls, and an installable web app.
+          </li>
+        </ul>
+      </section>
+
+      <footer>
+        <p>
+          <a href="/readme.html">Readme</a> · <a href="/security.html">Security</a> ·
+          <a href="/">Open the app</a>
+        </p>
+      </footer>
+    </main>
+  </body>
+</html>

@@ -42,6 +42,31 @@ $repo = Split-Path -Parent $PSScriptRoot
 $pwa = Join-Path $repo 'src\PWA'
 $hub = Join-Path $repo 'src\Hub\1RemoteCLI.Hub.csproj'
 $wwwroot = Join-Path $repo 'src\Hub\wwwroot'
+$version = (Get-Content (Join-Path $repo 'VERSION') -Raw).Trim()
+$history = Join-Path $pwa 'public\change-history.html'
+
+if (-not (Select-String -Path $history -SimpleMatch "id=`"v$version`"" -Quiet)) {
+    throw "change-history.html has no v$version entry. Every deployed build must document its changes."
+}
+
+$worktreeChanges = (& git -C $repo status --porcelain --untracked-files=all)
+if ($LASTEXITCODE -ne 0) {
+    throw 'Could not inspect the repository before deployment.'
+}
+
+if ($worktreeChanges) {
+    throw 'Commit all changes before deploying so the deployed build has an exact revision and change-history entry.'
+}
+
+# Once a version has been tagged, deploying later commits under that same number
+# would create two different builds with one identity and one history entry.
+$taggedCommit = (& git -C $repo rev-list -n 1 "v$version" 2>$null)
+if ($LASTEXITCODE -eq 0 -and $taggedCommit) {
+    $headCommit = (& git -C $repo rev-parse HEAD).Trim()
+    if ($headCommit -ne $taggedCommit.Trim()) {
+        throw "v$version is already released from $($taggedCommit.Trim()). Bump VERSION and update change-history.html before deploying new commits."
+    }
+}
 
 $staging = Join-Path ([IO.Path]::GetTempPath()) "1remote-hub-$(Get-Date -Format yyyyMMdd-HHmmss)"
 $publish = Join-Path $staging 'publish'

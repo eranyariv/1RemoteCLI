@@ -54,6 +54,7 @@ public sealed record SettingsActions(
     Action SignOut,
     Action OpenLogs,
     Action SendFeedback,
+    Action OpenChangeHistory,
     Func<IntPtr, SettingsNotice?> WrapShortcut,
     Action Update,
     Action? CheckForUpdate = null);
@@ -165,6 +166,7 @@ internal sealed class SettingsWindow
     private IntPtr _sessions;
     private IntPtr _startAtLogon;
     private IntPtr _versionLabel;
+    private IntPtr _changeHistory;
     private IntPtr _updateLabel;
     private IntPtr _update;
 
@@ -457,6 +459,17 @@ internal sealed class SettingsWindow
 
     private void CreateControls(IntPtr instance)
     {
+        var commonControls = new INITCOMMONCONTROLSEX
+        {
+            dwSize = Marshal.SizeOf<INITCOMMONCONTROLSEX>(),
+            dwICC = ICC_LINK_CLASS,
+        };
+
+        if (!InitCommonControlsEx(ref commonControls))
+        {
+            throw new InvalidOperationException("Windows did not initialize the Settings link control.");
+        }
+
         int content = ClientWidth - (Margin * 2);
         const int signInWidth = 112;
         int y = Margin;
@@ -534,18 +547,31 @@ internal sealed class SettingsWindow
             SettingsPresenter.SendFeedbackLabel);
         y += ButtonHeight + Gap;
 
-        // The version is the first thing any bug report needs, so it sits next to the
-        // button that sends one. Caption weight and the secondary colour: it is true,
-        // but it is not why anybody opened this.
+        // The version is the first thing any bug report needs. Its adjacent link answers
+        // the next question: whether the build already contains a particular change.
         const int closeWidth = 104;
+        const int versionWidth = 96;
+        const int historyWidth = 104;
 
         _versionLabel = Static(
             instance,
             Margin,
             y + ((ButtonHeight - RowHeight) / 2),
-            content - closeWidth - Gap,
+            versionWidth,
             RowHeight,
             font: _captionFont);
+
+        _changeHistory = Create(
+            instance,
+            "SysLink",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            Margin + versionWidth + Tight,
+            y + ((ButtonHeight - RowHeight) / 2),
+            historyWidth,
+            RowHeight,
+            IntPtr.Zero,
+            $"<a>{SettingsPresenter.ChangeHistoryLabel}</a>",
+            _captionFont);
 
         Button(
             instance,
@@ -782,6 +808,17 @@ internal sealed class SettingsWindow
                 OnCommand((int)((long)wParam & 0xFFFF));
                 return IntPtr.Zero;
 
+            case WM_NOTIFY:
+                NMHDR notification = Marshal.PtrToStructure<NMHDR>(lParam);
+                if (notification.hwndFrom == _changeHistory &&
+                    notification.code is NM_CLICK or NM_RETURN)
+                {
+                    OffThread(_actions.OpenChangeHistory);
+                    return IntPtr.Zero;
+                }
+
+                return DefWindowProc(window, message, wParam, lParam);
+
             case WM_TIMER:
                 Refresh(reread: false);
                 return IntPtr.Zero;
@@ -970,7 +1007,7 @@ internal sealed class SettingsWindow
             return _strongFont;
         }
 
-        return control == _versionLabel ? _captionFont : _font;
+        return control == _versionLabel || control == _changeHistory ? _captionFont : _font;
     }
 
     private void OnCommand(int id)
@@ -1129,6 +1166,7 @@ internal sealed class SettingsWindow
         _sessions = IntPtr.Zero;
         _startAtLogon = IntPtr.Zero;
         _versionLabel = IntPtr.Zero;
+        _changeHistory = IntPtr.Zero;
         _shown = [];
     }
 

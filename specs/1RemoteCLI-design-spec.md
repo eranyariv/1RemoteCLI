@@ -453,7 +453,10 @@ An ACP session is a `SessionInfo` with `kind = AgentChat`. Attaching calls `sess
 
 - consecutive `user_message_chunk` and `agent_message_chunk` frames become user and agent message events;
 - `tool_call` and `tool_call_update` replace one tool event as its status changes;
-- `session/request_permission` becomes a permission card containing exactly the options the provider advertised.
+- `session/request_permission` becomes a permission card containing exactly the options the provider advertised;
+- supported `elicitation/create` form requests become question cards with single-select menus, and the confirmed answer is returned on the provider's original reverse-RPC connection. Unsupported form shapes receive an explicit invalid-params response so the provider can fall back instead of leaving an unusable pending card.
+
+The ACP client advertises form elicitation support during initialization. The PWA keeps tool activity separate from conversation text and offers compact, summary, and full detail levels: compact retains only active tools, summary keeps one-line activity cards, and full includes tool output. Long paths and unbroken tool text wrap within the session viewport rather than widening the page.
 
 The phone can send a prompt only after attaching. The hub resolves that attachment inside the authenticated user's partition and never accepts a user identity as a parameter, preserving the same routing invariant as terminal input. A real concurrency spike established that a second Copilot ACP process can load and prompt a session while the first remains connected; the phone therefore continues the same persisted conversation rather than creating a parallel one.
 

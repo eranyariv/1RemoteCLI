@@ -263,12 +263,14 @@ describe('decoding what the hub sends', () => {
       'UserMessage',
       'ToolCall',
       'Permission',
+      'Permission',
     ])
     expect(transcript.events[2].permissionRequestId).toBe('req-1')
     expect(transcript.events[2].options).toEqual([
       { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
       { optionId: 'reject-once', name: 'Deny', kind: 'reject_once' },
     ])
+    expect(transcript.events[3].options[1].name).toBe('SQLite')
   })
 
   it('reads a token expiry', () => {

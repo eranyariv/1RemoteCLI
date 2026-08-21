@@ -126,6 +126,39 @@ public sealed class AcpSession(
         }
     }
 
+    public ChatEvent AddElicitation(
+        string requestId,
+        string? toolCallId,
+        string title,
+        string message,
+        ChatPermissionOption[] options)
+    {
+        lock (_gate)
+        {
+            string eventId = $"elicitation:{requestId}";
+            var item = new ChatEvent
+            {
+                EventId = eventId,
+                // Choice elicitations intentionally use the existing permission shape so
+                // a cached older PWA can still render and answer their options.
+                Kind = ChatEventKind.Permission,
+                Title = title,
+                Text = message,
+                Status = "pending",
+                PermissionRequestId = requestId,
+                Options = options,
+                ToolKind = toolCallId,
+            };
+
+            Upsert(item);
+            AwaitingInput = true;
+            _openMessageId = null;
+            _openMessageKind = null;
+            _seq++;
+            return Copy(item);
+        }
+    }
+
     public ChatEvent? ResolvePermission(string requestId, string status)
     {
         lock (_gate)
@@ -136,9 +169,49 @@ public sealed class AcpSession(
             }
 
             item.Status = status;
-            AwaitingInput = _events.Any(e => e.Kind == ChatEventKind.Permission && e.Status == "pending");
+            AwaitingInput = HasPendingInput();
             _seq++;
             return Copy(item);
+        }
+    }
+
+    public ChatEvent? ResolveElicitation(string requestId, string status)
+    {
+        lock (_gate)
+        {
+            if (!_byId.TryGetValue($"elicitation:{requestId}", out ChatEvent? item))
+            {
+                return null;
+            }
+
+            item.Status = status;
+            AwaitingInput = HasPendingInput();
+            _seq++;
+            return Copy(item);
+        }
+    }
+
+    public ChatEvent[] CancelPendingInputs()
+    {
+        lock (_gate)
+        {
+            ChatEvent[] pending =
+            [
+                .. _events.Where(
+                    item => item.Kind == ChatEventKind.Permission && item.Status == "pending"),
+            ];
+            foreach (ChatEvent item in pending)
+            {
+                item.Status = "cancelled";
+            }
+
+            if (pending.Length > 0)
+            {
+                AwaitingInput = false;
+                _seq++;
+            }
+
+            return [.. pending.Select(Copy)];
         }
     }
 
@@ -226,6 +299,11 @@ public sealed class AcpSession(
 
         _byId[item.EventId] = item;
     }
+
+    private bool HasPendingInput() =>
+        _events.Any(
+            item =>
+                item.Kind == ChatEventKind.Permission && item.Status == "pending");
 
     private static ChatEvent Copy(ChatEvent item) =>
         new()

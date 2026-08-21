@@ -35,7 +35,7 @@ public enum ChatEventKind : byte
     Permission = 3,
 }
 
-/// <summary>One choice offered by an ACP permission request.</summary>
+/// <summary>One choice offered by an ACP permission or elicitation request.</summary>
 [MessagePackObject]
 public sealed class ChatPermissionOption
 {

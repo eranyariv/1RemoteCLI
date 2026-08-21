@@ -70,6 +70,52 @@ public sealed class AcpSessionTests
     }
 
     [Fact]
+    public void ElicitationsSetAndClearAttention()
+    {
+        var session = Create();
+        ChatPermissionOption[] options =
+        [
+            new() { OptionId = "postgres", Name = "PostgreSQL", Kind = "select" },
+        ];
+
+        ChatEvent added = session.AddElicitation(
+            "request-1",
+            "ask-user-1",
+            "Database",
+            "Which database?",
+            options);
+        ChatEvent? resolved = session.ResolveElicitation("request-1", "postgres");
+
+        Assert.Equal(ChatEventKind.Permission, added.Kind);
+        Assert.True(added.Options.Length == 1);
+        Assert.False(session.AwaitingInput);
+        Assert.Equal("postgres", resolved!.Status);
+    }
+
+    [Fact]
+    public void CancelsEveryPendingInputWhenTheAcpConnectionEnds()
+    {
+        var session = Create();
+        session.AddPermission(
+            "permission-1",
+            "tool-1",
+            "Run tests",
+            [new() { OptionId = "yes", Name = "Allow", Kind = "allow_once" }]);
+        session.AddElicitation(
+            "question-1",
+            "ask-user-1",
+            "Database",
+            "Which database?",
+            [new() { OptionId = "sqlite", Name = "SQLite", Kind = "select" }]);
+
+        ChatEvent[] cancelled = session.CancelPendingInputs();
+
+        Assert.Equal(2, cancelled.Length);
+        Assert.All(cancelled, item => Assert.Equal("cancelled", item.Status));
+        Assert.False(session.AwaitingInput);
+    }
+
+    [Fact]
     public void SnapshotsAreDefensiveCopies()
     {
         var session = Create();

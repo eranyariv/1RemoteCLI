@@ -19,6 +19,7 @@ public sealed class AcpProvider : IAsyncDisposable
     private readonly ConcurrentDictionary<string, AcpSession> _sessions = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _createdSessions = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, PendingPermission> _permissions = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, PendingElicitation> _elicitations = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _refreshRequested = new(0);
     private readonly Func<string, JsonObject, CancellationToken, Task<JsonElement>>? _call;
     private readonly Action<string>? _log;
@@ -156,6 +157,7 @@ public sealed class AcpProvider : IAsyncDisposable
                     cancellationToken).ConfigureAwait(false);
                 _client.SessionUpdate += OnSessionUpdateAsync;
                 _client.PermissionRequested += OnPermissionRequestedAsync;
+                _client.ElicitationRequested += OnElicitationRequestedAsync;
 
                 while (!cancellationToken.IsCancellationRequested)
                 {
@@ -179,10 +181,11 @@ public sealed class AcpProvider : IAsyncDisposable
                 {
                     client.SessionUpdate -= OnSessionUpdateAsync;
                     client.PermissionRequested -= OnPermissionRequestedAsync;
+                    client.ElicitationRequested -= OnElicitationRequestedAsync;
                     await client.DisposeAsync().ConfigureAwait(false);
                 }
 
-                _permissions.Clear();
+                await CancelPendingInputsAsync().ConfigureAwait(false);
                 foreach (AcpSession session in _sessions.Values)
                 {
                     session.Loaded = false;
@@ -291,16 +294,84 @@ public sealed class AcpProvider : IAsyncDisposable
     {
         AcpSession session = Get(sessionId);
 
-        if (!_permissions.TryRemove(requestId, out PendingPermission? pending) ||
-            pending.SessionId != sessionId ||
-            !pending.OptionIds.Contains(optionId))
+        if (_permissions.TryGetValue(requestId, out PendingPermission? permission))
         {
-            throw new InvalidOperationException("That approval is no longer pending.");
+            if (permission.SessionId != sessionId || !permission.OptionIds.Contains(optionId))
+            {
+                throw new InvalidOperationException("That approval is no longer pending.");
+            }
+
+            if (!_permissions.TryRemove(requestId, out PendingPermission? claimedPermission) ||
+                !ReferenceEquals(permission, claimedPermission))
+            {
+                throw new InvalidOperationException("That approval is no longer pending.");
+            }
+
+            try
+            {
+                await Client.RespondPermissionAsync(permission.RpcId, optionId, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch
+            {
+                if (Volatile.Read(ref _client) is not null)
+                {
+                    _permissions.TryAdd(requestId, permission);
+                }
+                throw;
+            }
+
+            ChatEvent? permissionResolved = session.ResolvePermission(requestId, optionId);
+            await PublishResolutionAsync(session, permissionResolved, cancellationToken).ConfigureAwait(false);
+            return;
         }
 
-        await Client.RespondPermissionAsync(pending.RpcId, optionId, cancellationToken).ConfigureAwait(false);
-        ChatEvent? resolved = session.ResolvePermission(requestId, optionId);
+        if (!_elicitations.TryGetValue(requestId, out PendingElicitation? elicitation) ||
+            elicitation.SessionId != sessionId ||
+            (optionId != PendingElicitation.CancelOption &&
+             optionId != PendingElicitation.DeclineOption &&
+             !elicitation.OptionIds.Contains(optionId)))
+        {
+            throw new InvalidOperationException("That question is no longer pending.");
+        }
 
+        if (!_elicitations.TryRemove(requestId, out PendingElicitation? claimedElicitation) ||
+            !ReferenceEquals(elicitation, claimedElicitation))
+        {
+            throw new InvalidOperationException("That question is no longer pending.");
+        }
+
+        bool cancelled = optionId == PendingElicitation.CancelOption;
+        bool declined = optionId == PendingElicitation.DeclineOption;
+        try
+        {
+            await Client.RespondElicitationAsync(
+                elicitation.RpcId,
+                cancelled ? "cancel" : declined ? "decline" : "accept",
+                cancelled || declined ? null : elicitation.FieldName,
+                cancelled || declined ? null : optionId,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            if (Volatile.Read(ref _client) is not null)
+            {
+                _elicitations.TryAdd(requestId, elicitation);
+            }
+            throw;
+        }
+
+        ChatEvent? resolved = session.ResolveElicitation(
+            requestId,
+            cancelled ? "cancelled" : declined ? "declined" : optionId);
+        await PublishResolutionAsync(session, resolved, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task PublishResolutionAsync(
+        AcpSession session,
+        ChatEvent? resolved,
+        CancellationToken cancellationToken)
+    {
         if (_sink is not null && resolved is not null)
         {
             await _sink.OnChatTranscriptAsync(
@@ -310,6 +381,37 @@ public sealed class AcpProvider : IAsyncDisposable
                 cancellationToken: cancellationToken).ConfigureAwait(false);
             await _sink.OnChatAttentionAsync(session, session.AwaitingInput, null, cancellationToken)
                 .ConfigureAwait(false);
+        }
+    }
+
+    private async Task CancelPendingInputsAsync()
+    {
+        _permissions.Clear();
+        _elicitations.Clear();
+
+        foreach (AcpSession session in _sessions.Values)
+        {
+            ChatEvent[] cancelled = session.CancelPendingInputs();
+            if (_sink is null || cancelled.Length == 0)
+            {
+                continue;
+            }
+
+            try
+            {
+                await _sink.OnChatTranscriptAsync(
+                    session,
+                    ChatTranscriptKind.Delta,
+                    cancelled).ConfigureAwait(false);
+                await _sink.OnChatAttentionAsync(
+                    session,
+                    awaitingInput: false,
+                    hint: null).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _log?.Invoke($"chat: could not publish cancelled input for {session.SessionId} ({ex.Message}).");
+            }
         }
     }
 
@@ -547,6 +649,44 @@ public sealed class AcpProvider : IAsyncDisposable
         }
     }
 
+    private async ValueTask OnElicitationRequestedAsync(JsonElement rpcId, JsonElement parameters)
+    {
+        AcpElicitation? elicitation = AcpElicitation.Parse(parameters);
+        if (elicitation is null ||
+            !_sessions.TryGetValue(elicitation.SessionId, out AcpSession? session))
+        {
+            await Client.RespondErrorAsync(
+                rpcId,
+                code: -32602,
+                message: "1RemoteCLI supports single-field string elicitations.").ConfigureAwait(false);
+            return;
+        }
+
+        string requestId = Guid.NewGuid().ToString("n");
+        _elicitations[requestId] = new PendingElicitation(
+            elicitation.SessionId,
+            rpcId,
+            elicitation.FieldName,
+            elicitation.Options.Select(option => option.OptionId)
+                .ToHashSet(StringComparer.Ordinal));
+
+        ChatEvent item = session.AddElicitation(
+            requestId,
+            elicitation.ToolCallId,
+            elicitation.Title,
+            elicitation.Message,
+            elicitation.Options);
+
+        if (_sink is not null)
+        {
+            await _sink.OnChatTranscriptAsync(session, ChatTranscriptKind.Delta, [item]).ConfigureAwait(false);
+            await _sink.OnChatAttentionAsync(
+                session,
+                awaitingInput: true,
+                elicitation.Message).ConfigureAwait(false);
+        }
+    }
+
     private AcpSession Get(string sessionId) =>
         _sessions.TryGetValue(sessionId, out AcpSession? session)
             ? session
@@ -649,6 +789,16 @@ public sealed class AcpProvider : IAsyncDisposable
         string SessionId,
         JsonElement RpcId,
         HashSet<string> OptionIds);
+
+    private sealed record PendingElicitation(
+        string SessionId,
+        JsonElement RpcId,
+        string FieldName,
+        HashSet<string> OptionIds)
+    {
+        public const string CancelOption = "__1remote_cancel__";
+        public const string DeclineOption = "__1remote_decline__";
+    }
 
     private sealed record AcpSettings(
         string Executable,

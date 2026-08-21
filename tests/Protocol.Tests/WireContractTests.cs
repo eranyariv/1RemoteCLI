@@ -302,6 +302,31 @@ public sealed class WireContractTests
                         },
                     ],
                 },
+                new ChatEvent
+                {
+                    EventId = "elicitation:req-2",
+                    Kind = ChatEventKind.Permission,
+                    Text = "Which database should I use?",
+                    Title = "Database",
+                    Status = "pending",
+                    ToolKind = "ask-user-1",
+                    PermissionRequestId = "req-2",
+                    Options =
+                    [
+                        new ChatPermissionOption
+                        {
+                            OptionId = "postgres",
+                            Name = "PostgreSQL",
+                            Kind = "select",
+                        },
+                        new ChatPermissionOption
+                        {
+                            OptionId = "sqlite",
+                            Name = "SQLite",
+                            Kind = "select",
+                        },
+                    ],
+                },
             ],
             TargetConnectionId = "phone-connection",
         });

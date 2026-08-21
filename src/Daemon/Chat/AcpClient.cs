@@ -34,6 +34,8 @@ public sealed class AcpClient : IAsyncDisposable
 
     public event Func<JsonElement, JsonElement, ValueTask>? PermissionRequested;
 
+    public event Func<JsonElement, JsonElement, ValueTask>? ElicitationRequested;
+
     public static async Task<AcpClient> StartAsync(
         string executable = "copilot",
         IReadOnlyList<string>? arguments = null,
@@ -69,7 +71,13 @@ public sealed class AcpClient : IAsyncDisposable
                 new JsonObject
                 {
                     ["protocolVersion"] = 1,
-                    ["clientCapabilities"] = new JsonObject(),
+                    ["clientCapabilities"] = new JsonObject
+                    {
+                        ["elicitation"] = new JsonObject
+                        {
+                            ["form"] = new JsonObject(),
+                        },
+                    },
                     ["clientInfo"] = new JsonObject
                     {
                         ["name"] = "1remotecli",
@@ -181,6 +189,53 @@ public sealed class AcpClient : IAsyncDisposable
             },
             cancellationToken);
 
+    public Task RespondElicitationAsync(
+        JsonElement rpcId,
+        string action,
+        string? fieldName = null,
+        string? value = null,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new JsonObject
+        {
+            ["action"] = action,
+        };
+        if (action == "accept" && fieldName is not null)
+        {
+            result["content"] = new JsonObject
+            {
+                [fieldName] = value,
+            };
+        }
+
+        return WriteAsync(
+            new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = JsonNode.Parse(rpcId.GetRawText()),
+                ["result"] = result,
+            },
+            cancellationToken);
+    }
+
+    public Task RespondErrorAsync(
+        JsonElement rpcId,
+        int code,
+        string message,
+        CancellationToken cancellationToken = default) =>
+        WriteAsync(
+            new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = JsonNode.Parse(rpcId.GetRawText()),
+                ["error"] = new JsonObject
+                {
+                    ["code"] = code,
+                    ["message"] = message,
+                },
+            },
+            cancellationToken);
+
     private async Task ReadAsync(CancellationToken cancellationToken)
     {
         try
@@ -223,6 +278,10 @@ public sealed class AcpClient : IAsyncDisposable
                 else if (name == "session/request_permission" && root.TryGetProperty("id", out JsonElement requestId))
                 {
                     await InvokeAsync(PermissionRequested, requestId.Clone(), parameters).ConfigureAwait(false);
+                }
+                else if (name == "elicitation/create" && root.TryGetProperty("id", out JsonElement elicitationId))
+                {
+                    await InvokeAsync(ElicitationRequested, elicitationId.Clone(), parameters).ConfigureAwait(false);
                 }
             }
 

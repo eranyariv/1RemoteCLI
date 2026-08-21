@@ -170,7 +170,7 @@
     },
     "chatTranscript": {
       "type": "ChatTranscriptNotification",
-      "base64": "lahjaGF0LTEyMyqoU25hcHNob3STmKZ1c2VyLTGrVXNlck1lc3NhZ2WtRml4IHRoZSB0ZXN0c8DAwMCQmKZ0b29sLTGoVG9vbENhbGyrZG90bmV0IHRlc3SpUnVuIHRlc3Rzp3BlbmRpbmelc2hlbGzAkJiwcGVybWlzc2lvbjpyZXEtMapQZXJtaXNzaW9usUFwcHJvdmFsIHJlcXVpcmVkqVJ1biB0ZXN0c6dwZW5kaW5npnRvb2wtMaVyZXEtMZKTqmFsbG93LW9uY2WqQWxsb3cgb25jZaphbGxvd19vbmNlk6tyZWplY3Qtb25jZaREZW55q3JlamVjdF9vbmNlsHBob25lLWNvbm5lY3Rpb24=",
+      "base64": "lahjaGF0LTEyMyqoU25hcHNob3SUmKZ1c2VyLTGrVXNlck1lc3NhZ2WtRml4IHRoZSB0ZXN0c8DAwMCQmKZ0b29sLTGoVG9vbENhbGyrZG90bmV0IHRlc3SpUnVuIHRlc3Rzp3BlbmRpbmelc2hlbGzAkJiwcGVybWlzc2lvbjpyZXEtMapQZXJtaXNzaW9usUFwcHJvdmFsIHJlcXVpcmVkqVJ1biB0ZXN0c6dwZW5kaW5npnRvb2wtMaVyZXEtMZKTqmFsbG93LW9uY2WqQWxsb3cgb25jZaphbGxvd19vbmNlk6tyZWplY3Qtb25jZaREZW55q3JlamVjdF9vbmNlmLFlbGljaXRhdGlvbjpyZXEtMqpQZXJtaXNzaW9uvFdoaWNoIGRhdGFiYXNlIHNob3VsZCBJIHVzZT\u002BoRGF0YWJhc2WncGVuZGluZ6phc2stdXNlci0xpXJlcS0ykpOocG9zdGdyZXOqUG9zdGdyZVNRTKZzZWxlY3STpnNxbGl0ZaZTUUxpdGWmc2VsZWN0sHBob25lLWNvbm5lY3Rpb24=",
       "decoded": {
         "sessionId": "chat-123",
         "seq": 42,
@@ -214,6 +214,27 @@
                 "optionId": "reject-once",
                 "name": "Deny",
                 "kind": "reject_once"
+              }
+            ]
+          },
+          {
+            "eventId": "elicitation:req-2",
+            "kind": 3,
+            "text": "Which database should I use?",
+            "title": "Database",
+            "status": "pending",
+            "toolKind": "ask-user-1",
+            "permissionRequestId": "req-2",
+            "options": [
+              {
+                "optionId": "postgres",
+                "name": "PostgreSQL",
+                "kind": "select"
+              },
+              {
+                "optionId": "sqlite",
+                "name": "SQLite",
+                "kind": "select"
               }
             ]
           }

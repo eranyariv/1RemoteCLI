@@ -237,4 +237,89 @@ describe('ChatView', () => {
     expect(relay.respondChatPermission).toHaveBeenCalledWith('chat-1', 'req-1', 'yes')
     expect(screen.getByText('approval needed')).toBeTruthy()
   })
+
+  it('renders an elicitation choice menu and forwards the selected answer', async () => {
+    render(
+      <ChatView
+        client={relay.client}
+        connected
+        machine={machine}
+        session={session}
+        onClose={() => {}}
+      />,
+    )
+
+    act(() => {
+      relay.emit({
+        sessionId: 'chat-1',
+        seq: 4,
+        kind: 'Delta',
+        events: [
+          {
+            eventId: 'elicitation:req-2',
+            kind: 'Permission',
+            text: 'Which database should I use?',
+            title: 'Database',
+            status: 'pending',
+            toolKind: 'ask-user-1',
+            permissionRequestId: 'req-2',
+            options: [
+              { optionId: 'postgres', name: 'PostgreSQL', kind: 'select' },
+              { optionId: 'sqlite', name: 'SQLite', kind: 'select' },
+            ],
+          },
+        ],
+      })
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'SQLite' }))
+    expect(relay.respondChatPermission).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Submit answer' }))
+
+    await waitFor(() =>
+      expect(relay.respondChatPermission).toHaveBeenCalledWith('chat-1', 'req-2', 'sqlite'),
+    )
+    expect(screen.getByText('Which database should I use?')).toBeTruthy()
+  })
+
+  it('switches tool activity between compact, summary, and full detail', () => {
+    render(
+      <ChatView
+        client={relay.client}
+        connected
+        machine={machine}
+        session={session}
+        onClose={() => {}}
+      />,
+    )
+
+    act(() => {
+      relay.emit({
+        sessionId: 'chat-1',
+        seq: 5,
+        kind: 'Snapshot',
+        events: [
+          {
+            eventId: 'tool-1',
+            kind: 'ToolCall',
+            text: 'A very long tool result',
+            title: 'Inspect files',
+            status: 'completed',
+            toolKind: 'read',
+            permissionRequestId: null,
+            options: [],
+          },
+        ],
+      })
+    })
+
+    expect(screen.getByText('Inspect files')).toBeTruthy()
+    expect(screen.queryByText('A very long tool result')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Full' }))
+    expect(screen.getByText('A very long tool result')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Compact' }))
+    expect(screen.queryByText('Inspect files')).toBeNull()
+  })
 })

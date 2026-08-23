@@ -191,6 +191,19 @@ public static partial class LogEvents
         Message = "{Detail}")]
     public static partial void Update(this ILogger logger, string detail);
 
+    // 1600s: desktop settings actions.
+
+    /// <remarks>
+    /// Kept as one free-form diagnostic event because this traces a short native call
+    /// sequence whose useful fields depend on how far Windows got. Callers must not put
+    /// shortcut paths, targets, arguments, or display names in <paramref name="detail"/>.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1600,
+        Level = LogLevel.Information,
+        Message = "Shortcut picker: {Detail}")]
+    public static partial void ShortcutPicker(this ILogger logger, string detail);
+
     // 1900s: things that went wrong.
 
     /// <remarks>

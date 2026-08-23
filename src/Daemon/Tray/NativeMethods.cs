@@ -636,6 +636,10 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool AreDpiAwarenessContextsEqual(IntPtr left, IntPtr right);
 
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool IsWindow(IntPtr window);
+
     [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
     internal static extern int SetWindowTheme(IntPtr window, string? subAppName, string? subIdList);
 

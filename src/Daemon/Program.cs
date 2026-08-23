@@ -383,8 +383,11 @@ public static class Program
         string sourcePath,
         string? outputPath,
         CliType? confirmedType = null,
-        Func<ShortcutAnalysis, CliType?>? chooseType = null)
+        Func<ShortcutAnalysis, CliType?>? chooseType = null,
+        Action<string>? diagnostic = null)
     {
+        diagnostic?.Invoke("validating the selected shortcut.");
+
         string full;
 
         try
@@ -417,6 +420,10 @@ public static class Program
         try
         {
             source = ShellLink.Read(full);
+            diagnostic?.Invoke(
+                $"read the shell link; hasProgram={source.HasProgram}; argumentsLength={source.Arguments.Length}; "
+                + $"workingDirectorySet={!string.IsNullOrWhiteSpace(source.WorkingDirectory)}; "
+                + $"runAsAdministrator={source.RunAsAdministrator}.");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or COMException)
         {
@@ -424,6 +431,9 @@ public static class Program
         }
 
         ShortcutAnalysis analysis = ShortcutWrapper.Analyze(full, source, Installer.ExecutablePath);
+        diagnostic?.Invoke(
+            $"analysis completed; ok={analysis.Ok}; detected={CliTypes.Token(analysis.DetectedType)}.");
+
         if (!analysis.Ok)
         {
             return new SettingsNotice(analysis.Problem!, NoticeKind.Problem);
@@ -439,7 +449,13 @@ public static class Program
                     NoticeKind.Problem);
             }
 
+            diagnostic?.Invoke("requesting type confirmation.");
             confirmedType = chooseType(analysis);
+            diagnostic?.Invoke(
+                confirmedType is null
+                    ? "type confirmation was cancelled."
+                    : $"type confirmation selected {CliTypes.Token(confirmedType.Value)}.");
+
             if (confirmedType is null)
             {
                 return null;
@@ -452,6 +468,8 @@ public static class Program
             Installer.ExecutablePath,
             outputPath,
             cliType: confirmedType);
+        diagnostic?.Invoke(
+            $"wrap plan completed; ok={plan.Ok}; kind={plan.Kind}; warning={plan.Warning is not null}.");
 
         if (!plan.Ok)
         {
@@ -461,6 +479,7 @@ public static class Program
         try
         {
             ShellLink.Write(plan.OutputPath, plan.Link);
+            diagnostic?.Invoke("wrote the wrapped shortcut.");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or COMException)
         {
@@ -518,6 +537,7 @@ public static class Program
     {
         using ILoggerFactory loggers = AgentLogging.Create();
         ILogger logger = loggers.CreateLogger("Agent");
+        ILogger settingsLogger = loggers.CreateLogger("Settings");
 
         MachineIdentity identity = MachineIdentity.Load(log: Console.Error.WriteLine);
 
@@ -551,7 +571,7 @@ public static class Program
             loggers.CreateLogger("Hub"));
 
         var preferenceStore = new AgentPreferencesStore(
-            log: loggers.CreateLogger("Settings").Update);
+            log: settingsLogger.Update);
         AgentPreferences preferences = preferenceStore.Load();
 
         await using var chats = new AcpProvider(
@@ -653,7 +673,7 @@ public static class Program
             log: updateLogger.Update);
 
         var windowLayout = new SettingsWindowLayoutStore(
-            log: loggers.CreateLogger("Settings").Update);
+            log: settingsLogger.Update);
 
         using TrayIcon? tray = StartTray(
             identity,
@@ -664,6 +684,7 @@ public static class Program
             updates,
             windowLayout,
             preferenceStore,
+            settingsLogger,
             stopping);
 
         // The hub loop runs alongside the pipe server rather than gating it: a machine
@@ -709,6 +730,7 @@ public static class Program
         UpdateService updates,
         SettingsWindowLayoutStore windowLayout,
         AgentPreferencesStore preferenceStore,
+        ILogger settingsLogger,
         CancellationTokenSource stopping)
     {
         if (!Environment.UserInteractive)
@@ -769,7 +791,18 @@ public static class Program
             SendFeedback: () => Launch(Feedback.MailTo),
             OpenChangeHistory: () => Launch(
                 new Uri(HubEndpoint.AppUri(), "change-history.html").ToString()),
-            WrapShortcut: PickAndWrap,
+            WrapShortcut: owner =>
+            {
+                try
+                {
+                    return PickAndWrap(owner, settingsLogger.ShortcutPicker);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ExternalException)
+                {
+                    settingsLogger.Failed(ex, "Wrapping a desktop shortcut");
+                    throw;
+                }
+            },
 
             // In this process, unlike sign-in: the update has to know how many sessions
             // are live before it restarts anything, and that is a question only this
@@ -860,8 +893,10 @@ public static class Program
     /// feature (issue #66).
     /// </para>
     /// </summary>
-    private static SettingsNotice? PickAndWrap(IntPtr owner)
+    private static SettingsNotice? PickAndWrap(IntPtr owner, Action<string> diagnostic)
     {
+        diagnostic("opening the shell file picker.");
+
         string? picked = FilePicker.PickShortcut(
             owner,
             "Choose a shortcut to wrap",
@@ -869,12 +904,19 @@ public static class Program
 
         // Cancelling is a decision, not a failure. Saying anything about it would make
         // backing out of the dialog cost an extra click.
-        return picked is null
-            ? null
-            : Wrap(
-                picked,
-                outputPath: null,
-                chooseType: analysis => ShortcutTypePicker.Pick(owner, analysis));
+        if (picked is null)
+        {
+            diagnostic("file selection was cancelled.");
+            return null;
+        }
+
+        diagnostic("a .lnk file was selected.");
+
+        return Wrap(
+            picked,
+            outputPath: null,
+            chooseType: analysis => ShortcutTypePicker.Pick(owner, analysis, diagnostic),
+            diagnostic: diagnostic);
     }
 
     /// <summary>Hands something to the shell to open — a URL, a folder or this executable.</summary>

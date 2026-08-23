@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using OneRemoteCli.Daemon.Shell;
 using OneRemoteCli.Protocol.Hub;
+using static OneRemoteCli.Daemon.Tray.NativeMethods;
 
 namespace OneRemoteCli.Daemon.Tray;
 
@@ -26,13 +27,22 @@ internal static class ShortcutTypePicker
         (CliType.CopilotCli, "GitHub Copilot CLI — create a native ACP chat"),
     ];
 
-    public static CliType? Pick(IntPtr owner, ShortcutAnalysis analysis)
+    public static CliType? Pick(
+        IntPtr owner,
+        ShortcutAnalysis analysis,
+        Action<string>? diagnostic = null)
     {
         int buttonSize = Marshal.SizeOf<TaskDialogButton>();
         IntPtr buttons = Marshal.AllocHGlobal(buttonSize * Choices.Length);
+        int initializedButtons = 0;
 
         try
         {
+            diagnostic?.Invoke(
+                $"preparing {Choices.Length} choices; detected={CliTypes.Token(analysis.DetectedType)}; "
+                + $"processArchitecture={RuntimeInformation.ProcessArchitecture}; pointerBytes={IntPtr.Size}; "
+                + $"buttonBytes={buttonSize}.");
+
             for (int i = 0; i < Choices.Length; i++)
             {
                 Marshal.StructureToPtr(
@@ -43,6 +53,7 @@ internal static class ShortcutTypePicker
                     },
                     buttons + (i * buttonSize),
                     false);
+                initializedButtons++;
             }
 
             var config = new TaskDialogConfig
@@ -61,10 +72,32 @@ internal static class ShortcutTypePicker
                 DefaultRadioButton = FirstTypeId + (int)analysis.DetectedType,
             };
 
+            DLLVERSIONINFO comctl = default;
+            comctl.cbSize = (uint)Marshal.SizeOf<DLLVERSIONINFO>();
+            int versionResult = ComCtlGetVersion(ref comctl);
+            string version = versionResult == 0
+                ? $"{comctl.dwMajorVersion}.{comctl.dwMinorVersion}.{comctl.dwBuildNumber}"
+                : $"unavailable (HRESULT 0x{versionResult:x8})";
+
+            diagnostic?.Invoke(
+                $"calling TaskDialogIndirect; owner=0x{owner.ToInt64():x}; ownerValid={IsWindow(owner)}; "
+                + $"configBytes={config.Size}; flags=0x{config.Flags:x8}; commonButtons=0x{config.CommonButtons:x8}; "
+                + $"defaultRadio={config.DefaultRadioButton}; comctl32={version}.");
+
             int result = TaskDialogIndirect(ref config, out int pressed, out int selected, out _);
+            int lastError = Marshal.GetLastPInvokeError();
+
+            diagnostic?.Invoke(
+                $"TaskDialogIndirect returned HRESULT 0x{result:x8}; lastWin32Error={lastError}; "
+                + $"pressedButton={pressed}; selectedRadio={selected}.");
+
             if (result < 0)
             {
-                throw new ExternalException("Windows could not show the shortcut type picker.", result);
+                throw new ExternalException(
+                    $"Windows could not show the shortcut type picker (HRESULT 0x{result:x8}). "
+                    + "Diagnostic details were written to the agent log; use Open logs in Settings "
+                    + "and share today's file.",
+                    result);
             }
 
             if (pressed is IdCancel or 0)
@@ -79,11 +112,13 @@ internal static class ShortcutTypePicker
         }
         finally
         {
-            for (int i = 0; i < Choices.Length; i++)
+            for (int i = 0; i < initializedButtons; i++)
             {
                 Marshal.DestroyStructure<TaskDialogButton>(buttons + (i * buttonSize));
             }
+
             Marshal.FreeHGlobal(buttons);
+            diagnostic?.Invoke("released the native radio-button buffer.");
         }
     }
 
@@ -133,7 +168,7 @@ internal static class ShortcutTypePicker
         public uint Width;
     }
 
-    [DllImport("comctl32.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
+    [DllImport("comctl32.dll", CharSet = CharSet.Unicode, PreserveSig = true, SetLastError = true)]
     private static extern int TaskDialogIndirect(
         ref TaskDialogConfig config,
         out int button,

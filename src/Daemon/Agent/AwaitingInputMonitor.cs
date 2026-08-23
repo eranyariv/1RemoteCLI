@@ -13,10 +13,11 @@ namespace OneRemoteCli.Daemon.Agent;
 /// </para>
 /// <para>
 /// The arming rule is what stops this being noise. A session that has been announced
-/// stays silent until the program writes something new; without that, a prompt left
-/// unanswered overnight would notify once a second until morning, and the user would
-/// turn notifications off and never turn them back on. That single sentence is worth
-/// more to the product than any amount of extra sensitivity.
+/// stays silent until the rendered screen meaningfully changes. Counting raw output
+/// is not enough because full-screen CLIs periodically repaint an unchanged view;
+/// treating those redraws as activity repeats the same notification until the user
+/// turns notifications off. That single rule is worth more to the product than any
+/// amount of extra sensitivity.
 /// </para>
 /// </summary>
 public sealed class AwaitingInputMonitor
@@ -29,14 +30,14 @@ public sealed class AwaitingInputMonitor
     private readonly Action<string>? _log;
 
     /// <summary>
-    /// Sessions already announced, cleared when they produce output again.
+    /// Notification state for sessions already announced, re-armed by a changed screen.
     /// <para>
     /// Keyed by session id and pruned on every sweep. A session that ends takes its
     /// entry with it, so a machine left running for weeks does not accumulate one row
     /// per terminal anybody ever opened.
     /// </para>
     /// </summary>
-    private readonly Dictionary<string, long> _announced = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, AnnouncementState> _announced = new(StringComparer.Ordinal);
 
     public AwaitingInputMonitor(
         SessionRegistry sessions,
@@ -84,13 +85,44 @@ public sealed class AwaitingInputMonitor
         foreach (TerminalSession session in sessions)
         {
             long lastOutput = session.OutputCount;
+            bool wasAnnounced = _announced.TryGetValue(
+                session.SessionId,
+                out AnnouncementState announced);
 
-            if (_announced.TryGetValue(session.SessionId, out long announcedAt) && announcedAt == lastOutput)
+            if (wasAnnounced && announced.OutputCount == lastOutput && !announced.Armed)
             {
                 continue;
             }
 
-            ScreenPosture posture = session.Screen.Posture();
+            ScreenPosture posture;
+            string? fingerprint = null;
+
+            if (wasAnnounced && announced.OutputCount != lastOutput)
+            {
+                AwaitingInputScreen screen = session.Screen.AwaitingInputScreen();
+                posture = screen.Posture;
+                fingerprint = screen.Fingerprint;
+
+                // Interactive CLIs redraw status bars and menus even when nothing
+                // visible changed. Those bytes advance OutputCount, but they are not a
+                // new quiet episode and must not re-arm the same notification.
+                announced = announced.Fingerprint == fingerprint
+                    ? announced with { OutputCount = lastOutput }
+                    : new AnnouncementState(lastOutput, fingerprint, Armed: true);
+                _announced[session.SessionId] = announced;
+
+                if (!announced.Armed)
+                {
+                    continue;
+                }
+            }
+            else
+            {
+                // The common path needs only one row and the cursor state. Serialising
+                // and hashing the full screen is reserved for redraw comparison and
+                // recording an actual announcement.
+                posture = session.Screen.Posture();
+            }
 
             var signals = new IdleSignals(
                 now - session.StartedUtc,
@@ -103,10 +135,31 @@ public sealed class AwaitingInputMonitor
                 continue;
             }
 
+            if (fingerprint is null)
+            {
+                // Re-read posture together with the fingerprint. Output may have landed
+                // after the cheap check above, and the state we record must describe the
+                // exact screen whose prompt verdict caused the announcement.
+                AwaitingInputScreen screen = session.Screen.AwaitingInputScreen();
+                posture = screen.Posture;
+                fingerprint = screen.Fingerprint;
+                signals = new IdleSignals(
+                    now - session.StartedUtc,
+                    now - session.LastOutputUtc,
+                    posture);
+                verdict = AwaitingInputHeuristic.Evaluate(signals, _options, _patterns);
+
+                if (verdict == AwaitingInputVerdict.No)
+                {
+                    continue;
+                }
+            }
+
             // Recorded before the send, not after. The sink talks to the network, so it
             // can be slow or fail; either way this session has had its one announcement
             // for this episode, and retrying is exactly the behaviour to avoid.
-            _announced[session.SessionId] = lastOutput;
+            _announced[session.SessionId] =
+                new AnnouncementState(lastOutput, fingerprint, Armed: false);
 
             _log?.Invoke($"awaiting-input: {session.DisplayName} ({verdict.ToString().ToLowerInvariant()}).");
 
@@ -168,4 +221,6 @@ public sealed class AwaitingInputMonitor
             _announced.Remove(id);
         }
     }
+
+    private readonly record struct AnnouncementState(long OutputCount, string Fingerprint, bool Armed);
 }

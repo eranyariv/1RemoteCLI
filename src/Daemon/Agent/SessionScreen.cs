@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using OneRemoteCli.Terminal.Screen;
 using OneRemoteCli.Terminal.Vt;
 
@@ -138,41 +139,71 @@ public sealed class SessionScreen
     {
         lock (_gate)
         {
-            int row = _screen.CursorRow;
-            int column = _screen.CursorColumn;
+            return PostureCore();
+        }
+    }
 
-            bool textBefore = false;
-            bool textAfter = false;
+    /// <summary>
+    /// The prompt posture and a stable identity for the whole visible screen.
+    /// <para>
+    /// Full-screen CLIs periodically repaint an unchanged view. The output counter
+    /// advances for those bytes, but the repaint must not re-arm a notification.
+    /// Reading both values under one lock ensures the posture and identity describe
+    /// the same rendered frame.
+    /// </para>
+    /// </summary>
+    public AwaitingInputScreen AwaitingInputScreen()
+    {
+        byte[] snapshot;
+        ScreenPosture posture;
 
-            if (row >= 0 && row < _screen.Rows)
+        lock (_gate)
+        {
+            snapshot = VtSnapshotWriter.Serialize(_screen);
+            posture = PostureCore();
+        }
+
+        string fingerprint = Convert.ToHexString(SHA256.HashData(snapshot));
+        return new AwaitingInputScreen(posture, fingerprint);
+    }
+
+    /// <summary>Caller must hold the gate.</summary>
+    private ScreenPosture PostureCore()
+    {
+        int row = _screen.CursorRow;
+        int column = _screen.CursorColumn;
+
+        bool textBefore = false;
+        bool textAfter = false;
+
+        if (row >= 0 && row < _screen.Rows)
+        {
+            ReadOnlySpan<Cell> cells = _screen.GetRow(row);
+
+            for (int x = 0; x < cells.Length; x++)
             {
-                ReadOnlySpan<Cell> cells = _screen.GetRow(row);
-
-                for (int x = 0; x < cells.Length; x++)
+                if (cells[x].IsBlank)
                 {
-                    if (cells[x].IsBlank)
-                    {
-                        continue;
-                    }
+                    continue;
+                }
 
-                    // The cursor's own cell counts as "after": a program that parked it
-                    // on top of drawn text is rendering, not asking.
-                    if (x < column)
-                    {
-                        textBefore = true;
-                    }
-                    else
-                    {
-                        textAfter = true;
-                    }
+                // The cursor's own cell counts as "after": a program that parked it
+                // on top of drawn text is rendering, not asking.
+                if (x < column)
+                {
+                    textBefore = true;
+                }
+                else
+                {
+                    textAfter = true;
                 }
             }
-
-            return new ScreenPosture(
-                _screen.Modes.CursorVisible,
-                textBefore && !textAfter,
-                LastNonBlankLine());
         }
+
+        return new ScreenPosture(
+            _screen.Modes.CursorVisible,
+            textBefore && !textAfter,
+            LastNonBlankLine());
     }
 
     /// <summary>Caller must hold the gate.</summary>

@@ -82,6 +82,24 @@ public sealed class AwaitingInputMonitorTests
     }
 
     [Fact]
+    public async Task An_identical_full_screen_redraw_does_not_re_arm_the_session()
+    {
+        var world = new World();
+        TerminalSession session = world.Session();
+
+        const string screen = "\u001b[2J\u001b[HClaude Code\r\n\u25b6\u25b6 auto mode on (shift+tab to cycle)\r\n  \u00b7 \u2190 for agents";
+        world.Write(session, screen);
+        world.Advance(TimeSpan.FromSeconds(10));
+        await world.Monitor.SweepAsync();
+
+        world.Write(session, screen);
+        world.Advance(TimeSpan.FromSeconds(10));
+        await world.Monitor.SweepAsync();
+
+        Assert.Single(world.Sink.Awaiting);
+    }
+
+    [Fact]
     public async Task A_session_that_has_only_just_started_is_not_reported()
     {
         var world = new World();

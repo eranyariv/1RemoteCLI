@@ -31,3 +31,6 @@ public readonly record struct ScreenPosture(bool CursorVisible, bool CursorAfter
     /// <summary>A screen nothing is known about, which is never treated as waiting.</summary>
     public static readonly ScreenPosture Unknown = new(false, false, string.Empty);
 }
+
+/// <summary>A prompt posture paired with the identity of the rendered screen it came from.</summary>
+public readonly record struct AwaitingInputScreen(ScreenPosture Posture, string Fingerprint);

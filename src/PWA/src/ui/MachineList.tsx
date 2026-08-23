@@ -596,7 +596,7 @@ export function MachineList({
   )
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-3 overflow-x-clip">
+    <div className="vertical-list-surface flex flex-col gap-3">
       <PinnedCard machines={machines} projects={projects} actions={actions} onOpenSession={onOpenSession} />
 
       <SortableList

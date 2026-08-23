@@ -126,7 +126,7 @@ export function ProjectTiles({
   })
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-2 overflow-x-clip">
+    <div className="vertical-list-surface flex flex-col gap-2">
       <SortableList ids={preference.order} onMove={preference.move}>
         <div className="flex min-w-0 flex-col gap-2">
           {ordered.map((project) => (

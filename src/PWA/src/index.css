@@ -10,18 +10,22 @@
 html {
   color-scheme: dark;
   background-color: var(--color-slate-950);
+  min-width: 0;
+  width: 100%;
   max-width: 100%;
   overflow-x: hidden;
-  overflow-x: clip;
+  overscroll-behavior-x: none;
   /* Keeps the area under the iOS overscroll rubber-band the same colour. */
   overscroll-behavior-y: none;
 }
 
 body {
   margin: 0;
+  min-width: 0;
+  width: 100%;
   max-width: 100%;
   overflow-x: hidden;
-  overflow-x: clip;
+  overscroll-behavior-x: none;
   background-color: var(--color-slate-950);
   color: var(--color-slate-200);
   font-family:
@@ -37,9 +41,23 @@ body {
 
 #root {
   min-width: 0;
+  width: 100%;
   max-width: 100%;
   overflow-x: hidden;
-  overflow-x: clip;
+}
+
+/*
+ * iOS can rubber-band a clipped root sideways even when its scroll width is
+ * correct. These screens only scroll vertically; drag handles opt out with
+ * touch-action: none so sorting still receives its gestures.
+ */
+.vertical-list-surface {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  overscroll-behavior-x: none;
+  touch-action: pan-y;
 }
 
 /* A tap on a button should not select the label underneath it. */

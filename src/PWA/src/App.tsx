@@ -152,7 +152,7 @@ export default function App() {
   const scopedMachines = selectedProjectId ? filterByProject(relay.machines, selectedProjectId) : relay.machines
 
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-xl min-w-0 flex-col overflow-x-clip">
+    <div className="mx-auto flex min-h-dvh w-full max-w-xl min-w-0 flex-col overflow-x-hidden">
       {/*
         Padding rather than a spacer above: the header is sticky with a blurred
         background, so the bar itself should extend under the status bar and only the
@@ -196,7 +196,7 @@ export default function App() {
         </button>
       </header>
 
-      <main className="flex min-w-0 flex-1 flex-col gap-4 overflow-x-clip px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+      <main className="flex min-w-0 flex-1 flex-col gap-4 overflow-x-hidden px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
         {relay.status === 'rejected' ? (
           <Banner tone="error" title="This account cannot use the hub">
             {relay.detail}

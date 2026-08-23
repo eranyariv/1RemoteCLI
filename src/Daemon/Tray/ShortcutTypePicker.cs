@@ -17,6 +17,8 @@ internal static class ShortcutTypePicker
     private const uint AllowCancellation = 0x0008;
     private const uint SizeToContent = 0x01000000;
     private const int FirstTypeId = 100;
+    private const uint TaskDialogCreated = 0;
+    private const int ClickTaskDialogButton = WM_USER + 102;
 
     private static readonly (CliType Type, string Text)[] Choices =
     [
@@ -27,10 +29,39 @@ internal static class ShortcutTypePicker
         (CliType.CopilotCli, "GitHub Copilot CLI — create a native ACP chat"),
     ];
 
+    private static readonly TaskDialogCallback SelfCheckCallback = CloseSelfCheck;
+
+    internal static (int Config, int Button) NativeLayout =>
+        (Marshal.SizeOf<TaskDialogConfig>(), Marshal.SizeOf<TaskDialogButton>());
+
     public static CliType? Pick(
         IntPtr owner,
         ShortcutAnalysis analysis,
-        Action<string>? diagnostic = null)
+        Action<string>? diagnostic = null) =>
+        Show(owner, analysis, diagnostic, IntPtr.Zero);
+
+    /// <summary>Creates and dismisses the real native dialog for the published-build self-check.</summary>
+    internal static void CheckNativeDialog()
+    {
+        IntPtr callback = Marshal.GetFunctionPointerForDelegate(SelfCheckCallback);
+        CliType? selected = Show(
+            IntPtr.Zero,
+            new ShortcutAnalysis(null, "Self check", CliType.Generic),
+            diagnostic: null,
+            callback);
+        GC.KeepAlive(SelfCheckCallback);
+
+        if (selected != CliType.Generic)
+        {
+            throw new InvalidOperationException("The shortcut type picker did not return its default choice.");
+        }
+    }
+
+    private static CliType? Show(
+        IntPtr owner,
+        ShortcutAnalysis analysis,
+        Action<string>? diagnostic,
+        IntPtr callback)
     {
         int buttonSize = Marshal.SizeOf<TaskDialogButton>();
         IntPtr buttons = Marshal.AllocHGlobal(buttonSize * Choices.Length);
@@ -70,6 +101,7 @@ internal static class ShortcutTypePicker
                 RadioButtonCount = (uint)Choices.Length,
                 RadioButtons = buttons,
                 DefaultRadioButton = FirstTypeId + (int)analysis.DetectedType,
+                Callback = callback,
             };
 
             DLLVERSIONINFO comctl = default;
@@ -93,10 +125,13 @@ internal static class ShortcutTypePicker
 
             if (result < 0)
             {
+                string guidance = diagnostic is null
+                    ? string.Empty
+                    : " Diagnostic details were written to the agent log; use Open logs in Settings "
+                        + "and share today's file.";
+
                 throw new ExternalException(
-                    $"Windows could not show the shortcut type picker (HRESULT 0x{result:x8}). "
-                    + "Diagnostic details were written to the agent log; use Open logs in Settings "
-                    + "and share today's file.",
+                    $"Windows could not show the shortcut type picker (HRESULT 0x{result:x8}).{guidance}",
                     result);
             }
 
@@ -122,7 +157,22 @@ internal static class ShortcutTypePicker
         }
     }
 
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private static int CloseSelfCheck(
+        IntPtr window,
+        uint notification,
+        IntPtr wParam,
+        IntPtr lParam,
+        IntPtr callbackData)
+    {
+        if (notification == TaskDialogCreated)
+        {
+            PostMessage(window, ClickTaskDialogButton, (IntPtr)IdOk, IntPtr.Zero);
+        }
+
+        return 0;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode, Pack = 4)]
     private struct TaskDialogButton
     {
         public int Id;
@@ -131,7 +181,7 @@ internal static class ShortcutTypePicker
         public string Text;
     }
 
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode, Pack = 4)]
     private struct TaskDialogConfig
     {
         public uint Size;
@@ -167,6 +217,14 @@ internal static class ShortcutTypePicker
         public IntPtr CallbackData;
         public uint Width;
     }
+
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+    private delegate int TaskDialogCallback(
+        IntPtr window,
+        uint notification,
+        IntPtr wParam,
+        IntPtr lParam,
+        IntPtr callbackData);
 
     [DllImport("comctl32.dll", CharSet = CharSet.Unicode, PreserveSig = true, SetLastError = true)]
     private static extern int TaskDialogIndirect(

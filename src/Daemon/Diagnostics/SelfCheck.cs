@@ -406,6 +406,11 @@ public static class SelfCheck
                 + "The application manifest is missing or malformed.");
         }
 
+        // This is deliberately the real native dialog, closed from its creation callback.
+        // Structure packing cannot be inferred from a successful build, and the wrong
+        // packing is rejected by Windows before anything reaches the screen (issue #146).
+        ShortcutTypePicker.CheckNativeDialog();
+
         // Reading the user's light/dark choice goes through the registry, which trimming
         // can reach, unlike the two answers above.
         using var theme = Theme.Current();

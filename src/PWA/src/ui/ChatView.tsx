@@ -4,6 +4,7 @@ import type { ChatEvent, MachineInfo, SessionInfo } from '../protocol/wire'
 import type { RelayClient } from '../relay/client'
 import { sessionLabel } from '../relay/machines'
 import { AcpContentBlocks, AcpEventView, type AcpDetailLevel } from './AcpEventView'
+import { MarkdownText } from './MarkdownText'
 
 type DetailLevel = AcpDetailLevel
 
@@ -244,13 +245,16 @@ function TranscriptItem({
     const user = item.kind === 'UserMessage'
     return (
       <article
-        className={`min-w-0 max-w-[92%] rounded-xl px-3 py-2.5 text-sm leading-6 ${
-          user ? 'ml-auto bg-sky-600/25 text-sky-50' : 'bg-slate-900 text-slate-200'
+        className={`min-w-0 rounded-2xl px-3 py-2.5 text-sm leading-6 ${
+          user
+            ? 'ml-auto max-w-[92%] border border-slate-700 bg-slate-800 text-slate-100 sm:max-w-[80%]'
+            : 'max-w-full bg-slate-900 text-slate-200'
         }`}
       >
-        {item.text ? (
+        {item.text && user ? (
           <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{item.text}</p>
         ) : null}
+        {item.text && !user ? <MarkdownText>{item.text}</MarkdownText> : null}
         <AcpContentBlocks blocks={item.content} includeText={false} />
       </article>
     )

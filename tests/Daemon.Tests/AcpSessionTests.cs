@@ -37,6 +37,45 @@ public sealed class AcpSessionTests
     }
 
     [Fact]
+    public void LocallyOwnedPromptCreatesABoundaryAndSuppressesAgentEcho()
+    {
+        var session = Create();
+        session.Apply("agent_message_chunk", "answer-1", "First answer", null, null, null);
+
+        ChatEvent prompt = session.AddUserPrompt("Do the next thing");
+        ChatEvent? echoed = session.Apply(
+            "user_message_chunk",
+            "agent-user-1",
+            "Do the next thing",
+            null,
+            null,
+            null);
+        ChatEvent? extraEcho = session.Apply(
+            "user_message_chunk",
+            "agent-user-1",
+            " (mobile)",
+            null,
+            null,
+            null);
+        ChatEvent? answer = session.Apply(
+            "agent_message_chunk",
+            null,
+            "Second answer",
+            null,
+            null,
+            null);
+
+        ChatEvent[] transcript = session.Snapshot();
+        Assert.Null(echoed);
+        Assert.Null(extraEcho);
+        Assert.Equal(3, transcript.Length);
+        Assert.Equal(ChatEventKind.UserMessage, prompt.Kind);
+        Assert.Equal("Do the next thing", transcript[1].Text);
+        Assert.Equal("Second answer", answer!.Text);
+        Assert.NotEqual("answer-1", answer.EventId);
+    }
+
+    [Fact]
     public void ToolUpdatesReplaceToolCallsWithoutLosingPriorFields()
     {
         var session = Create();

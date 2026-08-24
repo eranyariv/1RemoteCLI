@@ -424,4 +424,47 @@ describe('ChatView', () => {
     expect(screen.getByText('Before')).toBeTruthy()
     expect(screen.getByText('After')).toBeTruthy()
   })
+
+  it('renders user prompts distinctly and agent tables as semantic Markdown', () => {
+    render(
+      <ChatView
+        client={relay.client}
+        connected
+        machine={machine}
+        session={session}
+        onClose={() => {}}
+      />,
+    )
+
+    act(() => {
+      relay.emit({
+        sessionId: 'chat-1',
+        seq: 7,
+        kind: 'Snapshot',
+        events: [
+          chatEvent({
+            eventId: 'prompt-1',
+            kind: 'UserMessage',
+            text: 'Do a full issues sweep',
+          }),
+          chatEvent({
+            eventId: 'answer-1',
+            kind: 'AgentMessage',
+            text: [
+              '| Priority | Recommendation |',
+              '| --- | --- |',
+              '| 1 | **Build the plan view** |',
+            ].join('\n'),
+          }),
+        ],
+      })
+    })
+
+    const prompt = screen.getByText('Do a full issues sweep').closest('article')
+    expect(prompt?.className).toContain('ml-auto')
+    expect(prompt?.className).toContain('bg-slate-800')
+    expect(screen.getByRole('table')).toBeTruthy()
+    expect(screen.getByRole('columnheader', { name: 'Priority' })).toBeTruthy()
+    expect(screen.getByRole('cell', { name: 'Build the plan view' }).querySelector('strong')).toBeTruthy()
+  })
 })

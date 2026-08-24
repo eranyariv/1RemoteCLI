@@ -16,6 +16,10 @@ public sealed class AcpSession(
     private readonly Dictionary<string, ChatEvent> _byId = new(StringComparer.Ordinal);
     private string? _openMessageId;
     private ChatEventKind? _openMessageKind;
+    private string? _pendingPromptId;
+    private string? _pendingPromptText;
+    private string? _suppressedPromptEchoMessageId;
+    private int _pendingPromptEchoLength;
     private long _syntheticId;
     private long _seq;
 
@@ -68,6 +72,7 @@ public sealed class AcpSession(
             _byId.Clear();
             _openMessageId = null;
             _openMessageKind = null;
+            ClearPendingPromptEcho();
             _seq++;
             AwaitingInput = false;
         }
@@ -89,9 +94,15 @@ public sealed class AcpSession(
     {
         lock (_gate)
         {
+            if (updateKind is not "user_message" and not "user_message_chunk")
+            {
+                ClearPendingPromptEcho(clearMessageId: true);
+            }
+
             ChatEvent? changed = updateKind switch
             {
-                "user_message_chunk" => ApplyMessage(ChatEventKind.UserMessage, id, text, content),
+                "user_message" => ApplyUserMessage(id, text, content, replace: true),
+                "user_message_chunk" => ApplyUserMessage(id, text, content, replace: false),
                 "agent_message_chunk" => ApplyMessage(ChatEventKind.AgentMessage, id, text, content),
                 "agent_thought_chunk" => ApplyMessage(ChatEventKind.AgentThought, id, text, content),
                 "tool_call" or "tool_call_update" => ApplyTool(
@@ -115,6 +126,39 @@ public sealed class AcpSession(
             }
 
             return changed is null ? null : Copy(changed);
+        }
+    }
+
+    /// <summary>
+    /// Adds the prompt owned by this ACP client before the agent starts streaming.
+    /// Some ACP agents replay user messages on load but do not echo a live
+    /// <c>session/prompt</c>, so waiting for an update loses both the bubble and the
+    /// boundary between adjacent assistant turns.
+    /// </summary>
+    public ChatEvent AddUserPrompt(string text)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(text);
+
+        lock (_gate)
+        {
+            string eventId = $"prompt:{++_syntheticId}";
+            var item = new ChatEvent
+            {
+                EventId = eventId,
+                Kind = ChatEventKind.UserMessage,
+                Text = text,
+            };
+
+            Upsert(item);
+            _openMessageId = eventId;
+            _openMessageKind = ChatEventKind.UserMessage;
+            _pendingPromptId = eventId;
+            _pendingPromptText = text;
+            _suppressedPromptEchoMessageId = null;
+            _pendingPromptEchoLength = 0;
+            _seq++;
+            UpdatedAt = DateTimeOffset.UtcNow;
+            return Copy(item);
         }
     }
 
@@ -271,6 +315,82 @@ public sealed class AcpSession(
         _openMessageId = id;
         _openMessageKind = kind;
         return item;
+    }
+
+    private ChatEvent? ApplyUserMessage(
+        string? messageId,
+        string? text,
+        ChatContentBlock[]? content,
+        bool replace)
+    {
+        if (SuppressPromptEcho(messageId, text, replace))
+        {
+            return null;
+        }
+
+        ChatEvent item = ApplyMessage(ChatEventKind.UserMessage, messageId, text, content);
+        if (replace)
+        {
+            item.Text = text ?? string.Empty;
+            item.Content = content is null ? item.Content : [.. content.Select(Copy)];
+        }
+        return item;
+    }
+
+    private bool SuppressPromptEcho(string? messageId, string? text, bool replace)
+    {
+        if (_pendingPromptId is null &&
+            _suppressedPromptEchoMessageId is not null &&
+            messageId == _suppressedPromptEchoMessageId)
+        {
+            return true;
+        }
+
+        if (_pendingPromptId is null ||
+            _pendingPromptText is null ||
+            !_byId.ContainsKey(_pendingPromptId) ||
+            string.IsNullOrEmpty(text))
+        {
+            ClearPendingPromptEcho(clearMessageId: true);
+            return false;
+        }
+
+        bool matches = replace
+            ? text == _pendingPromptText
+            : _pendingPromptText.AsSpan(_pendingPromptEchoLength).StartsWith(text, StringComparison.Ordinal);
+        if (!matches)
+        {
+            bool belongsToPrompt =
+                _suppressedPromptEchoMessageId is not null &&
+                messageId == _suppressedPromptEchoMessageId;
+            ClearPendingPromptEcho(clearMessageId: !belongsToPrompt);
+            return belongsToPrompt;
+        }
+
+        if (!string.IsNullOrWhiteSpace(messageId))
+        {
+            _suppressedPromptEchoMessageId = messageId;
+        }
+
+        _pendingPromptEchoLength = replace
+            ? _pendingPromptText.Length
+            : _pendingPromptEchoLength + text.Length;
+        if (_pendingPromptEchoLength >= _pendingPromptText.Length)
+        {
+            ClearPendingPromptEcho(clearMessageId: false);
+        }
+        return true;
+    }
+
+    private void ClearPendingPromptEcho(bool clearMessageId = true)
+    {
+        _pendingPromptId = null;
+        _pendingPromptText = null;
+        _pendingPromptEchoLength = 0;
+        if (clearMessageId)
+        {
+            _suppressedPromptEchoMessageId = null;
+        }
     }
 
     private ChatEvent? ApplyTool(

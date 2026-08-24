@@ -247,43 +247,70 @@ public sealed class AcpProvider : IAsyncDisposable
     public void StartPrompt(string sessionId, string text)
     {
         AcpSession session = Get(sessionId);
-        string prompt = text.Trim();
+        string prompt = NormalizePrompt(text);
 
+        _ = RunPromptAsync(session, prompt, CancellationToken.None);
+    }
+
+    internal Task PromptAsync(
+        string sessionId,
+        string text,
+        CancellationToken cancellationToken = default) =>
+        RunPromptAsync(Get(sessionId), NormalizePrompt(text), cancellationToken);
+
+    private async Task RunPromptAsync(
+        AcpSession session,
+        string prompt,
+        CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _activeTurns);
+
+        try
+        {
+            await EnsureLoadedAsync(session, cancellationToken).ConfigureAwait(false);
+            ChatEvent userMessage = session.AddUserPrompt(prompt);
+            if (_sink is not null)
+            {
+                await _sink.OnChatTranscriptAsync(
+                    session,
+                    ChatTranscriptKind.Delta,
+                    [userMessage],
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+
+            await CallAsync(
+                "session/prompt",
+                new JsonObject
+                {
+                    ["sessionId"] = session.SessionId,
+                    ["prompt"] = new JsonArray(
+                        new JsonObject
+                        {
+                            ["type"] = "text",
+                            ["text"] = prompt,
+                        }),
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log?.Invoke($"chat: prompt for {session.SessionId} failed ({ex.Message}).");
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _activeTurns);
+        }
+    }
+
+    private static string NormalizePrompt(string text)
+    {
+        string prompt = text.Trim();
         if (prompt.Length == 0)
         {
             throw new ArgumentException("A chat message cannot be empty.", nameof(text));
         }
 
-        _ = Task.Run(async () =>
-        {
-            Interlocked.Increment(ref _activeTurns);
-
-            try
-            {
-                await EnsureLoadedAsync(session, CancellationToken.None).ConfigureAwait(false);
-                await Client.CallAsync(
-                    "session/prompt",
-                    new JsonObject
-                    {
-                        ["sessionId"] = session.SessionId,
-                        ["prompt"] = new JsonArray(
-                            new JsonObject
-                            {
-                                ["type"] = "text",
-                                ["text"] = prompt,
-                            }),
-                    },
-                    CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                _log?.Invoke($"chat: prompt for {session.SessionId} failed ({ex.Message}).");
-            }
-            finally
-            {
-                Interlocked.Decrement(ref _activeTurns);
-            }
-        }, CancellationToken.None);
+        return prompt;
     }
 
     public async Task RespondPermissionAsync(

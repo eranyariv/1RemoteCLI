@@ -319,6 +319,47 @@ public sealed class AcpProviderTests
         Assert.Equal("completed", plan.PlanEntries[0].Status);
     }
 
+    [Fact]
+    public async Task PublishesPromptAsAUserTurnBeforeCallingAcp()
+    {
+        RecordingPromptSink? sink = null;
+        var calls = new List<(string Method, JsonObject Parameters)>();
+
+        Task<JsonElement> Call(
+            string method,
+            JsonObject parameters,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            calls.Add((method, parameters));
+            return Task.FromResult(method switch
+            {
+                "session/new" => JsonSerializer.SerializeToElement(new { sessionId = "prompted" }),
+                "session/prompt" when sink?.Events.Count == 1 =>
+                    JsonSerializer.SerializeToElement(new { stopReason = "end_turn" }),
+                "session/prompt" => throw new InvalidOperationException("Prompt was not published first."),
+                _ => throw new InvalidOperationException(method),
+            });
+        }
+
+        await using var provider = new AcpProvider(Call);
+        sink = new RecordingPromptSink();
+        provider.AttachSink(sink);
+        AcpSession session = await provider.CreateAsync(@"C:\repo", "Prompted");
+        session.Loaded = true;
+
+        await provider.PromptAsync("prompted", "  Continue from the phone  ");
+
+        ChatEvent user = Assert.Single(sink.Events);
+        Assert.Equal(ChatEventKind.UserMessage, user.Kind);
+        Assert.Equal("Continue from the phone", user.Text);
+        Assert.Equal("session/prompt", calls[^1].Method);
+        Assert.Equal(
+            "Continue from the phone",
+            calls[^1].Parameters["prompt"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal("Continue from the phone", Assert.Single(session.Snapshot()).Text);
+    }
+
     private static JsonElement Page(int start, int count, string? nextCursor)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
@@ -378,6 +419,45 @@ public sealed class AcpProviderTests
         {
             Assert.Equal(ChatTranscriptKind.Snapshot, kind);
             TranscriptTargets.Add(targetConnectionId);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask OnChatAttentionAsync(
+            AcpSession session,
+            bool awaitingInput,
+            string? hint,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.CompletedTask;
+    }
+
+    private sealed class RecordingPromptSink : IAgentChatSink
+    {
+        public List<ChatEvent> Events { get; } = [];
+
+        public ValueTask OnChatOpenedAsync(
+            AcpSession session,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnChatUpdatedAsync(
+            AcpSession session,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnChatClosedAsync(
+            AcpSession session,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnChatTranscriptAsync(
+            AcpSession session,
+            ChatTranscriptKind kind,
+            ChatEvent[] events,
+            string? targetConnectionId = null,
+            CancellationToken cancellationToken = default)
+        {
+            Assert.Equal(ChatTranscriptKind.Delta, kind);
+            Events.AddRange(events);
             return ValueTask.CompletedTask;
         }
 

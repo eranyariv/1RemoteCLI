@@ -270,12 +270,54 @@ public sealed class WireContractTests
                 },
                 new ChatEvent
                 {
+                    EventId = "thought-1",
+                    Kind = ChatEventKind.AgentThought,
+                    Text = "Inspecting the project",
+                },
+                new ChatEvent
+                {
                     EventId = "tool-1",
                     Kind = ChatEventKind.ToolCall,
                     Title = "Run tests",
                     Text = "dotnet test",
                     Status = "pending",
-                    ToolKind = "shell",
+                    ToolKind = "execute",
+                    Content =
+                    [
+                        new ChatContentBlock
+                        {
+                            Type = "diff",
+                            Path = "tests/ExampleTests.cs",
+                            OldText = "Assert.False(result);",
+                            NewText = "Assert.True(result);",
+                        },
+                    ],
+                    Locations =
+                    [
+                        new ChatToolLocation { Path = "tests/ExampleTests.cs", Line = 42 },
+                    ],
+                    RawInputJson = """{"command":"dotnet test"}""",
+                },
+                new ChatEvent
+                {
+                    EventId = "plan",
+                    Kind = ChatEventKind.Plan,
+                    Title = "Plan",
+                    PlanEntries =
+                    [
+                        new ChatPlanEntry
+                        {
+                            Content = "Inspect the tests",
+                            Priority = "high",
+                            Status = "completed",
+                        },
+                        new ChatPlanEntry
+                        {
+                            Content = "Run the tests",
+                            Priority = "medium",
+                            Status = "in_progress",
+                        },
+                    ],
                 },
                 new ChatEvent
                 {

@@ -261,16 +261,30 @@ describe('decoding what the hub sends', () => {
     expect(transcript.kind).toBe('Snapshot')
     expect(transcript.events.map((event) => event.kind)).toEqual([
       'UserMessage',
+      'AgentThought',
       'ToolCall',
+      'Plan',
       'Permission',
       'Permission',
     ])
-    expect(transcript.events[2].permissionRequestId).toBe('req-1')
-    expect(transcript.events[2].options).toEqual([
+    expect(transcript.events[2].content[0]).toMatchObject({
+      type: 'diff',
+      path: 'tests/ExampleTests.cs',
+    })
+    expect(transcript.events[2].locations).toEqual([
+      { path: 'tests/ExampleTests.cs', line: 42 },
+    ])
+    expect(transcript.events[3].planEntries[1]).toEqual({
+      content: 'Run the tests',
+      priority: 'medium',
+      status: 'in_progress',
+    })
+    expect(transcript.events[4].permissionRequestId).toBe('req-1')
+    expect(transcript.events[4].options).toEqual([
       { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
       { optionId: 'reject-once', name: 'Deny', kind: 'reject_once' },
     ])
-    expect(transcript.events[3].options[1].name).toBe('SQLite')
+    expect(transcript.events[5].options[1].name).toBe('SQLite')
   })
 
   it('reads a token expiry', () => {

@@ -41,14 +41,68 @@ public sealed class AcpSessionTests
     {
         var session = Create();
 
-        session.Apply("tool_call", "tool-1", "dotnet test", "Run tests", "pending", "shell");
-        ChatEvent? changed = session.Apply("tool_call_update", "tool-1", null, null, "completed", null);
+        session.Apply(
+            "tool_call",
+            "tool-1",
+            "dotnet test",
+            "Run tests",
+            "pending",
+            "execute",
+            content: [new() { Type = "text", Text = "Starting tests" }],
+            locations: [new() { Path = @"C:\repo\Tests.cs", Line = 42 }],
+            rawInputJson: """{"command":"dotnet test"}""");
+        ChatEvent? changed = session.Apply(
+            "tool_call_update",
+            "tool-1",
+            "All tests passed",
+            null,
+            "completed",
+            null,
+            content: [new() { Type = "text", Text = "All tests passed" }],
+            rawOutputJson: """{"exitCode":0}""");
 
         ChatEvent item = Assert.Single(session.Snapshot());
         Assert.Equal("Run tests", item.Title);
-        Assert.Equal("dotnet test", item.Text);
+        Assert.Equal("All tests passed", item.Text);
         Assert.Equal("completed", changed!.Status);
-        Assert.Equal("shell", item.ToolKind);
+        Assert.Equal("execute", item.ToolKind);
+        Assert.Equal("All tests passed", Assert.Single(item.Content).Text);
+        Assert.Equal(42, Assert.Single(item.Locations).Line);
+        Assert.Equal("""{"command":"dotnet test"}""", item.RawInputJson);
+        Assert.Equal("""{"exitCode":0}""", item.RawOutputJson);
+    }
+
+    [Fact]
+    public void ThoughtsAndPlansRemainDistinctFromAgentMessages()
+    {
+        var session = Create();
+
+        ChatEvent? thought = session.Apply(
+            "agent_thought_chunk",
+            "thought-1",
+            "Inspecting the project",
+            null,
+            null,
+            null,
+            content: [new() { Type = "text", Text = "Inspecting the project" }]);
+        ChatEvent? plan = session.Apply(
+            "plan",
+            null,
+            null,
+            null,
+            null,
+            null,
+            planEntries:
+            [
+                new() { Content = "Read the project", Priority = "high", Status = "completed" },
+                new() { Content = "Run tests", Priority = "medium", Status = "in_progress" },
+            ]);
+
+        Assert.Equal(ChatEventKind.AgentThought, thought!.Kind);
+        Assert.Equal("Inspecting the project", thought.Text);
+        Assert.Equal(ChatEventKind.Plan, plan!.Kind);
+        Assert.Equal(2, plan.PlanEntries.Length);
+        Assert.Equal("Run tests", plan.PlanEntries[1].Content);
     }
 
     [Fact]

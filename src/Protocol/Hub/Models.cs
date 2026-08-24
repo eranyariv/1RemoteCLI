@@ -33,6 +33,8 @@ public enum ChatEventKind : byte
     AgentMessage = 1,
     ToolCall = 2,
     Permission = 3,
+    AgentThought = 4,
+    Plan = 5,
 }
 
 /// <summary>One choice offered by an ACP permission or elicitation request.</summary>
@@ -47,6 +49,78 @@ public sealed class ChatPermissionOption
 
     [Key(2)]
     public string Kind { get; set; } = string.Empty;
+}
+
+/// <summary>One displayable ACP content block, flattened for the relay wire.</summary>
+[MessagePackObject]
+public sealed class ChatContentBlock
+{
+    [Key(0)]
+    public string Type { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string? Text { get; set; }
+
+    [Key(2)]
+    public string? Path { get; set; }
+
+    [Key(3)]
+    public string? OldText { get; set; }
+
+    [Key(4)]
+    public string? NewText { get; set; }
+
+    [Key(5)]
+    public string? TerminalId { get; set; }
+
+    [Key(6)]
+    public string? MimeType { get; set; }
+
+    [Key(7)]
+    public string? Data { get; set; }
+
+    [Key(8)]
+    public string? Uri { get; set; }
+
+    [Key(9)]
+    public string? Name { get; set; }
+
+    [Key(10)]
+    public string? Title { get; set; }
+
+    [Key(11)]
+    public string? Description { get; set; }
+
+    [Key(12)]
+    public long? Size { get; set; }
+
+    [Key(13)]
+    public string? RawJson { get; set; }
+}
+
+/// <summary>A file location associated with an ACP tool call.</summary>
+[MessagePackObject]
+public sealed class ChatToolLocation
+{
+    [Key(0)]
+    public string Path { get; set; } = string.Empty;
+
+    [Key(1)]
+    public int? Line { get; set; }
+}
+
+/// <summary>One entry in the latest ACP plan snapshot.</summary>
+[MessagePackObject]
+public sealed class ChatPlanEntry
+{
+    [Key(0)]
+    public string Content { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string Priority { get; set; } = "medium";
+
+    [Key(2)]
+    public string Status { get; set; } = "pending";
 }
 
 /// <summary>
@@ -78,6 +152,21 @@ public sealed class ChatEvent
 
     [Key(7)]
     public ChatPermissionOption[] Options { get; set; } = [];
+
+    [Key(8)]
+    public ChatContentBlock[] Content { get; set; } = [];
+
+    [Key(9)]
+    public ChatToolLocation[] Locations { get; set; } = [];
+
+    [Key(10)]
+    public ChatPlanEntry[] PlanEntries { get; set; } = [];
+
+    [Key(11)]
+    public string? RawInputJson { get; set; }
+
+    [Key(12)]
+    public string? RawOutputJson { get; set; }
 }
 
 /// <summary>

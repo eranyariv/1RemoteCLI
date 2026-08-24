@@ -74,15 +74,37 @@ public sealed class AcpSession(
     }
 
     /// <summary>Applies one ACP session update and returns the replacement item to relay.</summary>
-    public ChatEvent? Apply(string updateKind, string? id, string? text, string? title, string? status, string? toolKind)
+    public ChatEvent? Apply(
+        string updateKind,
+        string? id,
+        string? text,
+        string? title,
+        string? status,
+        string? toolKind,
+        ChatContentBlock[]? content = null,
+        ChatToolLocation[]? locations = null,
+        ChatPlanEntry[]? planEntries = null,
+        string? rawInputJson = null,
+        string? rawOutputJson = null)
     {
         lock (_gate)
         {
             ChatEvent? changed = updateKind switch
             {
-                "user_message_chunk" => ApplyMessage(ChatEventKind.UserMessage, id, text),
-                "agent_message_chunk" => ApplyMessage(ChatEventKind.AgentMessage, id, text),
-                "tool_call" or "tool_call_update" => ApplyTool(id, text, title, status, toolKind),
+                "user_message_chunk" => ApplyMessage(ChatEventKind.UserMessage, id, text, content),
+                "agent_message_chunk" => ApplyMessage(ChatEventKind.AgentMessage, id, text, content),
+                "agent_thought_chunk" => ApplyMessage(ChatEventKind.AgentThought, id, text, content),
+                "tool_call" or "tool_call_update" => ApplyTool(
+                    id,
+                    text,
+                    title,
+                    status,
+                    toolKind,
+                    content,
+                    locations,
+                    rawInputJson,
+                    rawOutputJson),
+                "plan" => ApplyPlan(planEntries),
                 _ => null,
             };
 
@@ -223,7 +245,11 @@ public sealed class AcpSession(
         }
     }
 
-    private ChatEvent ApplyMessage(ChatEventKind kind, string? messageId, string? text)
+    private ChatEvent ApplyMessage(
+        ChatEventKind kind,
+        string? messageId,
+        string? text,
+        ChatContentBlock[]? content)
     {
         string id = !string.IsNullOrWhiteSpace(messageId)
             ? messageId
@@ -238,6 +264,10 @@ public sealed class AcpSession(
         }
 
         item.Text += text ?? string.Empty;
+        if (content is not null)
+        {
+            item.Content = [.. item.Content, .. content.Select(Copy)];
+        }
         _openMessageId = id;
         _openMessageKind = kind;
         return item;
@@ -248,7 +278,11 @@ public sealed class AcpSession(
         string? detail,
         string? title,
         string? status,
-        string? toolKind)
+        string? toolKind,
+        ChatContentBlock[]? content,
+        ChatToolLocation[]? locations,
+        string? rawInputJson,
+        string? rawOutputJson)
     {
         if (string.IsNullOrWhiteSpace(toolCallId))
         {
@@ -285,6 +319,47 @@ public sealed class AcpSession(
             item.ToolKind = toolKind;
         }
 
+        if (content is not null)
+        {
+            item.Content = [.. content.Select(Copy)];
+        }
+
+        if (locations is not null)
+        {
+            item.Locations = [.. locations.Select(Copy)];
+        }
+
+        if (rawInputJson is not null)
+        {
+            item.RawInputJson = rawInputJson;
+        }
+
+        if (rawOutputJson is not null)
+        {
+            item.RawOutputJson = rawOutputJson;
+        }
+
+        _openMessageId = null;
+        _openMessageKind = null;
+        return item;
+    }
+
+    private ChatEvent ApplyPlan(ChatPlanEntry[]? entries)
+    {
+        const string id = "plan";
+        if (!_byId.TryGetValue(id, out ChatEvent? item))
+        {
+            item = new ChatEvent
+            {
+                EventId = id,
+                Kind = ChatEventKind.Plan,
+                Title = "Plan",
+            };
+            Upsert(item);
+        }
+
+        item.PlanEntries = entries is null ? [] : [.. entries.Select(Copy)];
+        item.Text = string.Join(Environment.NewLine, item.PlanEntries.Select(entry => entry.Content));
         _openMessageId = null;
         _openMessageKind = null;
         return item;
@@ -324,5 +399,35 @@ public sealed class AcpSession(
                     Kind = option.Kind,
                 }),
             ],
+            Content = [.. item.Content.Select(Copy)],
+            Locations = [.. item.Locations.Select(Copy)],
+            PlanEntries = [.. item.PlanEntries.Select(Copy)],
+            RawInputJson = item.RawInputJson,
+            RawOutputJson = item.RawOutputJson,
         };
+
+    private static ChatContentBlock Copy(ChatContentBlock item) =>
+        new()
+        {
+            Type = item.Type,
+            Text = item.Text,
+            Path = item.Path,
+            OldText = item.OldText,
+            NewText = item.NewText,
+            TerminalId = item.TerminalId,
+            MimeType = item.MimeType,
+            Data = item.Data,
+            Uri = item.Uri,
+            Name = item.Name,
+            Title = item.Title,
+            Description = item.Description,
+            Size = item.Size,
+            RawJson = item.RawJson,
+        };
+
+    private static ChatToolLocation Copy(ChatToolLocation item) =>
+        new() { Path = item.Path, Line = item.Line };
+
+    private static ChatPlanEntry Copy(ChatPlanEntry item) =>
+        new() { Content = item.Content, Priority = item.Priority, Status = item.Status };
 }

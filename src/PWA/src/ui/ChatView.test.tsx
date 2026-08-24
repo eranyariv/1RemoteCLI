@@ -1,7 +1,14 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { ChatTranscript, HubError, MachineInfo, SessionInfo } from '../protocol/wire'
+import type {
+  ChatContentBlock,
+  ChatEvent,
+  ChatTranscript,
+  HubError,
+  MachineInfo,
+  SessionInfo,
+} from '../protocol/wire'
 import type { RelayClient } from '../relay/client'
 import { ChatView } from './ChatView'
 
@@ -57,6 +64,45 @@ const session: SessionInfo = {
   projectId: null,
 }
 
+function chatEvent(
+  item: Pick<ChatEvent, 'eventId' | 'kind' | 'text'> & Partial<ChatEvent>,
+): ChatEvent {
+  return {
+    title: null,
+    status: null,
+    toolKind: null,
+    permissionRequestId: null,
+    options: [],
+    content: [],
+    locations: [],
+    planEntries: [],
+    rawInputJson: null,
+    rawOutputJson: null,
+    ...item,
+  }
+}
+
+function contentBlock(
+  item: Pick<ChatContentBlock, 'type'> & Partial<ChatContentBlock>,
+): ChatContentBlock {
+  return {
+    text: null,
+    path: null,
+    oldText: null,
+    newText: null,
+    terminalId: null,
+    mimeType: null,
+    data: null,
+    uri: null,
+    name: null,
+    title: null,
+    description: null,
+    size: null,
+    rawJson: null,
+    ...item,
+  }
+}
+
 describe('ChatView', () => {
   let relay: FakeRelay
 
@@ -86,16 +132,11 @@ describe('ChatView', () => {
         seq: 1,
         kind: 'Snapshot',
         events: [
-          {
+          chatEvent({
             eventId: 'answer',
             kind: 'AgentMessage',
             text: 'Working',
-            title: null,
-            status: null,
-            toolKind: null,
-            permissionRequestId: null,
-            options: [],
-          },
+          }),
         ],
       })
 
@@ -109,16 +150,11 @@ describe('ChatView', () => {
         seq: 2,
         kind: 'Delta',
         events: [
-          {
+          chatEvent({
             eventId: 'answer',
             kind: 'AgentMessage',
             text: 'Done',
-            title: null,
-            status: null,
-            toolKind: null,
-            permissionRequestId: null,
-            options: [],
-          },
+          }),
         ],
       })
     })
@@ -215,7 +251,7 @@ describe('ChatView', () => {
         seq: 3,
         kind: 'Delta',
         events: [
-          {
+          chatEvent({
             eventId: 'permission:req-1',
             kind: 'Permission',
             text: 'Approval required',
@@ -227,7 +263,7 @@ describe('ChatView', () => {
               { optionId: 'yes', name: 'Allow once', kind: 'allow_once' },
               { optionId: 'no', name: 'Deny', kind: 'reject_once' },
             ],
-          },
+          }),
         ],
       })
     })
@@ -255,7 +291,7 @@ describe('ChatView', () => {
         seq: 4,
         kind: 'Delta',
         events: [
-          {
+          chatEvent({
             eventId: 'elicitation:req-2',
             kind: 'Permission',
             text: 'Which database should I use?',
@@ -267,7 +303,7 @@ describe('ChatView', () => {
               { optionId: 'postgres', name: 'PostgreSQL', kind: 'select' },
               { optionId: 'sqlite', name: 'SQLite', kind: 'select' },
             ],
-          },
+          }),
         ],
       })
     })
@@ -299,7 +335,7 @@ describe('ChatView', () => {
         seq: 5,
         kind: 'Snapshot',
         events: [
-          {
+          chatEvent({
             eventId: 'tool-1',
             kind: 'ToolCall',
             text: 'A very long tool result',
@@ -308,7 +344,7 @@ describe('ChatView', () => {
             toolKind: 'read',
             permissionRequestId: null,
             options: [],
-          },
+          }),
         ],
       })
     })
@@ -321,5 +357,71 @@ describe('ChatView', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Compact' }))
     expect(screen.queryByText('Inspect files')).toBeNull()
+  })
+
+  it('renders AionUi-style thoughts, plans, locations, and diffs', () => {
+    render(
+      <ChatView
+        client={relay.client}
+        connected
+        machine={machine}
+        session={session}
+        onClose={() => {}}
+      />,
+    )
+
+    act(() => {
+      relay.emit({
+        sessionId: 'chat-1',
+        seq: 6,
+        kind: 'Snapshot',
+        events: [
+          chatEvent({
+            eventId: 'thought-1',
+            kind: 'AgentThought',
+            text: 'Inspecting the settings',
+          }),
+          chatEvent({
+            eventId: 'plan',
+            kind: 'Plan',
+            text: '',
+            planEntries: [
+              { content: 'Read settings', priority: 'high', status: 'completed' },
+              { content: 'Edit settings', priority: 'medium', status: 'in_progress' },
+            ],
+          }),
+          chatEvent({
+            eventId: 'tool-2',
+            kind: 'ToolCall',
+            text: 'Changed settings.json',
+            title: 'Edit settings',
+            status: 'completed',
+            toolKind: 'edit',
+            locations: [{ path: 'C:\\repo\\settings.json', line: 7 }],
+            content: [
+              contentBlock({
+                type: 'diff',
+                path: 'C:\\repo\\settings.json',
+                oldText: '{"enabled":false}',
+                newText: '{"enabled":true}',
+              }),
+            ],
+          }),
+        ],
+      })
+    })
+
+    expect(screen.queryByText('Inspecting the settings')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Thought' }))
+    expect(screen.getByText('Inspecting the settings')).toBeTruthy()
+
+    expect(screen.getByText('1/2')).toBeTruthy()
+    expect(screen.getByText('Read settings')).toBeTruthy()
+    expect(screen.getAllByText('Edit settings')).toHaveLength(2)
+
+    fireEvent.click(screen.getByRole('button', { name: /Edit settings.*completed/ }))
+    expect(screen.getByText('settings.json:7')).toBeTruthy()
+    expect(screen.getByText('Before')).toBeTruthy()
+    expect(screen.getByText('After')).toBeTruthy()
   })
 })

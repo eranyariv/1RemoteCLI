@@ -591,19 +591,30 @@ public sealed class AcpProvider : IAsyncDisposable
             return;
         }
 
-        ChatEvent? changed = session.Apply(
-            kind,
-            String(update, "messageId") ?? String(update, "toolCallId"),
-            Content(update),
-            String(update, "title"),
-            String(update, "status"),
-            String(update, "kind"));
+        ChatEvent? changed = ApplyUpdate(session, kind, update);
 
         if (changed is not null && session.Loaded && _sink is not null)
         {
             await _sink.OnChatTranscriptAsync(session, ChatTranscriptKind.Delta, [changed])
                 .ConfigureAwait(false);
         }
+    }
+
+    internal static ChatEvent? ApplyUpdate(AcpSession session, string kind, JsonElement update)
+    {
+        ChatContentBlock[]? content = Content(update);
+        return session.Apply(
+            kind,
+            String(update, "messageId") ?? String(update, "toolCallId"),
+            ContentText(content),
+            String(update, "title"),
+            String(update, "status"),
+            String(update, "kind"),
+            content,
+            Locations(update),
+            PlanEntries(update),
+            Json(update, "rawInput"),
+            Json(update, "rawOutput"));
     }
 
     private async ValueTask OnPermissionRequestedAsync(JsonElement rpcId, JsonElement parameters)
@@ -728,40 +739,177 @@ public sealed class AcpProvider : IAsyncDisposable
     private static DateTimeOffset? Date(JsonElement value, string property) =>
         DateTimeOffset.TryParse(String(value, property), out DateTimeOffset parsed) ? parsed : null;
 
-    private static string? Content(JsonElement update)
-    {
-        if (update.TryGetProperty("content", out JsonElement content))
-        {
-            if (content.ValueKind == JsonValueKind.Object &&
-                String(content, "type") == "text")
-            {
-                return String(content, "text");
-            }
+    private static string? Json(JsonElement value, string property) =>
+        value.ValueKind == JsonValueKind.Object &&
+        value.TryGetProperty(property, out JsonElement found) &&
+        found.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined
+            ? found.GetRawText()
+            : null;
 
-            if (content.ValueKind == JsonValueKind.Array)
-            {
-                return string.Join(
-                    Environment.NewLine,
-                    content.EnumerateArray().Select(ReadContent).Where(text => text.Length > 0));
-            }
+    private static ChatContentBlock[]? Content(JsonElement update)
+    {
+        if (!update.TryGetProperty("content", out JsonElement content))
+        {
+            return null;
         }
 
-        return null;
+        if (content.ValueKind == JsonValueKind.Object)
+        {
+            ChatContentBlock? block = ReadContent(content);
+            return block is null ? [] : [block];
+        }
+
+        if (content.ValueKind == JsonValueKind.Array)
+        {
+            var blocks = new List<ChatContentBlock>();
+            foreach (JsonElement item in content.EnumerateArray())
+            {
+                if (ReadContent(item) is { } block)
+                {
+                    blocks.Add(block);
+                }
+            }
+
+            return [.. blocks];
+        }
+
+        return [];
     }
 
-    private static string ReadContent(JsonElement item)
+    private static ChatContentBlock? ReadContent(JsonElement item)
     {
-        if (String(item, "type") == "diff")
+        if (item.ValueKind != JsonValueKind.Object)
         {
-            return String(item, "path") is { } path ? $"Changed {path}" : "Changed a file";
+            return null;
         }
 
-        if (item.TryGetProperty("content", out JsonElement nested))
+        string type = String(item, "type") ?? "unknown";
+        if (type == "content" &&
+            item.TryGetProperty("content", out JsonElement nested))
         {
-            return String(nested, "text") ?? string.Empty;
+            return ReadContent(nested);
         }
 
-        return String(item, "text") ?? string.Empty;
+        if (type == "resource" &&
+            item.TryGetProperty("resource", out JsonElement resource) &&
+            resource.ValueKind == JsonValueKind.Object)
+        {
+            return new ChatContentBlock
+            {
+                Type = type,
+                Text = String(resource, "text"),
+                Data = String(resource, "blob"),
+                Uri = String(resource, "uri"),
+                MimeType = String(resource, "mimeType"),
+            };
+        }
+
+        return new ChatContentBlock
+        {
+            Type = type,
+            Text = String(item, "text"),
+            Path = String(item, "path"),
+            OldText = String(item, "oldText") ?? String(item, "old_text"),
+            NewText = String(item, "newText") ?? String(item, "new_text"),
+            TerminalId = String(item, "terminalId") ?? String(item, "terminal_id"),
+            MimeType = String(item, "mimeType") ?? String(item, "mime_type"),
+            Data = String(item, "data"),
+            Uri = String(item, "uri"),
+            Name = String(item, "name"),
+            Title = String(item, "title"),
+            Description = String(item, "description"),
+            Size = Integer(item, "size"),
+            RawJson = type is "text" or "image" or "audio" or "resource_link" or "diff" or "terminal"
+                ? null
+                : item.GetRawText(),
+        };
+    }
+
+    private static string? ContentText(ChatContentBlock[]? content)
+    {
+        if (content is null)
+        {
+            return null;
+        }
+
+        string[] lines =
+        [
+            .. content.Select(item => item.Type switch
+            {
+                "text" => item.Text,
+                "diff" => item.Path is { Length: > 0 } path ? $"Changed {path}" : "Changed a file",
+                "terminal" => item.TerminalId is { Length: > 0 } terminalId
+                    ? $"Terminal {terminalId}"
+                    : "Terminal output",
+                "resource" or "resource_link" => item.Name ?? item.Uri ?? item.Text,
+                _ => item.Text,
+            }).Where(text => !string.IsNullOrWhiteSpace(text))!,
+        ];
+
+        return lines.Length == 0 ? null : string.Join(Environment.NewLine, lines);
+    }
+
+    private static ChatToolLocation[]? Locations(JsonElement update)
+    {
+        if (!update.TryGetProperty("locations", out JsonElement locations))
+        {
+            return null;
+        }
+
+        if (locations.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        return
+        [
+            .. locations.EnumerateArray()
+                .Select(item => new ChatToolLocation
+                {
+                    Path = String(item, "path") ?? string.Empty,
+                    Line = LineNumber(item),
+                })
+                .Where(item => item.Path.Length > 0),
+        ];
+    }
+
+    private static ChatPlanEntry[]? PlanEntries(JsonElement update)
+    {
+        if (!update.TryGetProperty("entries", out JsonElement entries))
+        {
+            return null;
+        }
+
+        if (entries.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        return
+        [
+            .. entries.EnumerateArray()
+                .Select(item => new ChatPlanEntry
+                {
+                    Content = String(item, "content") ?? string.Empty,
+                    Priority = String(item, "priority") ?? "medium",
+                    Status = String(item, "status") ?? "pending",
+                })
+                .Where(item => item.Content.Length > 0),
+        ];
+    }
+
+    private static long? Integer(JsonElement value, string property) =>
+        value.ValueKind == JsonValueKind.Object &&
+        value.TryGetProperty(property, out JsonElement found) &&
+        found.ValueKind == JsonValueKind.Number &&
+        found.TryGetInt64(out long parsed)
+            ? parsed
+            : null;
+
+    private static int? LineNumber(JsonElement value)
+    {
+        long? line = Integer(value, "line");
+        return line is >= int.MinValue and <= int.MaxValue ? (int)line.Value : null;
     }
 
     public async ValueTask DisposeAsync()

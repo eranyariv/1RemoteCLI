@@ -22,7 +22,13 @@
 export type TerminalOutputKind = 'Delta' | 'Snapshot'
 export type SessionKind = 'Terminal' | 'AgentChat'
 export type ChatTranscriptKind = 'Delta' | 'Snapshot'
-export type ChatEventKind = 'UserMessage' | 'AgentMessage' | 'ToolCall' | 'Permission'
+export type ChatEventKind =
+  | 'UserMessage'
+  | 'AgentMessage'
+  | 'ToolCall'
+  | 'Permission'
+  | 'AgentThought'
+  | 'Plan'
 
 /**
  * Matches `CliType`. Which program a session is hosting, as far as the agent could
@@ -105,6 +111,34 @@ export interface ChatPermissionOption {
   kind: string
 }
 
+export interface ChatContentBlock {
+  type: string
+  text: string | null
+  path: string | null
+  oldText: string | null
+  newText: string | null
+  terminalId: string | null
+  mimeType: string | null
+  data: string | null
+  uri: string | null
+  name: string | null
+  title: string | null
+  description: string | null
+  size: number | null
+  rawJson: string | null
+}
+
+export interface ChatToolLocation {
+  path: string
+  line: number | null
+}
+
+export interface ChatPlanEntry {
+  content: string
+  priority: string
+  status: string
+}
+
 export interface ChatEvent {
   eventId: string
   kind: ChatEventKind
@@ -114,6 +148,11 @@ export interface ChatEvent {
   toolKind: string | null
   permissionRequestId: string | null
   options: ChatPermissionOption[]
+  content: ChatContentBlock[]
+  locations: ChatToolLocation[]
+  planEntries: ChatPlanEntry[]
+  rawInputJson: string | null
+  rawOutputJson: string | null
 }
 
 export interface ChatTranscript {
@@ -303,9 +342,57 @@ function decodePermissionOption(value: unknown): ChatPermissionOption {
   return { optionId: str(option[0]), name: str(option[1]), kind: str(option[2]) }
 }
 
+function optionalString(value: unknown): string | null {
+  return typeof value === 'string' ? value : null
+}
+
+function decodeContentBlock(value: unknown): ChatContentBlock {
+  const content = tuple(value, 'ChatContentBlock')
+  return {
+    type: str(content[0]),
+    text: optionalString(content[1]),
+    path: optionalString(content[2]),
+    oldText: optionalString(content[3]),
+    newText: optionalString(content[4]),
+    terminalId: optionalString(content[5]),
+    mimeType: optionalString(content[6]),
+    data: optionalString(content[7]),
+    uri: optionalString(content[8]),
+    name: optionalString(content[9]),
+    title: optionalString(content[10]),
+    description: optionalString(content[11]),
+    size: typeof content[12] === 'number' ? content[12] : null,
+    rawJson: optionalString(content[13]),
+  }
+}
+
+function decodeToolLocation(value: unknown): ChatToolLocation {
+  const location = tuple(value, 'ChatToolLocation')
+  return {
+    path: str(location[0]),
+    line: typeof location[1] === 'number' ? location[1] : null,
+  }
+}
+
+function decodePlanEntry(value: unknown): ChatPlanEntry {
+  const entry = tuple(value, 'ChatPlanEntry')
+  return {
+    content: str(entry[0]),
+    priority: str(entry[1]) || 'medium',
+    status: str(entry[2]) || 'pending',
+  }
+}
+
 function decodeChatEvent(value: unknown): ChatEvent {
   const event = tuple(value, 'ChatEvent')
-  const kinds: readonly ChatEventKind[] = ['UserMessage', 'AgentMessage', 'ToolCall', 'Permission']
+  const kinds: readonly ChatEventKind[] = [
+    'UserMessage',
+    'AgentMessage',
+    'ToolCall',
+    'Permission',
+    'AgentThought',
+    'Plan',
+  ]
   const kind = kinds.includes(event[1] as ChatEventKind)
     ? (event[1] as ChatEventKind)
     : 'ToolCall'
@@ -319,6 +406,11 @@ function decodeChatEvent(value: unknown): ChatEvent {
     toolKind: typeof event[5] === 'string' ? event[5] : null,
     permissionRequestId: typeof event[6] === 'string' ? event[6] : null,
     options: Array.isArray(event[7]) ? event[7].map(decodePermissionOption) : [],
+    content: Array.isArray(event[8]) ? event[8].map(decodeContentBlock) : [],
+    locations: Array.isArray(event[9]) ? event[9].map(decodeToolLocation) : [],
+    planEntries: Array.isArray(event[10]) ? event[10].map(decodePlanEntry) : [],
+    rawInputJson: optionalString(event[11]),
+    rawOutputJson: optionalString(event[12]),
   }
 }
 

@@ -170,7 +170,7 @@
     },
     "chatTranscript": {
       "type": "ChatTranscriptNotification",
-      "base64": "lahjaGF0LTEyMyqoU25hcHNob3SUmKZ1c2VyLTGrVXNlck1lc3NhZ2WtRml4IHRoZSB0ZXN0c8DAwMCQmKZ0b29sLTGoVG9vbENhbGyrZG90bmV0IHRlc3SpUnVuIHRlc3Rzp3BlbmRpbmelc2hlbGzAkJiwcGVybWlzc2lvbjpyZXEtMapQZXJtaXNzaW9usUFwcHJvdmFsIHJlcXVpcmVkqVJ1biB0ZXN0c6dwZW5kaW5npnRvb2wtMaVyZXEtMZKTqmFsbG93LW9uY2WqQWxsb3cgb25jZaphbGxvd19vbmNlk6tyZWplY3Qtb25jZaREZW55q3JlamVjdF9vbmNlmLFlbGljaXRhdGlvbjpyZXEtMqpQZXJtaXNzaW9uvFdoaWNoIGRhdGFiYXNlIHNob3VsZCBJIHVzZT\u002BoRGF0YWJhc2WncGVuZGluZ6phc2stdXNlci0xpXJlcS0ykpOocG9zdGdyZXOqUG9zdGdyZVNRTKZzZWxlY3STpnNxbGl0ZaZTUUxpdGWmc2VsZWN0sHBob25lLWNvbm5lY3Rpb24=",
+      "base64": "lahjaGF0LTEyMyqoU25hcHNob3SWnaZ1c2VyLTGrVXNlck1lc3NhZ2WtRml4IHRoZSB0ZXN0c8DAwMCQkJCQwMCdqXRob3VnaHQtMaxBZ2VudFRob3VnaHS2SW5zcGVjdGluZyB0aGUgcHJvamVjdMDAwMCQkJCQwMCdpnRvb2wtMahUb29sQ2FsbKtkb3RuZXQgdGVzdKlSdW4gdGVzdHOncGVuZGluZ6dleGVjdXRlwJCRnqRkaWZmwLV0ZXN0cy9FeGFtcGxlVGVzdHMuY3O1QXNzZXJ0LkZhbHNlKHJlc3VsdCk7tEFzc2VydC5UcnVlKHJlc3VsdCk7wMDAwMDAwMDAkZK1dGVzdHMvRXhhbXBsZVRlc3RzLmNzKpC5eyJjb21tYW5kIjoiZG90bmV0IHRlc3QifcCdpHBsYW6kUGxhbqCkUGxhbsDAwJCQkJKTsUluc3BlY3QgdGhlIHRlc3RzpGhpZ2ipY29tcGxldGVkk61SdW4gdGhlIHRlc3Rzpm1lZGl1batpbl9wcm9ncmVzc8DAnbBwZXJtaXNzaW9uOnJlcS0xqlBlcm1pc3Npb26xQXBwcm92YWwgcmVxdWlyZWSpUnVuIHRlc3Rzp3BlbmRpbmemdG9vbC0xpXJlcS0xkpOqYWxsb3ctb25jZapBbGxvdyBvbmNlqmFsbG93X29uY2WTq3JlamVjdC1vbmNlpERlbnmrcmVqZWN0X29uY2WQkJDAwJ2xZWxpY2l0YXRpb246cmVxLTKqUGVybWlzc2lvbrxXaGljaCBkYXRhYmFzZSBzaG91bGQgSSB1c2U/qERhdGFiYXNlp3BlbmRpbmeqYXNrLXVzZXItMaVyZXEtMpKTqHBvc3RncmVzqlBvc3RncmVTUUymc2VsZWN0k6ZzcWxpdGWmU1FMaXRlpnNlbGVjdJCQkMDAsHBob25lLWNvbm5lY3Rpb24=",
       "decoded": {
         "sessionId": "chat-123",
         "seq": 42,
@@ -184,7 +184,27 @@
             "status": null,
             "toolKind": null,
             "permissionRequestId": null,
-            "options": []
+            "options": [],
+            "content": [],
+            "locations": [],
+            "planEntries": [],
+            "rawInputJson": null,
+            "rawOutputJson": null
+          },
+          {
+            "eventId": "thought-1",
+            "kind": 4,
+            "text": "Inspecting the project",
+            "title": null,
+            "status": null,
+            "toolKind": null,
+            "permissionRequestId": null,
+            "options": [],
+            "content": [],
+            "locations": [],
+            "planEntries": [],
+            "rawInputJson": null,
+            "rawOutputJson": null
           },
           {
             "eventId": "tool-1",
@@ -192,9 +212,62 @@
             "text": "dotnet test",
             "title": "Run tests",
             "status": "pending",
-            "toolKind": "shell",
+            "toolKind": "execute",
             "permissionRequestId": null,
-            "options": []
+            "options": [],
+            "content": [
+              {
+                "type": "diff",
+                "text": null,
+                "path": "tests/ExampleTests.cs",
+                "oldText": "Assert.False(result);",
+                "newText": "Assert.True(result);",
+                "terminalId": null,
+                "mimeType": null,
+                "data": null,
+                "uri": null,
+                "name": null,
+                "title": null,
+                "description": null,
+                "size": null,
+                "rawJson": null
+              }
+            ],
+            "locations": [
+              {
+                "path": "tests/ExampleTests.cs",
+                "line": 42
+              }
+            ],
+            "planEntries": [],
+            "rawInputJson": "{\u0022command\u0022:\u0022dotnet test\u0022}",
+            "rawOutputJson": null
+          },
+          {
+            "eventId": "plan",
+            "kind": 5,
+            "text": "",
+            "title": "Plan",
+            "status": null,
+            "toolKind": null,
+            "permissionRequestId": null,
+            "options": [],
+            "content": [],
+            "locations": [],
+            "planEntries": [
+              {
+                "content": "Inspect the tests",
+                "priority": "high",
+                "status": "completed"
+              },
+              {
+                "content": "Run the tests",
+                "priority": "medium",
+                "status": "in_progress"
+              }
+            ],
+            "rawInputJson": null,
+            "rawOutputJson": null
           },
           {
             "eventId": "permission:req-1",
@@ -215,7 +288,12 @@
                 "name": "Deny",
                 "kind": "reject_once"
               }
-            ]
+            ],
+            "content": [],
+            "locations": [],
+            "planEntries": [],
+            "rawInputJson": null,
+            "rawOutputJson": null
           },
           {
             "eventId": "elicitation:req-2",
@@ -236,7 +314,12 @@
                 "name": "SQLite",
                 "kind": "select"
               }
-            ]
+            ],
+            "content": [],
+            "locations": [],
+            "planEntries": [],
+            "rawInputJson": null,
+            "rawOutputJson": null
           }
         ],
         "targetConnectionId": "phone-connection"

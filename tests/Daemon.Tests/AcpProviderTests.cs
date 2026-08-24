@@ -259,6 +259,66 @@ public sealed class AcpProviderTests
         Assert.DoesNotContain(provider.Snapshot(), session => session.SessionId == "session-100");
     }
 
+    [Fact]
+    public void PreservesRichAcpSessionUpdates()
+    {
+        var session = new AcpSession(
+            "session-1",
+            @"C:\repo",
+            "Chat",
+            DateTimeOffset.UtcNow);
+
+        ChatEvent? thought = AcpProvider.ApplyUpdate(
+            session,
+            "agent_thought_chunk",
+            JsonSerializer.Deserialize<JsonElement>(
+                """{"messageId":"thought-1","content":{"type":"text","text":"Checking files"}}"""));
+        ChatEvent? tool = AcpProvider.ApplyUpdate(
+            session,
+            "tool_call",
+            JsonSerializer.Deserialize<JsonElement>(
+                """
+                {
+                  "toolCallId": "tool-1",
+                  "title": "Edit settings",
+                  "kind": "edit",
+                  "status": "in_progress",
+                  "rawInput": { "path": "settings.json" },
+                  "content": [
+                    {
+                      "type": "diff",
+                      "path": "settings.json",
+                      "oldText": "{\"enabled\":false}",
+                      "newText": "{\"enabled\":true}"
+                    }
+                  ],
+                  "locations": [{ "path": "settings.json", "line": 7 }]
+                }
+                """));
+        ChatEvent? plan = AcpProvider.ApplyUpdate(
+            session,
+            "plan",
+            JsonSerializer.Deserialize<JsonElement>(
+                """
+                {
+                  "entries": [
+                    { "content": "Inspect settings", "priority": "high", "status": "completed" },
+                    { "content": "Edit settings", "priority": "medium", "status": "in_progress" }
+                  ]
+                }
+                """));
+
+        Assert.Equal(ChatEventKind.AgentThought, thought!.Kind);
+        Assert.Equal("Checking files", thought.Text);
+        Assert.Equal("settings.json", Assert.Single(tool!.Content).Path);
+        Assert.Equal(7, Assert.Single(tool.Locations).Line);
+        Assert.Equal(
+            "settings.json",
+            JsonSerializer.Deserialize<JsonElement>(tool.RawInputJson!).GetProperty("path").GetString());
+        Assert.Equal(ChatEventKind.Plan, plan!.Kind);
+        Assert.Equal("completed", plan.PlanEntries[0].Status);
+    }
+
     private static JsonElement Page(int start, int count, string? nextCursor)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;

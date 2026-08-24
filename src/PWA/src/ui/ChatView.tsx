@@ -3,8 +3,9 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import type { ChatEvent, MachineInfo, SessionInfo } from '../protocol/wire'
 import type { RelayClient } from '../relay/client'
 import { sessionLabel } from '../relay/machines'
+import { AcpContentBlocks, AcpEventView, type AcpDetailLevel } from './AcpEventView'
 
-type DetailLevel = 'compact' | 'summary' | 'full'
+type DetailLevel = AcpDetailLevel
 
 const CancelElicitationOption = '__1remote_cancel__'
 const DeclineElicitationOption = '__1remote_decline__'
@@ -243,11 +244,14 @@ function TranscriptItem({
     const user = item.kind === 'UserMessage'
     return (
       <article
-        className={`min-w-0 max-w-[92%] whitespace-pre-wrap break-words rounded-xl px-3 py-2.5 text-sm leading-6 [overflow-wrap:anywhere] ${
+        className={`min-w-0 max-w-[92%] rounded-xl px-3 py-2.5 text-sm leading-6 ${
           user ? 'ml-auto bg-sky-600/25 text-sky-50' : 'bg-slate-900 text-slate-200'
         }`}
       >
-        {item.text}
+        {item.text ? (
+          <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{item.text}</p>
+        ) : null}
+        <AcpContentBlocks blocks={item.content} includeText={false} />
       </article>
     )
   }
@@ -355,23 +359,5 @@ function TranscriptItem({
     )
   }
 
-  return (
-    <article className="min-w-0 max-w-full overflow-hidden rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs">
-      <div className="flex min-w-0 items-start gap-2">
-        <span className="min-w-0 flex-1 break-words font-medium text-slate-300 [overflow-wrap:anywhere]">
-          {item.title ?? 'Tool call'}
-        </span>
-        {item.status ? (
-          <span className="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">
-            {item.status.replaceAll('_', ' ')}
-          </span>
-        ) : null}
-      </div>
-      {detailLevel === 'full' && item.text ? (
-        <p className="mt-1 whitespace-pre-wrap break-words text-slate-500 [overflow-wrap:anywhere]">
-          {item.text}
-        </p>
-      ) : null}
-    </article>
-  )
+  return <AcpEventView item={item} detailLevel={detailLevel} />
 }

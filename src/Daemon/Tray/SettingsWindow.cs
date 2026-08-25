@@ -300,6 +300,19 @@ internal sealed class SettingsWindow
         }
     }
 
+    internal static class SettingsThemeRouting
+    {
+        public static bool CustomDrawsRadioText(
+            IntPtr control,
+            IntPtr notificationsOff,
+            IntPtr notificationsActionRequired,
+            IntPtr notificationsAllAttentionEvents) =>
+            control != IntPtr.Zero &&
+            (control == notificationsOff ||
+             control == notificationsActionRequired ||
+             control == notificationsAllAttentionEvents);
+    }
+
     /// <summary>
     /// Pulls the application icon out of this executable at the size Windows asks for.
     /// <para>
@@ -1268,6 +1281,28 @@ internal sealed class SettingsWindow
 
             case WM_NOTIFY:
                 NMHDR notification = Marshal.PtrToStructure<NMHDR>(lParam);
+
+                // DarkMode_Explorer supplies the right radio glyph but keeps its label
+                // black. Themed buttons ignore WM_CTLCOLORBTN; custom draw is the point
+                // where the stock renderer still honours the colours already on its DC.
+                if (notification.code == NM_CUSTOMDRAW &&
+                    SettingsThemeRouting.CustomDrawsRadioText(
+                        notification.hwndFrom,
+                        _notificationsOff,
+                        _notificationsActionRequired,
+                        _notificationsAllAttentionEvents))
+                {
+                    NMCUSTOMDRAW draw = Marshal.PtrToStructure<NMCUSTOMDRAW>(lParam);
+                    if (draw.dwDrawStage == CDDS_PREPAINT)
+                    {
+                        SetBkMode(draw.hdc, TRANSPARENT);
+                        SetTextColor(draw.hdc, _theme.Text);
+                        SetBkColor(draw.hdc, _theme.Layer);
+                    }
+
+                    return CDRF_DODEFAULT;
+                }
+
                 if (notification.hwndFrom == _changeHistory &&
                     notification.code is NM_CLICK or NM_RETURN)
                 {

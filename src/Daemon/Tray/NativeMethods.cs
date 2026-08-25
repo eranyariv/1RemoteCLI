@@ -79,6 +79,7 @@ internal static partial class NativeMethods
 
     internal const int NM_CLICK = -2;
     internal const int NM_RETURN = -4;
+    internal const int NM_CUSTOMDRAW = -12;
     internal const int LVN_COLUMNCLICK = -108;
     internal const int ICC_LINK_CLASS = 0x00008000;
     internal const int ICC_LISTVIEW_CLASSES = 0x00000001;
@@ -112,6 +113,8 @@ internal static partial class NativeMethods
     internal const int HDI_FORMAT = 0x0004;
     internal const int HDF_SORTDOWN = 0x0200;
     internal const int HDF_SORTUP = 0x0400;
+    internal const int CDDS_PREPAINT = 0x00000001;
+    internal const int CDRF_DODEFAULT = 0x00000000;
 
     internal const int NIM_ADD = 0x00000000;
     internal const int NIM_MODIFY = 0x00000001;
@@ -227,6 +230,18 @@ internal static partial class NativeMethods
         public int uChanged;
         public POINT ptAction;
         public IntPtr lParam;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct NMCUSTOMDRAW
+    {
+        public NMHDR hdr;
+        public int dwDrawStage;
+        public IntPtr hdc;
+        public RECT rc;
+        public IntPtr dwItemSpec;
+        public int uItemState;
+        public IntPtr lItemlParam;
     }
 
     [StructLayout(LayoutKind.Sequential)]

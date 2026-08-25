@@ -600,6 +600,110 @@ public sealed class RelayHub(
             SessionKind.Terminal);
     }
 
+    /// <summary>Starts a bounded upload on the agent that owns the attached terminal.</summary>
+    public Task<TerminalUploadReply> BeginTerminalUpload(BeginTerminalUploadRequest request)
+    {
+        if (request is null ||
+            string.IsNullOrWhiteSpace(request.SessionId) ||
+            !Guid.TryParse(request.UploadId, out _) ||
+            string.IsNullOrWhiteSpace(request.FileName) ||
+            request.FileName.Length > TerminalUploadLimits.MaxFileNameChars ||
+            request.TotalBytes < 0)
+        {
+            return Task.FromResult(UploadError(
+                request?.UploadId,
+                request?.TotalBytes ?? 0,
+                ErrorCodes.InvalidRequest,
+                "BeginTerminalUpload needs a valid id, filename, and size."));
+        }
+
+        if (request.TotalBytes > TerminalUploadLimits.MaxFileBytes)
+        {
+            return Task.FromResult(UploadError(
+                request.UploadId,
+                request.TotalBytes,
+                ErrorCodes.FileTooLarge,
+                $"Files are limited to {TerminalUploadLimits.MaxFileBytes / (1024 * 1024)} MB."));
+        }
+
+        return InvokeTerminalUploadAsync(
+            request.SessionId,
+            request.UploadId,
+            request.TotalBytes,
+            HubMethods.Agent.BeginTerminalUpload,
+            target => new BeginTerminalUploadNotification
+            {
+                SessionId = target.SessionId,
+                ClientConnectionId = Context.ConnectionId,
+                UploadId = request.UploadId,
+                FileName = request.FileName,
+                TotalBytes = request.TotalBytes,
+            });
+    }
+
+    /// <summary>
+    /// Relays one chunk and waits until the agent has written it before acknowledging
+    /// progress to the browser.
+    /// </summary>
+    public Task<TerminalUploadReply> UploadTerminalChunk(TerminalUploadChunkRequest request)
+    {
+        if (request is null ||
+            string.IsNullOrWhiteSpace(request.SessionId) ||
+            !Guid.TryParse(request.UploadId, out _) ||
+            request.Offset < 0 ||
+            request.Data is null ||
+            request.Data.Length == 0 ||
+            request.Data.Length > TerminalUploadLimits.MaxChunkBytes)
+        {
+            return Task.FromResult(UploadError(
+                request?.UploadId,
+                0,
+                ErrorCodes.InvalidRequest,
+                "UploadTerminalChunk needs an ordered, bounded chunk."));
+        }
+
+        return InvokeTerminalUploadAsync(
+            request.SessionId,
+            request.UploadId,
+            0,
+            HubMethods.Agent.UploadTerminalChunk,
+            target => new TerminalUploadChunkNotification
+            {
+                SessionId = target.SessionId,
+                ClientConnectionId = Context.ConnectionId,
+                UploadId = request.UploadId,
+                Offset = request.Offset,
+                Data = request.Data,
+            });
+    }
+
+    /// <summary>Cancels a partial upload owned by this attached client.</summary>
+    public Task<TerminalUploadReply> CancelTerminalUpload(CancelTerminalUploadRequest request)
+    {
+        if (request is null ||
+            string.IsNullOrWhiteSpace(request.SessionId) ||
+            !Guid.TryParse(request.UploadId, out _))
+        {
+            return Task.FromResult(UploadError(
+                request?.UploadId,
+                0,
+                ErrorCodes.InvalidRequest,
+                "CancelTerminalUpload needs a session id and upload id."));
+        }
+
+        return InvokeTerminalUploadAsync(
+            request.SessionId,
+            request.UploadId,
+            0,
+            HubMethods.Agent.CancelTerminalUpload,
+            target => new CancelTerminalUploadNotification
+            {
+                SessionId = target.SessionId,
+                ClientConnectionId = Context.ConnectionId,
+                UploadId = request.UploadId,
+            });
+    }
+
     /// <summary>Reshapes the real pseudoconsole. The phone is authoritative while attached.</summary>
     public Task<ErrorNotification?> ResizeTerminal(ResizeTerminalRequest request)
     {
@@ -1057,6 +1161,77 @@ public sealed class RelayHub(
 
         return null;
     }
+
+    /// <summary>
+    /// The upload counterpart to <see cref="ForwardAsync{TNotification}"/>. A chunk is
+    /// successful only after the agent returns the number of bytes already on disk.
+    /// </summary>
+    private async Task<TerminalUploadReply> InvokeTerminalUploadAsync<TNotification>(
+        string sessionId,
+        string uploadId,
+        long totalBytes,
+        string method,
+        Func<RelayTarget, TNotification> build)
+    {
+        if (!_registry.TryResolveAttached(
+                Context.ConnectionId,
+                sessionId,
+                out RelayTarget? target,
+                out ErrorNotification? error))
+        {
+            return UploadError(
+                uploadId,
+                totalBytes,
+                error!.Code,
+                error.Message);
+        }
+
+        if (target!.Kind != SessionKind.Terminal)
+        {
+            return UploadError(
+                uploadId,
+                totalBytes,
+                ErrorCodes.InvalidRequest,
+                "That action requires a terminal session.");
+        }
+
+        try
+        {
+            return await Clients.Client(target.AgentConnectionId).InvokeCoreAsync<TerminalUploadReply>(
+                method,
+                [build(target)],
+                Context.ConnectionAborted);
+        }
+        catch (HubException)
+        {
+            return UploadError(
+                uploadId,
+                totalBytes,
+                ErrorCodes.UploadUnavailable,
+                "The connected agent does not support terminal file uploads.");
+        }
+        catch (OperationCanceledException) when (Context.ConnectionAborted.IsCancellationRequested)
+        {
+            return UploadError(
+                uploadId,
+                totalBytes,
+                ErrorCodes.UploadCancelled,
+                "The client disconnected before the upload operation completed.");
+        }
+    }
+
+    private static TerminalUploadReply UploadError(
+        string? uploadId,
+        long totalBytes,
+        string code,
+        string message) =>
+        new()
+        {
+            UploadId = uploadId ?? string.Empty,
+            TotalBytes = totalBytes,
+            ErrorCode = code,
+            ErrorMessage = message,
+        };
 
     // Either end to hub.
 

@@ -51,4 +51,19 @@ public static class ErrorCodes
 
     /// <summary>The reserved General project cannot be deleted.</summary>
     public const string CannotDeleteGeneralProject = "cannot_delete_general_project";
+
+    /// <summary>A terminal attachment exceeds the shared upload limit.</summary>
+    public const string FileTooLarge = "file_too_large";
+
+    /// <summary>The named upload is missing, stale, or belongs to another attachment.</summary>
+    public const string UploadNotFound = "upload_not_found";
+
+    /// <summary>The agent could not safely persist the uploaded bytes.</summary>
+    public const string UploadFailed = "upload_failed";
+
+    /// <summary>The upload was deliberately cancelled before completion.</summary>
+    public const string UploadCancelled = "upload_cancelled";
+
+    /// <summary>The connected agent predates terminal file uploads.</summary>
+    public const string UploadUnavailable = "upload_unavailable";
 }

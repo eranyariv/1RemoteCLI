@@ -42,6 +42,10 @@ Have `docs/troubleshooting.md` open. If a step fails, work out whether it is the
 - [ ] Sticky modifiers: tap `Ctrl`, then `c` — the program is interrupted. The modifier applies to exactly one key and then clears.
 - [ ] Start a long-running command at the desk and interrupt it from the phone.
 - [ ] The program keeps running after the interrupt rather than the session dying.
+- [ ] Copy multiline text containing `\u001b[31m`, tap **Paste**, and confirm it arrives as literal text rather than changing terminal colour.
+- [ ] Tap **Attach**, choose a document, and confirm progress completes and a quoted machine path appears without submitting the line.
+- [ ] Tap **Attach** and take or select a photo; confirm its machine path appears the same way.
+- [ ] Start a larger upload, cancel it, and confirm no path is inserted and the terminal reports no success.
 
 ### Layout
 

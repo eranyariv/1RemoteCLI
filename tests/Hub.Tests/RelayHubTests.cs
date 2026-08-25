@@ -182,6 +182,154 @@ public sealed class RelayHubTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task TerminalUploadsReachOnlyTheAttachedTerminalAndReturnAgentConfirmedProgress()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        var began = new TaskCompletionSource<BeginTerminalUploadNotification>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var chunked = new TaskCompletionSource<TerminalUploadChunkNotification>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using IDisposable beginHandler = agent.On<BeginTerminalUploadNotification, TerminalUploadReply>(
+            HubMethods.Agent.BeginTerminalUpload,
+            request =>
+            {
+                began.TrySetResult(request);
+                return new TerminalUploadReply
+                {
+                    UploadId = request.UploadId,
+                    TotalBytes = request.TotalBytes,
+                };
+            });
+        using IDisposable chunkHandler = agent.On<TerminalUploadChunkNotification, TerminalUploadReply>(
+            HubMethods.Agent.UploadTerminalChunk,
+            request =>
+            {
+                chunked.TrySetResult(request);
+                return new TerminalUploadReply
+                {
+                    UploadId = request.UploadId,
+                    ConfirmedBytes = request.Offset + request.Data.LongLength,
+                    TotalBytes = request.Offset + request.Data.LongLength,
+                    RemotePath = @"C:\Temp\photo.jpg",
+                };
+            });
+
+        await OpenSessionAsync(agent, "terminal-1", "pwsh");
+        await OpenSessionAsync(agent, "chat-1", "GitHub Copilot", SessionKind.AgentChat);
+
+        HubConnection alice = await ConnectClientAsync(AliceTenant, AliceObject);
+        await AttachAsync(alice, "machine-a", "terminal-1");
+        string uploadId = Guid.NewGuid().ToString();
+
+        TerminalUploadReply started = await alice.InvokeAsync<TerminalUploadReply>(
+            HubMethods.Server.BeginTerminalUpload,
+            new BeginTerminalUploadRequest
+            {
+                SessionId = "terminal-1",
+                UploadId = uploadId,
+                FileName = "photo.jpg",
+                TotalBytes = 4,
+            });
+        Assert.Null(started.ErrorCode);
+
+        BeginTerminalUploadNotification begin = await began.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal("terminal-1", begin.SessionId);
+        Assert.NotEmpty(begin.ClientConnectionId);
+
+        TerminalUploadReply completed = await alice.InvokeAsync<TerminalUploadReply>(
+            HubMethods.Server.UploadTerminalChunk,
+            new TerminalUploadChunkRequest
+            {
+                SessionId = "terminal-1",
+                UploadId = uploadId,
+                Offset = 0,
+                Data = [1, 2, 3, 4],
+            });
+        Assert.Equal(4, completed.ConfirmedBytes);
+        Assert.Equal(@"C:\Temp\photo.jpg", completed.RemotePath);
+        Assert.Equal([1, 2, 3, 4], (await chunked.Task.WaitAsync(TimeSpan.FromSeconds(5))).Data);
+
+        HubConnection bystander = await ConnectClientAsync(AliceTenant, AliceObject);
+        TerminalUploadReply unattached = await bystander.InvokeAsync<TerminalUploadReply>(
+            HubMethods.Server.BeginTerminalUpload,
+            new BeginTerminalUploadRequest
+            {
+                SessionId = "terminal-1",
+                UploadId = Guid.NewGuid().ToString(),
+                FileName = "stolen.txt",
+                TotalBytes = 1,
+            });
+        Assert.Equal(ErrorCodes.NotAttached, unattached.ErrorCode);
+
+        await AttachAsync(alice, "machine-a", "chat-1");
+        TerminalUploadReply wrongKind = await alice.InvokeAsync<TerminalUploadReply>(
+            HubMethods.Server.BeginTerminalUpload,
+            new BeginTerminalUploadRequest
+            {
+                SessionId = "chat-1",
+                UploadId = Guid.NewGuid().ToString(),
+                FileName = "chat.txt",
+                TotalBytes = 1,
+            });
+        Assert.Equal(ErrorCodes.InvalidRequest, wrongKind.ErrorCode);
+    }
+
+    [Fact]
+    public async Task OversizedTerminalUploadsAreRejectedBeforeTheyReachTheAgent()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using IDisposable handler = agent.On<BeginTerminalUploadNotification, TerminalUploadReply>(
+            HubMethods.Agent.BeginTerminalUpload,
+            request =>
+            {
+                received.TrySetResult();
+                return new TerminalUploadReply { UploadId = request.UploadId };
+            });
+        await OpenSessionAsync(agent, "terminal-1", "pwsh");
+
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        await AttachAsync(client, "machine-a", "terminal-1");
+
+        TerminalUploadReply reply = await client.InvokeAsync<TerminalUploadReply>(
+            HubMethods.Server.BeginTerminalUpload,
+            new BeginTerminalUploadRequest
+            {
+                SessionId = "terminal-1",
+                UploadId = Guid.NewGuid().ToString(),
+                FileName = "large.bin",
+                TotalBytes = TerminalUploadLimits.MaxFileBytes + 1,
+            });
+
+        Assert.Equal(ErrorCodes.FileTooLarge, reply.ErrorCode);
+        await Task.Delay(100);
+        Assert.False(received.Task.IsCompleted);
+    }
+
+    [Fact]
+    public async Task OlderAgentsReturnAStableUploadUnavailableError()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "terminal-1", "pwsh");
+
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        await AttachAsync(client, "machine-a", "terminal-1");
+
+        TerminalUploadReply reply = await client.InvokeAsync<TerminalUploadReply>(
+            HubMethods.Server.BeginTerminalUpload,
+            new BeginTerminalUploadRequest
+            {
+                SessionId = "terminal-1",
+                UploadId = Guid.NewGuid().ToString(),
+                FileName = "notes.txt",
+                TotalBytes = 1,
+            });
+
+        Assert.Equal(ErrorCodes.UploadUnavailable, reply.ErrorCode);
+    }
+
+    [Fact]
     public async Task ChatMessagesAndPermissionResponsesReachTheAttachedAgent()
     {
         HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");

@@ -20,9 +20,11 @@ public static class ProtocolVersion
     /// <c>DeleteProject</c>/<c>SetSessionProject</c>, their notifications, and
     /// appended <see cref="Hub.SessionInfo.ProjectId"/>. Additive for the same
     /// reason as version 2, so <see cref="MinimumSupported"/> stays put again.
+    /// Version 4 adds bounded, chunked terminal file uploads. The methods are
+    /// additive and older agents remain useful for every feature they already had.
     /// </para>
     /// </summary>
-    public const int Current = 3;
+    public const int Current = 4;
 
     /// <summary>Oldest version this build still accepts from a peer.</summary>
     public const int MinimumSupported = 1;

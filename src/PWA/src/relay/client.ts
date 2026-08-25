@@ -24,7 +24,10 @@ import {
   decodeSessionOpened,
   decodeSessionAttention,
   decodeSessionUpdated,
+  decodeTerminalUploadReply,
   decodeTerminalOutput,
+  encodeBeginTerminalUpload,
+  encodeCancelTerminalUpload,
   encodeAttachSession,
   encodeClientHandshake,
   encodeCreateProject,
@@ -41,6 +44,7 @@ import {
   encodeSetSessionPinned,
   encodeSetSessionProject,
   encodeSetSessionType,
+  encodeTerminalUploadChunk,
   encodeUpdateProject,
   type CliType,
   type ChatTranscript,
@@ -50,8 +54,13 @@ import {
   type ProjectResult,
   type SessionInfo,
   type TerminalOutput,
+  type TerminalUploadReply,
 } from '../protocol/wire'
 import type { PushRegistration } from '../push/subscription'
+import {
+  MAX_TERMINAL_UPLOAD_BYTES,
+  TERMINAL_UPLOAD_CHUNK_BYTES,
+} from '../terminal/attachment'
 import { resolveHubUrl } from './endpoint'
 import { ForeverRetryPolicy, reconnectDelay } from './backoff'
 
@@ -81,6 +90,17 @@ export interface RelayEvents {
   projectCreated(project: ProjectInfo): void
   projectUpdated(project: ProjectInfo): void
   projectDeleted(projectId: string): void
+}
+
+export interface TerminalUploadProgress {
+  confirmedBytes: number
+  totalBytes: number
+}
+
+export interface TerminalUploadOutcome {
+  remotePath: string | null
+  error: HubError | null
+  cancelled: boolean
 }
 
 const CLIENT_VERSION = `pwa/${__APP_VERSION__}`
@@ -427,6 +447,122 @@ export class RelayClient {
     return this.request(Server.SendInput, encodeSendInput(sessionId, data))
   }
 
+  /**
+   * Sends a browser-local file in ordered chunks, waiting for the agent to confirm
+   * each one is on disk before reporting progress.
+   */
+  async uploadTerminalFile(
+    sessionId: string,
+    file: File,
+    onProgress: (progress: TerminalUploadProgress) => void,
+    signal?: AbortSignal,
+  ): Promise<TerminalUploadOutcome> {
+    if (file.size > MAX_TERMINAL_UPLOAD_BYTES) {
+      return this.uploadFailure(
+        ErrorCodes.FileTooLarge,
+        `Files are limited to ${MAX_TERMINAL_UPLOAD_BYTES / (1024 * 1024)} MB.`,
+        sessionId,
+      )
+    }
+
+    if (signal?.aborted) return { remotePath: null, error: null, cancelled: true }
+
+    const uploadId = crypto.randomUUID()
+    let started = false
+    let completed = false
+
+    try {
+      let reply = await this.terminalUploadRequest(
+        Server.BeginTerminalUpload,
+        encodeBeginTerminalUpload(sessionId, uploadId, file.name, file.size),
+        uploadId,
+        file.size,
+      )
+
+      if (reply.errorCode) return this.replyFailure(reply, sessionId)
+      started = true
+
+      if (
+        reply.uploadId !== uploadId ||
+        reply.totalBytes !== file.size ||
+        reply.confirmedBytes !== 0
+      ) {
+        return this.uploadFailure(
+          ErrorCodes.UploadFailed,
+          'The machine returned inconsistent upload metadata.',
+          sessionId,
+        )
+      }
+
+      if (signal?.aborted) return { remotePath: null, error: null, cancelled: true }
+
+      onProgress({ confirmedBytes: reply.confirmedBytes, totalBytes: reply.totalBytes })
+
+      if (reply.remotePath) {
+        completed = true
+        return { remotePath: reply.remotePath, error: null, cancelled: false }
+      }
+
+      while (reply.confirmedBytes < file.size) {
+        if (signal?.aborted) {
+          return { remotePath: null, error: null, cancelled: true }
+        }
+
+        const offset = reply.confirmedBytes
+        const end = Math.min(offset + TERMINAL_UPLOAD_CHUNK_BYTES, file.size)
+        const data = new Uint8Array(await file.slice(offset, end).arrayBuffer())
+
+        if (signal?.aborted) {
+          return { remotePath: null, error: null, cancelled: true }
+        }
+
+        reply = await this.terminalUploadRequest(
+          Server.UploadTerminalChunk,
+          encodeTerminalUploadChunk(sessionId, uploadId, offset, data),
+          uploadId,
+          file.size,
+        )
+
+        if (reply.errorCode) return this.replyFailure(reply, sessionId)
+        if (signal?.aborted) return { remotePath: null, error: null, cancelled: true }
+
+        if (
+          reply.uploadId !== uploadId ||
+          reply.totalBytes !== file.size ||
+          reply.confirmedBytes !== end
+        ) {
+          return this.uploadFailure(
+            ErrorCodes.UploadFailed,
+            'The machine returned inconsistent upload progress.',
+            sessionId,
+          )
+        }
+
+        onProgress({ confirmedBytes: reply.confirmedBytes, totalBytes: reply.totalBytes })
+      }
+
+      if (!reply.remotePath) {
+        return this.uploadFailure(
+          ErrorCodes.UploadFailed,
+          'The machine saved the bytes but did not return a file path.',
+          sessionId,
+        )
+      }
+
+      completed = true
+      return { remotePath: reply.remotePath, error: null, cancelled: false }
+    } finally {
+      if (started && !completed) {
+        await this.terminalUploadRequest(
+          Server.CancelTerminalUpload,
+          encodeCancelTerminalUpload(sessionId, uploadId),
+          uploadId,
+          file.size,
+        )
+      }
+    }
+  }
+
   async resize(sessionId: string, cols: number, rows: number): Promise<HubError | null> {
     return this.request(Server.ResizeTerminal, encodeResizeTerminal(sessionId, cols, rows))
   }
@@ -573,6 +709,53 @@ export class RelayClient {
       }
       this.emit('error', problem)
       return problem
+    }
+  }
+
+  private async terminalUploadRequest(
+    method: string,
+    argument: unknown,
+    uploadId: string,
+    totalBytes: number,
+  ): Promise<TerminalUploadReply> {
+    if (!this.connected) {
+      return {
+        uploadId,
+        confirmedBytes: 0,
+        totalBytes,
+        remotePath: null,
+        errorCode: ErrorCodes.MachineOffline,
+        errorMessage: 'Not connected to the hub.',
+      }
+    }
+
+    try {
+      return decodeTerminalUploadReply(await this.connection!.invoke(method, argument))
+    } catch (error) {
+      return {
+        uploadId,
+        confirmedBytes: 0,
+        totalBytes,
+        remotePath: null,
+        errorCode: ErrorCodes.UploadFailed,
+        errorMessage: errorText(error),
+      }
+    }
+  }
+
+  private replyFailure(reply: TerminalUploadReply, sessionId: string): TerminalUploadOutcome {
+    return this.uploadFailure(
+      reply.errorCode ?? ErrorCodes.UploadFailed,
+      reply.errorMessage ?? 'The upload failed.',
+      sessionId,
+    )
+  }
+
+  private uploadFailure(code: string, message: string, sessionId: string): TerminalUploadOutcome {
+    return {
+      remotePath: null,
+      error: { code, message, sessionId },
+      cancelled: code === ErrorCodes.UploadCancelled,
     }
   }
 

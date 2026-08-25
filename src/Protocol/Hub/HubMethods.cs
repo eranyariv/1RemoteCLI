@@ -33,6 +33,9 @@ public static class HubMethods
         public const string AttachSession = "AttachSession";
         public const string DetachSession = "DetachSession";
         public const string SendInput = "SendInput";
+        public const string BeginTerminalUpload = "BeginTerminalUpload";
+        public const string UploadTerminalChunk = "UploadTerminalChunk";
+        public const string CancelTerminalUpload = "CancelTerminalUpload";
         public const string ResizeTerminal = "ResizeTerminal";
         public const string InterruptSession = "InterruptSession";
         public const string SendChatMessage = "SendChatMessage";
@@ -73,6 +76,9 @@ public static class HubMethods
         public const string AttachRequested = "AttachRequested";
         public const string DetachRequested = "DetachRequested";
         public const string SendInput = "SendInput";
+        public const string BeginTerminalUpload = "BeginTerminalUpload";
+        public const string UploadTerminalChunk = "UploadTerminalChunk";
+        public const string CancelTerminalUpload = "CancelTerminalUpload";
         public const string ResizeTerminal = "ResizeTerminal";
         public const string InterruptSession = "InterruptSession";
         public const string SendChatMessage = "SendChatMessage";

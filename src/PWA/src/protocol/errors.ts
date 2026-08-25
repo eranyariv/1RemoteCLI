@@ -23,6 +23,11 @@ export const ErrorCodes = {
   InvalidProjectSiteUrl: 'invalid_project_site_url',
   InvalidProjectRepoUrl: 'invalid_project_repo_url',
   CannotDeleteGeneralProject: 'cannot_delete_general_project',
+  FileTooLarge: 'file_too_large',
+  UploadNotFound: 'upload_not_found',
+  UploadFailed: 'upload_failed',
+  UploadCancelled: 'upload_cancelled',
+  UploadUnavailable: 'upload_unavailable',
 } as const
 
 /**
@@ -64,6 +69,16 @@ export function describeError(code: string, fallback?: string): string {
       return 'GitHub repo URL must be a complete http:// or https:// address.'
     case ErrorCodes.CannotDeleteGeneralProject:
       return 'The General project cannot be deleted.'
+    case ErrorCodes.FileTooLarge:
+      return 'That file is larger than the 25 MB upload limit.'
+    case ErrorCodes.UploadNotFound:
+      return 'That upload is no longer active. Choose the file again.'
+    case ErrorCodes.UploadFailed:
+      return fallback ?? 'The machine could not save that file.'
+    case ErrorCodes.UploadCancelled:
+      return 'The upload was cancelled.'
+    case ErrorCodes.UploadUnavailable:
+      return 'Update the agent on this machine before attaching files.'
     default:
       return fallback ?? 'Something went wrong talking to the hub.'
   }

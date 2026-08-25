@@ -211,6 +211,87 @@ public sealed class SendInputNotification
     public byte[] Data { get; set; } = [];
 }
 
+/// <summary>Hub to agent. Opens an upload owned by one attached client.</summary>
+[MessagePackObject]
+public sealed class BeginTerminalUploadNotification
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string ClientConnectionId { get; set; } = string.Empty;
+
+    [Key(2)]
+    public string UploadId { get; set; } = string.Empty;
+
+    [Key(3)]
+    public string FileName { get; set; } = string.Empty;
+
+    [Key(4)]
+    public long TotalBytes { get; set; }
+}
+
+/// <summary>Hub to agent. Writes one chunk after the previous chunk was acknowledged.</summary>
+[MessagePackObject]
+public sealed class TerminalUploadChunkNotification
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string ClientConnectionId { get; set; } = string.Empty;
+
+    [Key(2)]
+    public string UploadId { get; set; } = string.Empty;
+
+    [Key(3)]
+    public long Offset { get; set; }
+
+    [Key(4)]
+    public byte[] Data { get; set; } = [];
+}
+
+/// <summary>Hub to agent. Removes a partial upload owned by the detaching client.</summary>
+[MessagePackObject]
+public sealed class CancelTerminalUploadNotification
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string ClientConnectionId { get; set; } = string.Empty;
+
+    [Key(2)]
+    public string UploadId { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Agent result returned through the hub to the browser after each upload operation.
+/// Confirmed bytes are bytes already on disk, never bytes merely queued for the agent.
+/// </summary>
+[MessagePackObject]
+public sealed class TerminalUploadReply
+{
+    [Key(0)]
+    public string UploadId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public long ConfirmedBytes { get; set; }
+
+    [Key(2)]
+    public long TotalBytes { get; set; }
+
+    /// <summary>Set only after the final file has been atomically made visible.</summary>
+    [Key(3)]
+    public string? RemotePath { get; set; }
+
+    [Key(4)]
+    public string? ErrorCode { get; set; }
+
+    [Key(5)]
+    public string? ErrorMessage { get; set; }
+}
+
 /// <summary>Hub to agent. Resize the session's pseudoconsole. The phone wins while attached.</summary>
 [MessagePackObject]
 public sealed class ResizeTerminalNotification

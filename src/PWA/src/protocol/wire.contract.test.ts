@@ -19,9 +19,12 @@ import {
   decodeSessionOpened,
   decodeSessionAttention,
   decodeSessionUpdated,
+  decodeTerminalUploadReply,
   decodeTerminalOutput,
   decodeTokenExpiring,
   encodeAttachSession,
+  encodeBeginTerminalUpload,
+  encodeCancelTerminalUpload,
   encodeClientHandshake,
   encodeCreateProject,
   encodeDeleteProject,
@@ -35,6 +38,7 @@ import {
   encodeSetSessionPinned,
   encodeSetSessionProject,
   encodeSetSessionType,
+  encodeTerminalUploadChunk,
   encodeUpdateProject,
   type CliType,
 } from './wire'
@@ -311,6 +315,17 @@ describe('decoding what the hub sends', () => {
     expect(opened.session.projectId).toBe(want.session.projectId)
   })
 
+  it('reads disk-confirmed terminal upload progress', () => {
+    const reply = decodeTerminalUploadReply(wire('terminalUploadReply'))
+    const want = expected('terminalUploadReply')
+
+    expect(reply.uploadId).toBe(want.uploadId)
+    expect(reply.confirmedBytes).toBe(want.confirmedBytes)
+    expect(reply.totalBytes).toBe(want.totalBytes)
+    expect(reply.remotePath).toBeNull()
+    expect(reply.errorCode).toBeNull()
+  })
+
   it('treats a session from a hub that predates projects as General', () => {
     // ProjectId was appended after Kind, so a version 3 hub that only knows
     // about ACP sends a thirteen-element session (through Kind). Reading past
@@ -425,6 +440,37 @@ describe('encoding what we send the hub', () => {
 
     expect(encoded[0]).toBe(want[0])
     expect(Array.from(encoded[1] as Uint8Array)).toEqual(Array.from(want[1] as Uint8Array))
+  })
+
+  it('starts a bounded terminal upload', () => {
+    const want = shape('beginTerminalUploadRequest')
+
+    expect(
+      encodeBeginTerminalUpload(
+        want[0] as string,
+        want[1] as string,
+        want[2] as string,
+        want[3] as number,
+      ),
+    ).toEqual(want)
+  })
+
+  it('sends an ordered upload chunk as raw bytes', () => {
+    const want = shape('terminalUploadChunkRequest')
+    const encoded = encodeTerminalUploadChunk(
+      want[0] as string,
+      want[1] as string,
+      want[2] as number,
+      new Uint8Array([0x00, 0x7f, 0x80, 0xff]),
+    )
+
+    expect(encoded.slice(0, 3)).toEqual(want.slice(0, 3))
+    expect(Array.from(encoded[3] as Uint8Array)).toEqual(Array.from(want[3] as Uint8Array))
+  })
+
+  it('cancels a partial terminal upload', () => {
+    const want = shape('cancelTerminalUploadRequest')
+    expect(encodeCancelTerminalUpload(want[0] as string, want[1] as string)).toEqual(want)
   })
 
   it('sends a resize', () => {

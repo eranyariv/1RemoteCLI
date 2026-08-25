@@ -28,6 +28,7 @@ import {
 import { applyOutput } from '../terminal/apply'
 import { verdict } from '../terminal/latency'
 import { downloadTrace } from '../terminal/trace'
+import { pasteClipboardText, quoteTerminalPath } from '../terminal/attachment'
 import { useAttachedSession } from '../terminal/useAttachedSession'
 import { Banner } from './Chrome'
 
@@ -68,12 +69,20 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
   const hostRef = useRef<HTMLDivElement | null>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const uploadControllerRef = useRef<AbortController | null>(null)
   const [geometry, setGeometry] = useState({ cols: session.cols, rows: session.rows })
   const [showExtras, setShowExtras] = useState(false)
   const [showActions, setShowActions] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
   const [modifiers, setModifiers] = useState<Modifiers>(NoModifiers)
   const [showOnScreenKeys] = useState(() => needsOnScreenKeys(window))
+  const [transferError, setTransferError] = useState<string | null>(null)
+  const [upload, setUpload] = useState<{
+    name: string
+    confirmedBytes: number
+    totalBytes: number
+  } | null>(null)
 
   // Read by the xterm callbacks, which are wired once and must see what is armed
   // *now* rather than what was armed on the render that registered them.
@@ -338,9 +347,82 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
     setShowPicker(true)
   }, [])
 
+  const pasteClipboard = useCallback(async () => {
+    setTransferError(null)
+
+    try {
+      if (!navigator.clipboard?.readText) {
+        throw new Error('Clipboard access is not available in this browser.')
+      }
+
+      const text = await navigator.clipboard.readText()
+      if (text.length > 0 && termRef.current) pasteClipboardText(termRef.current, text)
+      termRef.current?.focus()
+    } catch (error) {
+      setTransferError(error instanceof Error ? error.message : 'The clipboard could not be read.')
+    }
+  }, [])
+
+  const attachFile = useCallback(
+    async (file: File) => {
+      setTransferError(null)
+
+      const controller = new AbortController()
+      uploadControllerRef.current = controller
+      setUpload({ name: file.name, confirmedBytes: 0, totalBytes: file.size })
+
+      const outcome = await client.uploadTerminalFile(
+        session.sessionId,
+        file,
+        (progress) =>
+          setUpload((current) =>
+            current
+              ? {
+                  ...current,
+                  confirmedBytes: progress.confirmedBytes,
+                  totalBytes: progress.totalBytes,
+                }
+              : current,
+          ),
+        controller.signal,
+      )
+
+      if (uploadControllerRef.current !== controller) return
+
+      uploadControllerRef.current = null
+      setUpload(null)
+
+      if (outcome.cancelled) return
+      if (outcome.error) {
+        setTransferError(describeError(outcome.error.code, outcome.error.message))
+        return
+      }
+
+      if (outcome.remotePath) {
+        if (termRef.current) {
+          pasteClipboardText(
+            termRef.current,
+            quoteTerminalPath(outcome.remotePath, session.cliType),
+          )
+        }
+        termRef.current?.focus()
+      }
+    },
+    [client, session.cliType, session.sessionId],
+  )
+
+  useEffect(
+    () => () => {
+      uploadControllerRef.current?.abort()
+      uploadControllerRef.current = null
+    },
+    [],
+  )
+
   const catalog = catalogFor(session.cliType)
 
-  const saveTrace = useCallback(() => {    attached.stopRecording()
+  const saveTrace = useCallback(() => {
+    attached.stopRecording()
     downloadTrace(
       attached.recorder.build({
         program: session.program,
@@ -471,6 +553,64 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
       <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden px-1 py-1" />
 
       <div className="border-t border-slate-800 bg-slate-900/60 pb-[env(safe-area-inset-bottom)]">
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0]
+            event.currentTarget.value = ''
+            if (file) void attachFile(file)
+          }}
+        />
+
+        {transferError ? (
+          <div className="border-b border-slate-800 px-2 py-2">
+            <Banner
+              tone="error"
+              title={transferError}
+              action={
+                <button
+                  type="button"
+                  onClick={() => setTransferError(null)}
+                  className="min-h-10 rounded-lg border border-rose-500/40 px-3 text-sm"
+                >
+                  Dismiss
+                </button>
+              }
+            />
+          </div>
+        ) : null}
+
+        {upload ? (
+          <div className="border-b border-slate-800 px-3 py-2" role="status">
+            <div className="flex items-center gap-3">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs text-slate-300">Attaching {upload.name}</p>
+                <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-800">
+                  <div
+                    className="h-full bg-sky-400 transition-[width]"
+                    style={{
+                      width: `${
+                        upload.totalBytes === 0
+                          ? 100
+                          : Math.round((upload.confirmedBytes / upload.totalBytes) * 100)
+                      }%`,
+                    }}
+                  />
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => uploadControllerRef.current?.abort()}
+                className="min-h-10 rounded-lg px-3 text-sm text-slate-400 active:bg-slate-800"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         {/*
           The per-CLI sheet, above the key row rather than below it: the row is the
           one thing that must never move, because it is aimed at by muscle memory
@@ -570,6 +710,24 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
             }`}
           >
             ⌘
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void pasteClipboard()}
+            disabled={attached.state !== 'attached' || upload !== null}
+            className="min-h-10 shrink-0 rounded-lg px-3 text-sm text-slate-300 transition enabled:active:bg-slate-700 disabled:text-slate-600"
+          >
+            Paste
+          </button>
+
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={attached.state !== 'attached' || upload !== null}
+            className="min-h-10 shrink-0 rounded-lg px-3 text-sm text-slate-300 transition enabled:active:bg-slate-700 disabled:text-slate-600"
+          >
+            Attach
           </button>
 
           {showOnScreenKeys ? (

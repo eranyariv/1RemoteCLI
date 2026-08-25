@@ -14,6 +14,9 @@ export const Server = {
   AttachSession: 'AttachSession',
   DetachSession: 'DetachSession',
   SendInput: 'SendInput',
+  BeginTerminalUpload: 'BeginTerminalUpload',
+  UploadTerminalChunk: 'UploadTerminalChunk',
+  CancelTerminalUpload: 'CancelTerminalUpload',
   ResizeTerminal: 'ResizeTerminal',
   InterruptSession: 'InterruptSession',
   SendChatMessage: 'SendChatMessage',
@@ -50,4 +53,4 @@ export const Client = {
 } as const
 
 /** Must match `ProtocolVersion.Current`. */
-export const PROTOCOL_VERSION = 3
+export const PROTOCOL_VERSION = 4

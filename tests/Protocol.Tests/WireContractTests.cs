@@ -382,6 +382,16 @@ public sealed class WireContractTests
             SessionId = null,
         });
 
+        Add(messages, "terminalUploadReply", new TerminalUploadReply
+        {
+            UploadId = "29fb210b-e7b4-4d41-8913-74a57a4eb753",
+            ConfirmedBytes = 65_536,
+            TotalBytes = 100_000,
+            RemotePath = null,
+            ErrorCode = null,
+            ErrorMessage = null,
+        });
+
         // Client-to-hub shapes, so the encoder is pinned too. A request the hub
         // cannot deserialise fails at the far end, where the browser sees only a
         // generic invocation error.
@@ -406,6 +416,28 @@ public sealed class WireContractTests
         {
             SessionId = "ff00ff00",
             Data = [0x64, 0x69, 0x72, 0x0d],
+        });
+
+        Add(messages, "beginTerminalUploadRequest", new BeginTerminalUploadRequest
+        {
+            SessionId = "ff00ff00",
+            UploadId = "29fb210b-e7b4-4d41-8913-74a57a4eb753",
+            FileName = "photo.jpg",
+            TotalBytes = 100_000,
+        });
+
+        Add(messages, "terminalUploadChunkRequest", new TerminalUploadChunkRequest
+        {
+            SessionId = "ff00ff00",
+            UploadId = "29fb210b-e7b4-4d41-8913-74a57a4eb753",
+            Offset = 65_536,
+            Data = [0x00, 0x7f, 0x80, 0xff],
+        });
+
+        Add(messages, "cancelTerminalUploadRequest", new CancelTerminalUploadRequest
+        {
+            SessionId = "ff00ff00",
+            UploadId = "29fb210b-e7b4-4d41-8913-74a57a4eb753",
         });
 
         Add(messages, "resizeTerminalRequest", new ResizeTerminalRequest

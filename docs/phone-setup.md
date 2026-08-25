@@ -42,6 +42,8 @@ Tap a machine, then a session. The current screen appears immediately — the ag
 Recent Copilot and Claude Code conversations have a **Chat** badge. Opening one shows typed user messages, agent replies, tool calls, and any permission choices raised by a phone-started turn. Type in the composer to continue the conversation; choosing a permission option sends that exact ACP choice back to the agent.
 
 - **Type** — tap the screen; your keyboard comes up. Characters go straight to the program.
+- **Paste** — reads the phone clipboard and pastes it through the terminal. Programs that enable bracketed paste receive multiline text as one literal paste.
+- **Attach** — opens the phone's file and photo picker, uploads one file (up to 25 MB) to a temporary folder on the machine, and inserts its quoted path at the cursor. It does not press Enter.
 - **Special keys** — the bar above the keyboard has `Esc`, `Tab`, `⏎`, arrows, `^C`, `^D`, `^Z`. **More keys** opens the rest.
 - **Modifiers** — tap `Ctrl` or `Alt` and it applies to the next key you press, the way a phone shift key works. No chording required.
 - **Ctrl+C** is a first-class button because interrupting a runaway program from your phone is half the reason this exists.

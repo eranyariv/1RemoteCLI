@@ -168,6 +168,15 @@ export interface HubError {
   sessionId: string | null
 }
 
+export interface TerminalUploadReply {
+  uploadId: string
+  confirmedBytes: number
+  totalBytes: number
+  remotePath: string | null
+  errorCode: string | null
+  errorMessage: string | null
+}
+
 // Primitives.
 
 function tuple(value: unknown, name: string): unknown[] {
@@ -454,6 +463,19 @@ export function decodeError(value: unknown): HubError {
   }
 }
 
+/** `TerminalUploadReply` — direct result after the agent has handled an upload operation. */
+export function decodeTerminalUploadReply(value: unknown): TerminalUploadReply {
+  const reply = tuple(value, 'TerminalUploadReply')
+  return {
+    uploadId: str(reply[0]),
+    confirmedBytes: num(reply[1]),
+    totalBytes: num(reply[2]),
+    remotePath: typeof reply[3] === 'string' ? reply[3] : null,
+    errorCode: typeof reply[4] === 'string' ? reply[4] : null,
+    errorMessage: typeof reply[5] === 'string' ? reply[5] : null,
+  }
+}
+
 /** `ProjectInfo`, decoded on its own — it is nested inside every project message below. */
 export function decodeProject(value: unknown): ProjectInfo {
   const p = tuple(value, 'ProjectInfo')
@@ -524,6 +546,28 @@ export function encodeRefreshToken(token: string): unknown[] {
 
 export function encodeSendInput(sessionId: string, data: Uint8Array): unknown[] {
   return [sessionId, data]
+}
+
+export function encodeBeginTerminalUpload(
+  sessionId: string,
+  uploadId: string,
+  fileName: string,
+  totalBytes: number,
+): unknown[] {
+  return [sessionId, uploadId, fileName, totalBytes]
+}
+
+export function encodeTerminalUploadChunk(
+  sessionId: string,
+  uploadId: string,
+  offset: number,
+  data: Uint8Array,
+): unknown[] {
+  return [sessionId, uploadId, offset, data]
+}
+
+export function encodeCancelTerminalUpload(sessionId: string, uploadId: string): unknown[] {
+  return [sessionId, uploadId]
 }
 
 export function encodeResizeTerminal(sessionId: string, cols: number, rows: number): unknown[] {

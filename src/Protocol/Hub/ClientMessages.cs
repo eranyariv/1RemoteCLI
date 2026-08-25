@@ -64,6 +64,51 @@ public sealed class SendInputRequest
     public byte[] Data { get; set; } = [];
 }
 
+/// <summary>Client to hub. Starts one bounded file upload to the attached terminal session.</summary>
+[MessagePackObject]
+public sealed class BeginTerminalUploadRequest
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string UploadId { get; set; } = string.Empty;
+
+    [Key(2)]
+    public string FileName { get; set; } = string.Empty;
+
+    [Key(3)]
+    public long TotalBytes { get; set; }
+}
+
+/// <summary>Client to hub. Appends one ordered chunk to an upload the agent accepted.</summary>
+[MessagePackObject]
+public sealed class TerminalUploadChunkRequest
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string UploadId { get; set; } = string.Empty;
+
+    [Key(2)]
+    public long Offset { get; set; }
+
+    [Key(3)]
+    public byte[] Data { get; set; } = [];
+}
+
+/// <summary>Client to hub. Cancels a partial terminal upload and removes its temporary bytes.</summary>
+[MessagePackObject]
+public sealed class CancelTerminalUploadRequest
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string UploadId { get; set; } = string.Empty;
+}
+
 /// <summary>Client to hub. Reflows the desk terminal too: the phone wins while attached.</summary>
 [MessagePackObject]
 public sealed class ResizeTerminalRequest

@@ -85,6 +85,43 @@ public class HubContractTests
     }
 
     [Fact]
+    public void TerminalUploadMessagesPreserveOrderingAndBytes()
+    {
+        const string uploadId = "29fb210b-e7b4-4d41-8913-74a57a4eb753";
+
+        BeginTerminalUploadRequest begin = RoundTrip(new BeginTerminalUploadRequest
+        {
+            SessionId = "s-1",
+            UploadId = uploadId,
+            FileName = "photo.jpg",
+            TotalBytes = 4,
+        });
+        Assert.Equal("photo.jpg", begin.FileName);
+        Assert.Equal(4, begin.TotalBytes);
+
+        TerminalUploadChunkRequest chunk = RoundTrip(new TerminalUploadChunkRequest
+        {
+            SessionId = "s-1",
+            UploadId = uploadId,
+            Offset = 2,
+            Data = [0x00, 0xff],
+        });
+        Assert.Equal(2, chunk.Offset);
+        Assert.Equal([0x00, 0xff], chunk.Data);
+
+        TerminalUploadReply reply = RoundTrip(new TerminalUploadReply
+        {
+            UploadId = uploadId,
+            ConfirmedBytes = 4,
+            TotalBytes = 4,
+            RemotePath = @"C:\Temp\photo.jpg",
+        });
+        Assert.Equal(4, reply.ConfirmedBytes);
+        Assert.Equal(@"C:\Temp\photo.jpg", reply.RemotePath);
+        Assert.Null(reply.ErrorCode);
+    }
+
+    [Fact]
     public void MachineInfoNestsItsSessions()
     {
         var received = RoundTrip(new MachineInfo

@@ -308,6 +308,7 @@ export default function App() {
             />
           ) : (
             <TerminalView
+              key={showing.session.sessionId}
               client={relay.client}
               connected={relay.status === 'connected'}
               machine={showing.machine}

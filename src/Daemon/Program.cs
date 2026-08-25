@@ -542,7 +542,7 @@ public static class Program
         MachineIdentity identity = MachineIdentity.Load(log: Console.Error.WriteLine);
 
         var broker = new TokenBroker();
-        var sessions = new SessionRegistry();
+        var sessions = new SessionRegistry(logger: loggers.CreateLogger("TerminalUploads"));
         Uri hubUri = HubEndpoint.Resolve();
 
         await using var hub = new AgentHubClient(

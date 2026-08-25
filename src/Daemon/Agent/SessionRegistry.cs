@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 using OneRemoteCli.Protocol.Hub;
 
 namespace OneRemoteCli.Daemon.Agent;
@@ -7,9 +8,19 @@ namespace OneRemoteCli.Daemon.Agent;
 /// The agent's view of every terminal session running on this machine, and the
 /// single place that turns a session id into the wrapper that owns it.
 /// </summary>
-public sealed class SessionRegistry
+public sealed class SessionRegistry : IDisposable
 {
     private readonly ConcurrentDictionary<string, TerminalSession> _sessions = new(StringComparer.Ordinal);
+    private readonly TerminalUploadStore _uploads;
+    private readonly object _lifecycleGate = new();
+
+    public SessionRegistry(
+        string? uploadRoot = null,
+        TimeProvider? time = null,
+        ILogger? logger = null)
+    {
+        _uploads = new TerminalUploadStore(uploadRoot, time, logger);
+    }
 
     /// <summary>
     /// Raised whenever a session is added or removed, so a later hub client can
@@ -54,9 +65,14 @@ public sealed class SessionRegistry
 
     public bool Remove(string sessionId)
     {
-        if (!_sessions.TryRemove(sessionId, out _))
+        lock (_lifecycleGate)
         {
-            return false;
+            if (!_sessions.TryRemove(sessionId, out _))
+            {
+                return false;
+            }
+
+            _uploads.RemoveSession(sessionId);
         }
 
         Changed?.Invoke();
@@ -95,4 +111,31 @@ public sealed class SessionRegistry
 
     public ValueTask InterruptAsync(string sessionId, CancellationToken cancellationToken = default) =>
         Get(sessionId).Channel.SendInterruptAsync(cancellationToken);
+
+    public TerminalUploadReply BeginUpload(BeginTerminalUploadNotification request)
+    {
+        lock (_lifecycleGate)
+        {
+            return _uploads.Begin(request, Get(request.SessionId));
+        }
+    }
+
+    public TerminalUploadReply AppendUpload(TerminalUploadChunkNotification request)
+    {
+        Get(request.SessionId);
+        return _uploads.Append(request);
+    }
+
+    public TerminalUploadReply CancelUpload(CancelTerminalUploadNotification request)
+    {
+        Get(request.SessionId);
+        return _uploads.Cancel(request);
+    }
+
+    public void CancelUploadsForClient(string sessionId, string clientConnectionId) =>
+        _uploads.CancelForClient(sessionId, clientConnectionId);
+
+    public void CancelActiveUploads() => _uploads.CancelActive();
+
+    public void Dispose() => _uploads.Dispose();
 }

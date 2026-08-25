@@ -137,7 +137,7 @@ public sealed class AuthorizationTests : IAsyncLifetime
         // A method may also delegate, which several of the client methods do. That is
         // fine only if the helper resolves too — so the helpers are checked by the same
         // rule rather than trusted, and adding one that does not resolve fails here.
-        string[] helpers = ["ForwardAsync"];
+        string[] helpers = ["ForwardAsync", "InvokeTerminalUploadAsync"];
 
         foreach (string helper in helpers)
         {

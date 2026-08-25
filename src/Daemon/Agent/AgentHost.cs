@@ -151,5 +151,6 @@ public sealed class AgentHost : IAsyncDisposable
     {
         await _server.DisposeAsync().ConfigureAwait(false);
         await DrainAsync().ConfigureAwait(false);
+        Sessions.Dispose();
     }
 }

@@ -192,6 +192,58 @@ public sealed class AgentHubClientTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SavesTerminalUploadChunksAndReturnsTheRemotePath()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"agent-upload-{Guid.NewGuid():n}");
+
+        try
+        {
+            var sessions = new SessionRegistry(root);
+            await StartAsync(sessions);
+            await Next<RegisterMachineRequest>();
+
+            TerminalSession session =
+                sessions.Add("pwsh", [], @"C:\", 80, 24, null, new FakeChannel());
+            string uploadId = Guid.NewGuid().ToString();
+
+            TerminalUploadReply begun = await InvokeAgentAsync<BeginTerminalUploadNotification, TerminalUploadReply>(
+                HubMethods.Agent.BeginTerminalUpload,
+                new BeginTerminalUploadNotification
+                {
+                    SessionId = session.SessionId,
+                    ClientConnectionId = "phone",
+                    UploadId = uploadId,
+                    FileName = "hello.txt",
+                    TotalBytes = 5,
+                });
+            Assert.Null(begun.ErrorCode);
+
+            TerminalUploadReply completed =
+                await InvokeAgentAsync<TerminalUploadChunkNotification, TerminalUploadReply>(
+                    HubMethods.Agent.UploadTerminalChunk,
+                    new TerminalUploadChunkNotification
+                    {
+                        SessionId = session.SessionId,
+                        ClientConnectionId = "phone",
+                        UploadId = uploadId,
+                        Offset = 0,
+                        Data = "hello"u8.ToArray(),
+                    });
+
+            Assert.Equal("hello", File.ReadAllText(completed.RemotePath!));
+            Assert.True(sessions.Remove(session.SessionId));
+            Assert.False(File.Exists(completed.RemotePath));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task DeliversAnInterrupt()
     {
         // The action the product exists for, so it gets its own test rather than
@@ -530,6 +582,16 @@ public sealed class AgentHubClientTests : IAsyncLifetime
             .GetRequiredService<IHubContext<RecordingHub>>()
             .Clients.Client(connectionId)
             .SendAsync(method, notification);
+    }
+
+    private async Task<TResult> InvokeAgentAsync<TRequest, TResult>(string method, TRequest request)
+    {
+        string connectionId = await _recorder.ConnectionId.Task.WaitAsync(Patience);
+
+        return await _server.Services
+            .GetRequiredService<IHubContext<RecordingHub>>()
+            .Clients.Client(connectionId)
+            .InvokeCoreAsync<TResult>(method, [request!], CancellationToken.None);
     }
 
     private async Task<T> Next<T>()

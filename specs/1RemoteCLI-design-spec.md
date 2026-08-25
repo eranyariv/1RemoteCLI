@@ -24,9 +24,9 @@ Modern development increasingly runs through long-lived, interactive terminal ag
 
 ### 1.2 Scope
 
-**In scope for v1:** attaching to running terminal sessions from a phone, continuing recent GitHub Copilot or Claude Code conversations through ACP, full interactive control, reconnection across network changes, push notification when a session needs attention, multiple machines per user.
+**In scope for v1:** attaching to running terminal sessions from a phone, continuing recent GitHub Copilot or Claude Code conversations through ACP, full interactive control, pasting mobile clipboard text, bounded phone-to-terminal file and photo attachments, reconnection across network changes, push notification when a session needs attention, multiple machines per user.
 
-**Out of scope for v1:** launching processes remotely, file transfer, scrollback history on mobile, sharing a machine with another person, session persistence across a closed desk terminal, end-to-end encryption.
+**Out of scope for v1:** launching processes remotely, general file browsing or machine-to-phone transfer, scrollback history on mobile, sharing a machine with another person, session persistence across a closed desk terminal, end-to-end encryption.
 
 ### 1.3 Intended audience and scale
 
@@ -546,6 +546,12 @@ The encodings are the ones a real terminal puts on the wire, since the whole des
 
 The lists are deliberately short. A list of everything is a reference manual, and a reference manual on a phone screen is slower than typing. Commands are *inserted, not submitted*: half take an argument, and the ones that do not include `/clear`, which discards work that cannot be recovered by apologising to the model afterwards. A session whose type is unknown is offered no commands at all rather than a guess, because a button whose effect nobody can predict is worse than no button.
 
+**Clipboard and attachments.** Paste is an explicit action because mobile browsers do not expose the clipboard to an arbitrary terminal key event. It reads text only from a user gesture and hands it unchanged to `xterm.js`'s paste path. The headless terminal tracks DECSET 2004 and includes it in a snapshot, so xterm adds bracketed-paste delimiters exactly when the remote program enabled them; newlines and escape-looking text remain paste content rather than browser-generated terminal control.
+
+Attach opens the platform file/photo picker and streams one selected file to the attached machine. Files are capped at 25 MB and split into ordered 64 KB chunks. The browser waits for an agent result after every chunk, so progress means the machine accepted those bytes rather than merely that the phone handed them to SignalR. Every operation resolves through the caller's current terminal attachment; the hub supplies the connection id, and the agent binds the upload to that session and client.
+
+The agent writes to `%TEMP%\1RemoteCLI\terminal-uploads\<sessionId>\<uploadId>` under a sanitized leaf name. Each upload id gets a new directory, the in-progress file is named `.partial`, and completion flushes and atomically renames it without overwrite. The returned path is shell-quoted and pasted at the cursor but never submitted. Cancellation, detach, and relay failure remove partial files; closing the terminal removes its completed attachments; startup and an hourly sweep prune session directories older than 24 hours so a crash cannot retain them indefinitely once the agent is running again.
+
 **Sizing.** The phone is authoritative while attached: on attach, and on orientation change, the client computes columns and rows from the viewport and sends `ResizeTerminal`, which reshapes the real PTY. The desk terminal window does not resize in response, so a program will render to the phone's narrower width in a wider desktop window until the phone detaches. This is the accepted trade: a correctly reflowed phone view is worth a temporarily odd-looking desk window, and TUIs handle `SIGWINCH`-equivalent resizes natively. On detach the client hands the session back the shape it had at the desk, so walking away does not leave a 45-column program stranded inside a wide window until somebody drags the corner. Resizes are debounced, so the keyboard animating open produces one message rather than thirty.
 
 **The visible area is not the layout viewport.** On iOS, opening the software keyboard does not shrink the layout viewport at all — the page is scrolled up inside a smaller *visual* viewport. A full-height fixed element therefore keeps its full height and hides its own bottom behind the keyboard, and the bottom is the accessory bar and the last lines of output: the two things somebody opened the app to reach. The terminal view consequently measures `visualViewport` and pins itself to an explicit pixel height, translated down by the scroll, rather than using the `inset-0` that would be the obvious thing and is wrong on exactly the device this product is for. Sub-pixel drift is rounded away, because iOS reports fractional heights that wobble through the whole keyboard animation.
@@ -652,11 +658,11 @@ Also: `SessionClosed { sessionId, exitCode }`, `SessionUpdated { session }`, `Se
 
 `SessionUpdated` is deliberately not a second `SessionOpened`, even though the registry's add is an upsert and would store the right thing. An open is counted in the usage figures, and being told twice what a session is should not look like having started it twice.
 
-**Hub → agent**: `AttachRequested { sessionId, clientConnectionId, cols, rows, lastSeq? }`, `DetachRequested { sessionId, clientConnectionId }`, `SendInput { sessionId, data }`, `ResizeTerminal { sessionId, cols, rows }`, `InterruptSession { sessionId }`, `SendChatMessage { sessionId, text }`, `RespondChatPermission { sessionId, requestId, optionId }`, `SetSessionTypeRequested { sessionId, cliType }`, `TokenExpiring { expiresAt }`.
+**Hub → agent**: `AttachRequested { sessionId, clientConnectionId, cols, rows, lastSeq? }`, `DetachRequested { sessionId, clientConnectionId }`, `SendInput { sessionId, data }`, `BeginTerminalUpload { sessionId, clientConnectionId, uploadId, fileName, totalBytes }`, `UploadTerminalChunk { sessionId, clientConnectionId, uploadId, offset, data }`, `CancelTerminalUpload { sessionId, clientConnectionId, uploadId }`, `ResizeTerminal { sessionId, cols, rows }`, `InterruptSession { sessionId }`, `SendChatMessage { sessionId, text }`, `RespondChatPermission { sessionId, requestId, optionId }`, `SetSessionTypeRequested { sessionId, cliType }`, `TokenExpiring { expiresAt }`.
 
 ### 5.3 Client ↔ hub
 
-**Client → hub**: `ListMachines {}`, `AttachSession { machineId, sessionId, cols, rows, lastSeq? }`, `DetachSession { sessionId }`, `SendInput { sessionId, data }`, `ResizeTerminal { sessionId, cols, rows }`, `InterruptSession { sessionId }`, `SendChatMessage { sessionId, text }`, `RespondChatPermission { sessionId, requestId, optionId }`, `SetSessionType { sessionId, cliType }`, `SetSessionName { machineId, sessionId, name? }`, `SetSessionPinned { machineId, sessionId, pinned }`, `RegisterPush { endpoint, keys }`, `RefreshToken { token }`.
+**Client → hub**: `ListMachines {}`, `AttachSession { machineId, sessionId, cols, rows, lastSeq? }`, `DetachSession { sessionId }`, `SendInput { sessionId, data }`, `BeginTerminalUpload { sessionId, uploadId, fileName, totalBytes }`, `UploadTerminalChunk { sessionId, uploadId, offset, data }`, `CancelTerminalUpload { sessionId, uploadId }`, `ResizeTerminal { sessionId, cols, rows }`, `InterruptSession { sessionId }`, `SendChatMessage { sessionId, text }`, `RespondChatPermission { sessionId, requestId, optionId }`, `SetSessionType { sessionId, cliType }`, `SetSessionName { machineId, sessionId, name? }`, `SetSessionPinned { machineId, sessionId, pinned }`, `RegisterPush { endpoint, keys }`, `RefreshToken { token }`.
 
 **Hub → client**: `MachineList { machines[] }`, `MachineOnline / MachineOffline { machineId }`, `SessionOpened / SessionUpdated / SessionClosed { machineId, session }`, `TerminalOutput { sessionId, seq, kind, data }`, `ChatTranscript { sessionId, seq, kind, events[] }`, `SessionAwaitingInput { machineId, sessionId }`, `SessionAttention { machineId, sessionId, awaitingInput, hint }`, `TokenExpiring { expiresAt }`, `Error { code, message, sessionId? }`.
 
@@ -667,6 +673,8 @@ Also: `SessionClosed { sessionId, exitCode }`, `SessionUpdated { session }`, `Se
 Both are answered with the ordinary `SessionUpdated` fan-out to every one of that user's clients rather than a notification of their own. The label is applied to the `SessionInfo` the hub materialises, so the message that already exists carries it, and the phone that is looking at the list — attached to nothing — is told as well as the laptop that is watching the terminal.
 
 `SendInput` is a pure passthrough: `data` is the exact byte sequence the terminal should receive — `"y\r"`, `"\u001b[A"` for cursor-up, `"\u0003"` for `Ctrl+C`. The hub never interprets it, which keeps the phone's input indistinguishable from the keyboard's.
+
+The three terminal-upload methods are request/result calls rather than fire-and-forget notifications. Their `TerminalUploadReply { uploadId, confirmedBytes, totalBytes, remotePath?, errorCode?, errorMessage? }` crosses agent → hub → browser unchanged, so a browser never reports progress or inserts a path before the owning agent has accepted the corresponding operation.
 
 #### Session names and pins
 

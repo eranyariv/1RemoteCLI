@@ -128,12 +128,14 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
 
         _connection.Reconnecting += _ =>
         {
+            _sessions.CancelActiveUploads();
             RaiseStateChanged();
             return Task.CompletedTask;
         };
 
         _connection.Closed += _ =>
         {
+            _sessions.CancelActiveUploads();
             _closed.TrySetResult();
             RaiseStateChanged();
             return Task.CompletedTask;
@@ -453,6 +455,30 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
                     notification.Cols,
                     notification.Rows)).ConfigureAwait(false));
 
+        _connection.On<BeginTerminalUploadNotification, TerminalUploadReply>(
+            HubMethods.Agent.BeginTerminalUpload,
+            notification => RouteUpload(
+                notification.SessionId,
+                notification.UploadId,
+                notification.TotalBytes,
+                () => _sessions.BeginUpload(notification)));
+
+        _connection.On<TerminalUploadChunkNotification, TerminalUploadReply>(
+            HubMethods.Agent.UploadTerminalChunk,
+            notification => RouteUpload(
+                notification.SessionId,
+                notification.UploadId,
+                0,
+                () => _sessions.AppendUpload(notification)));
+
+        _connection.On<CancelTerminalUploadNotification, TerminalUploadReply>(
+            HubMethods.Agent.CancelTerminalUpload,
+            notification => RouteUpload(
+                notification.SessionId,
+                notification.UploadId,
+                0,
+                () => _sessions.CancelUpload(notification)));
+
         _connection.On<InterruptSessionNotification>(
             HubMethods.Agent.InterruptSession,
             async notification => await RouteAsync(
@@ -505,7 +531,13 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
 
         _connection.On<DetachRequestedNotification>(
             HubMethods.Agent.DetachRequested,
-            notification => _logger.ClientDetached(notification.SessionId));
+            notification =>
+            {
+                _sessions.CancelUploadsForClient(
+                    notification.SessionId,
+                    notification.ClientConnectionId);
+                _logger.ClientDetached(notification.SessionId);
+            });
 
         _connection.On<TokenExpiringNotification>(
             HubMethods.Agent.TokenExpiring,
@@ -514,6 +546,39 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
         _connection.On<ErrorNotification>(
             HubMethods.Agent.Error,
             notification => Once(1901, () => _logger.Refused("A hub call", notification.Code, notification.Message)));
+    }
+
+    private TerminalUploadReply RouteUpload(
+        string sessionId,
+        string uploadId,
+        long totalBytes,
+        Func<TerminalUploadReply> action)
+    {
+        try
+        {
+            return action();
+        }
+        catch (UnknownSessionException)
+        {
+            return new TerminalUploadReply
+            {
+                UploadId = uploadId,
+                TotalBytes = totalBytes,
+                ErrorCode = ErrorCodes.SessionNotFound,
+                ErrorMessage = "That terminal session has ended.",
+            };
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.Failed(ex, "Handling a terminal upload");
+            return new TerminalUploadReply
+            {
+                UploadId = uploadId,
+                TotalBytes = totalBytes,
+                ErrorCode = ErrorCodes.UploadFailed,
+                ErrorMessage = "The machine could not prepare a safe upload path.",
+            };
+        }
     }
 
     /// <summary>

@@ -40,6 +40,18 @@ public static class HubMethods
         public const string ResizeTerminal = "ResizeTerminal";
         public const string InterruptSession = "InterruptSession";
         public const string SendChatMessage = "SendChatMessage";
+        public const string BeginChatAttachment = "BeginChatAttachment";
+        public const string UploadChatAttachmentChunk = "UploadChatAttachmentChunk";
+        public const string CancelChatAttachment = "CancelChatAttachment";
+
+        /// <summary>
+        /// Optional text plus staged attachments. Separate from
+        /// <see cref="SendChatMessage"/> rather than an extension of it, so a phone
+        /// talking to an agent that predates attachments keeps sending text the way
+        /// that agent already understands.
+        /// </summary>
+        public const string SendChatPrompt = "SendChatPrompt";
+
         public const string RespondChatPermission = "RespondChatPermission";
         public const string SetSessionType = "SetSessionType";
 
@@ -83,6 +95,10 @@ public static class HubMethods
         public const string ResizeTerminal = "ResizeTerminal";
         public const string InterruptSession = "InterruptSession";
         public const string SendChatMessage = "SendChatMessage";
+        public const string BeginChatAttachment = "BeginChatAttachment";
+        public const string UploadChatAttachmentChunk = "UploadChatAttachmentChunk";
+        public const string CancelChatAttachment = "CancelChatAttachment";
+        public const string SendChatPrompt = "SendChatPrompt";
         public const string RespondChatPermission = "RespondChatPermission";
         public const string SetSessionTypeRequested = "SetSessionTypeRequested";
         public const string TokenExpiring = "TokenExpiring";

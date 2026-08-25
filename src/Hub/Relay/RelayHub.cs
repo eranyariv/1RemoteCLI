@@ -796,6 +796,177 @@ public sealed class RelayHub(
             SessionKind.AgentChat);
     }
 
+    /// <summary>
+    /// Stages one bounded attachment on the agent that owns the attached chat.
+    /// <para>
+    /// Its own family of methods rather than a session-kind switch inside the
+    /// terminal ones: the two transports share only their chunking, and a single
+    /// method that could land on either kind would be the one place where a browser
+    /// file could become a pasted machine path by accident.
+    /// </para>
+    /// </summary>
+    public Task<ChatAttachmentReply> BeginChatAttachment(BeginChatAttachmentRequest request)
+    {
+        if (request is null ||
+            string.IsNullOrWhiteSpace(request.SessionId) ||
+            !Guid.TryParse(request.AttachmentId, out _) ||
+            string.IsNullOrWhiteSpace(request.FileName) ||
+            request.FileName.Length > ChatAttachmentLimits.MaxFileNameChars ||
+            request.MimeType is null ||
+            request.MimeType.Length > ChatAttachmentLimits.MaxMimeTypeChars ||
+            request.TotalBytes < 0)
+        {
+            return Task.FromResult(AttachmentError(
+                request?.AttachmentId,
+                request?.TotalBytes ?? 0,
+                ErrorCodes.InvalidRequest,
+                "BeginChatAttachment needs a valid id, filename, and size."));
+        }
+
+        if (request.TotalBytes > ChatAttachmentLimits.MaxAttachmentBytes)
+        {
+            return Task.FromResult(AttachmentError(
+                request.AttachmentId,
+                request.TotalBytes,
+                ErrorCodes.AttachmentTooLarge,
+                $"Chat attachments are limited to {ChatAttachmentLimits.MaxAttachmentBytes / (1024 * 1024)} MB each."));
+        }
+
+        return InvokeChatAttachmentAsync(
+            request.SessionId,
+            request.AttachmentId,
+            request.TotalBytes,
+            HubMethods.Agent.BeginChatAttachment,
+            target => new BeginChatAttachmentNotification
+            {
+                SessionId = target.SessionId,
+                ClientConnectionId = Context.ConnectionId,
+                AttachmentId = request.AttachmentId,
+                FileName = request.FileName,
+                MimeType = request.MimeType,
+                TotalBytes = request.TotalBytes,
+            });
+    }
+
+    /// <summary>Relays one chunk and waits until the agent has staged it before acknowledging.</summary>
+    public Task<ChatAttachmentReply> UploadChatAttachmentChunk(ChatAttachmentChunkRequest request)
+    {
+        if (request is null ||
+            string.IsNullOrWhiteSpace(request.SessionId) ||
+            !Guid.TryParse(request.AttachmentId, out _) ||
+            request.Offset < 0 ||
+            request.Data is null ||
+            request.Data.Length == 0 ||
+            request.Data.Length > ChatAttachmentLimits.MaxChunkBytes)
+        {
+            return Task.FromResult(AttachmentError(
+                request?.AttachmentId,
+                0,
+                ErrorCodes.InvalidRequest,
+                "UploadChatAttachmentChunk needs an ordered, bounded chunk."));
+        }
+
+        return InvokeChatAttachmentAsync(
+            request.SessionId,
+            request.AttachmentId,
+            0,
+            HubMethods.Agent.UploadChatAttachmentChunk,
+            target => new ChatAttachmentChunkNotification
+            {
+                SessionId = target.SessionId,
+                ClientConnectionId = Context.ConnectionId,
+                AttachmentId = request.AttachmentId,
+                Offset = request.Offset,
+                Data = request.Data,
+            });
+    }
+
+    /// <summary>Removes a staged attachment owned by this attached client.</summary>
+    public Task<ChatAttachmentReply> CancelChatAttachment(CancelChatAttachmentRequest request)
+    {
+        if (request is null ||
+            string.IsNullOrWhiteSpace(request.SessionId) ||
+            !Guid.TryParse(request.AttachmentId, out _))
+        {
+            return Task.FromResult(AttachmentError(
+                request?.AttachmentId,
+                0,
+                ErrorCodes.InvalidRequest,
+                "CancelChatAttachment needs a session id and attachment id."));
+        }
+
+        return InvokeChatAttachmentAsync(
+            request.SessionId,
+            request.AttachmentId,
+            0,
+            HubMethods.Agent.CancelChatAttachment,
+            target => new CancelChatAttachmentNotification
+            {
+                SessionId = target.SessionId,
+                ClientConnectionId = Context.ConnectionId,
+                AttachmentId = request.AttachmentId,
+            });
+    }
+
+    /// <summary>
+    /// Sends optional text plus staged attachments to the attached ACP session, and
+    /// answers once the agent has accepted them — not once the turn is over.
+    /// </summary>
+    public async Task<ChatPromptReply> SendChatPrompt(SendChatPromptRequest request)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.SessionId))
+        {
+            return PromptError(ErrorCodes.InvalidRequest, "SendChatPrompt needs a session id.");
+        }
+
+        string text = (request.Text ?? string.Empty).Trim();
+        string[] attachmentIds = request.AttachmentIds ?? [];
+
+        if (text.Length == 0 && attachmentIds.Length == 0)
+        {
+            return PromptError(
+                ErrorCodes.InvalidRequest,
+                "A prompt needs text, an attachment, or both.");
+        }
+
+        if (text.Length > ChatAttachmentLimits.MaxPromptTextChars)
+        {
+            return PromptError(
+                ErrorCodes.InvalidRequest,
+                $"A chat message is limited to {ChatAttachmentLimits.MaxPromptTextChars:N0} characters.");
+        }
+
+        if (attachmentIds.Length > ChatAttachmentLimits.MaxAttachmentCount)
+        {
+            return PromptError(
+                ErrorCodes.AttachmentBudgetExceeded,
+                $"A prompt carries at most {ChatAttachmentLimits.MaxAttachmentCount} attachments.");
+        }
+
+        if (attachmentIds.Any(id => !Guid.TryParse(id, out _)) ||
+            attachmentIds.Distinct(StringComparer.OrdinalIgnoreCase).Count() != attachmentIds.Length)
+        {
+            return PromptError(ErrorCodes.InvalidRequest, "Attachment ids must be distinct and valid.");
+        }
+
+        return await InvokeKindedAsync(
+            request.SessionId,
+            HubMethods.Agent.SendChatPrompt,
+            SessionKind.AgentChat,
+            target => new SendChatPromptNotification
+            {
+                SessionId = target.SessionId,
+                ClientConnectionId = Context.ConnectionId,
+                Text = text,
+                AttachmentIds = attachmentIds,
+            },
+            (code, message) => PromptError(code, message),
+            ErrorCodes.AttachmentUnavailable,
+            "The connected agent does not support chat attachments.",
+            ErrorCodes.AttachmentCancelled,
+            "The client disconnected before the prompt was accepted.");
+    }
+
     /// <summary>Selects an option from a pending ACP permission request.</summary>
     public Task<ErrorNotification?> RespondChatPermission(RespondChatPermissionRequest request)
     {
@@ -1195,7 +1366,52 @@ public sealed class RelayHub(
         string uploadId,
         long totalBytes,
         string method,
-        Func<RelayTarget, TNotification> build)
+        Func<RelayTarget, TNotification> build) =>
+        await InvokeKindedAsync(
+            sessionId,
+            method,
+            SessionKind.Terminal,
+            build,
+            (code, message) => UploadError(uploadId, totalBytes, code, message),
+            ErrorCodes.UploadUnavailable,
+            "The connected agent does not support terminal file uploads.",
+            ErrorCodes.UploadCancelled,
+            "The client disconnected before the upload operation completed.");
+
+    /// <summary>The chat counterpart, which never resolves to a terminal session.</summary>
+    private async Task<ChatAttachmentReply> InvokeChatAttachmentAsync<TNotification>(
+        string sessionId,
+        string attachmentId,
+        long totalBytes,
+        string method,
+        Func<RelayTarget, TNotification> build) =>
+        await InvokeKindedAsync(
+            sessionId,
+            method,
+            SessionKind.AgentChat,
+            build,
+            (code, message) => AttachmentError(attachmentId, totalBytes, code, message),
+            ErrorCodes.AttachmentUnavailable,
+            "The connected agent does not support chat attachments.",
+            ErrorCodes.AttachmentCancelled,
+            "The client disconnected before the attachment operation completed.");
+
+    /// <summary>
+    /// One request/result call to the agent that owns the caller's attachment, with
+    /// the kind check every such call needs and the two failures none of them can
+    /// avoid: an agent too old to have the method, and a client that vanished while
+    /// waiting for the answer.
+    /// </summary>
+    private async Task<TReply> InvokeKindedAsync<TNotification, TReply>(
+        string sessionId,
+        string method,
+        SessionKind requiredKind,
+        Func<RelayTarget, TNotification> build,
+        Func<string, string, TReply> failure,
+        string unavailableCode,
+        string unavailableMessage,
+        string cancelledCode,
+        string cancelledMessage)
     {
         if (!_registry.TryResolveAttached(
                 Context.ConnectionId,
@@ -1203,44 +1419,32 @@ public sealed class RelayHub(
                 out RelayTarget? target,
                 out ErrorNotification? error))
         {
-            return UploadError(
-                uploadId,
-                totalBytes,
-                error!.Code,
-                error.Message);
+            return failure(error!.Code, error.Message);
         }
 
-        if (target!.Kind != SessionKind.Terminal)
+        if (target!.Kind != requiredKind)
         {
-            return UploadError(
-                uploadId,
-                totalBytes,
+            return failure(
                 ErrorCodes.InvalidRequest,
-                "That action requires a terminal session.");
+                requiredKind == SessionKind.AgentChat
+                    ? "That action requires an agent chat."
+                    : "That action requires a terminal session.");
         }
 
         try
         {
-            return await Clients.Client(target.AgentConnectionId).InvokeCoreAsync<TerminalUploadReply>(
+            return await Clients.Client(target.AgentConnectionId).InvokeCoreAsync<TReply>(
                 method,
                 [build(target)],
                 Context.ConnectionAborted);
         }
         catch (HubException)
         {
-            return UploadError(
-                uploadId,
-                totalBytes,
-                ErrorCodes.UploadUnavailable,
-                "The connected agent does not support terminal file uploads.");
+            return failure(unavailableCode, unavailableMessage);
         }
         catch (OperationCanceledException) when (Context.ConnectionAborted.IsCancellationRequested)
         {
-            return UploadError(
-                uploadId,
-                totalBytes,
-                ErrorCodes.UploadCancelled,
-                "The client disconnected before the upload operation completed.");
+            return failure(cancelledCode, cancelledMessage);
         }
     }
 
@@ -1253,6 +1457,27 @@ public sealed class RelayHub(
         {
             UploadId = uploadId ?? string.Empty,
             TotalBytes = totalBytes,
+            ErrorCode = code,
+            ErrorMessage = message,
+        };
+
+    private static ChatAttachmentReply AttachmentError(
+        string? attachmentId,
+        long totalBytes,
+        string code,
+        string message) =>
+        new()
+        {
+            AttachmentId = attachmentId ?? string.Empty,
+            TotalBytes = totalBytes,
+            ErrorCode = code,
+            ErrorMessage = message,
+        };
+
+    private static ChatPromptReply PromptError(string code, string message) =>
+        new()
+        {
+            Accepted = false,
             ErrorCode = code,
             ErrorMessage = message,
         };

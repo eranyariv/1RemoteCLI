@@ -364,6 +364,255 @@ public sealed class RelayHubTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ChatAttachmentsReachOnlyTheAttachedChatAndReturnAgentConfirmedProgress()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        var began = new TaskCompletionSource<BeginChatAttachmentNotification>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var chunked = new TaskCompletionSource<ChatAttachmentChunkNotification>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var prompted = new TaskCompletionSource<SendChatPromptNotification>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using IDisposable beginHandler = agent.On<BeginChatAttachmentNotification, ChatAttachmentReply>(
+            HubMethods.Agent.BeginChatAttachment,
+            request =>
+            {
+                began.TrySetResult(request);
+                return new ChatAttachmentReply
+                {
+                    AttachmentId = request.AttachmentId,
+                    TotalBytes = request.TotalBytes,
+                };
+            });
+        using IDisposable chunkHandler = agent.On<ChatAttachmentChunkNotification, ChatAttachmentReply>(
+            HubMethods.Agent.UploadChatAttachmentChunk,
+            request =>
+            {
+                chunked.TrySetResult(request);
+                return new ChatAttachmentReply
+                {
+                    AttachmentId = request.AttachmentId,
+                    ConfirmedBytes = request.Offset + request.Data.LongLength,
+                    TotalBytes = request.Offset + request.Data.LongLength,
+                    Completed = true,
+                };
+            });
+        using IDisposable promptHandler = agent.On<SendChatPromptNotification, ChatPromptReply>(
+            HubMethods.Agent.SendChatPrompt,
+            request =>
+            {
+                prompted.TrySetResult(request);
+                return new ChatPromptReply { Accepted = true };
+            });
+
+        await OpenSessionAsync(agent, "terminal-1", "pwsh");
+        await OpenSessionAsync(agent, "chat-1", "GitHub Copilot", SessionKind.AgentChat);
+
+        HubConnection alice = await ConnectClientAsync(AliceTenant, AliceObject);
+        await AttachAsync(alice, "machine-a", "chat-1");
+        string attachmentId = Guid.NewGuid().ToString();
+
+        ChatAttachmentReply started = await alice.InvokeAsync<ChatAttachmentReply>(
+            HubMethods.Server.BeginChatAttachment,
+            new BeginChatAttachmentRequest
+            {
+                SessionId = "chat-1",
+                AttachmentId = attachmentId,
+                FileName = "receipt.png",
+                MimeType = "image/png",
+                TotalBytes = 4,
+            });
+        Assert.Null(started.ErrorCode);
+
+        BeginChatAttachmentNotification begin = await began.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal("chat-1", begin.SessionId);
+        Assert.Equal("image/png", begin.MimeType);
+        Assert.NotEmpty(begin.ClientConnectionId);
+
+        ChatAttachmentReply completed = await alice.InvokeAsync<ChatAttachmentReply>(
+            HubMethods.Server.UploadChatAttachmentChunk,
+            new ChatAttachmentChunkRequest
+            {
+                SessionId = "chat-1",
+                AttachmentId = attachmentId,
+                Offset = 0,
+                Data = [1, 2, 3, 4],
+            });
+        Assert.Equal(4, completed.ConfirmedBytes);
+        Assert.True(completed.Completed);
+        Assert.Equal([1, 2, 3, 4], (await chunked.Task.WaitAsync(TimeSpan.FromSeconds(5))).Data);
+
+        ChatPromptReply accepted = await alice.InvokeAsync<ChatPromptReply>(
+            HubMethods.Server.SendChatPrompt,
+            new SendChatPromptRequest
+            {
+                SessionId = "chat-1",
+                Text = "  what does this say?  ",
+                AttachmentIds = [attachmentId],
+            });
+        Assert.True(accepted.Accepted);
+
+        SendChatPromptNotification prompt = await prompted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal("what does this say?", prompt.Text);
+        Assert.Equal([attachmentId], prompt.AttachmentIds);
+        Assert.NotEmpty(prompt.ClientConnectionId);
+
+        HubConnection bystander = await ConnectClientAsync(AliceTenant, AliceObject);
+        ChatAttachmentReply unattached = await bystander.InvokeAsync<ChatAttachmentReply>(
+            HubMethods.Server.BeginChatAttachment,
+            new BeginChatAttachmentRequest
+            {
+                SessionId = "chat-1",
+                AttachmentId = Guid.NewGuid().ToString(),
+                FileName = "stolen.png",
+                MimeType = "image/png",
+                TotalBytes = 1,
+            });
+        Assert.Equal(ErrorCodes.NotAttached, unattached.ErrorCode);
+
+        // The whole point of a separate family: a chat attachment must never be able
+        // to become a file on a terminal, so it is refused on the wrong kind.
+        await AttachAsync(alice, "machine-a", "terminal-1");
+        ChatAttachmentReply wrongKind = await alice.InvokeAsync<ChatAttachmentReply>(
+            HubMethods.Server.BeginChatAttachment,
+            new BeginChatAttachmentRequest
+            {
+                SessionId = "terminal-1",
+                AttachmentId = Guid.NewGuid().ToString(),
+                FileName = "notes.txt",
+                MimeType = "text/plain",
+                TotalBytes = 1,
+            });
+        Assert.Equal(ErrorCodes.InvalidRequest, wrongKind.ErrorCode);
+    }
+
+    [Fact]
+    public async Task OversizedAndOverBudgetChatPromptsAreRejectedBeforeTheyReachTheAgent()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using IDisposable beginHandler = agent.On<BeginChatAttachmentNotification, ChatAttachmentReply>(
+            HubMethods.Agent.BeginChatAttachment,
+            request =>
+            {
+                received.TrySetResult();
+                return new ChatAttachmentReply { AttachmentId = request.AttachmentId };
+            });
+        using IDisposable promptHandler = agent.On<SendChatPromptNotification, ChatPromptReply>(
+            HubMethods.Agent.SendChatPrompt,
+            _ =>
+            {
+                received.TrySetResult();
+                return new ChatPromptReply { Accepted = true };
+            });
+
+        await OpenSessionAsync(agent, "chat-1", "GitHub Copilot", SessionKind.AgentChat);
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        await AttachAsync(client, "machine-a", "chat-1");
+
+        ChatAttachmentReply tooLarge = await client.InvokeAsync<ChatAttachmentReply>(
+            HubMethods.Server.BeginChatAttachment,
+            new BeginChatAttachmentRequest
+            {
+                SessionId = "chat-1",
+                AttachmentId = Guid.NewGuid().ToString(),
+                FileName = "huge.png",
+                MimeType = "image/png",
+                TotalBytes = ChatAttachmentLimits.MaxAttachmentBytes + 1,
+            });
+        Assert.Equal(ErrorCodes.AttachmentTooLarge, tooLarge.ErrorCode);
+
+        ChatPromptReply tooMany = await client.InvokeAsync<ChatPromptReply>(
+            HubMethods.Server.SendChatPrompt,
+            new SendChatPromptRequest
+            {
+                SessionId = "chat-1",
+                Text = "here you go",
+                AttachmentIds =
+                [
+                    .. Enumerable
+                        .Range(0, ChatAttachmentLimits.MaxAttachmentCount + 1)
+                        .Select(_ => Guid.NewGuid().ToString()),
+                ],
+            });
+        Assert.Equal(ErrorCodes.AttachmentBudgetExceeded, tooMany.ErrorCode);
+
+        ChatPromptReply empty = await client.InvokeAsync<ChatPromptReply>(
+            HubMethods.Server.SendChatPrompt,
+            new SendChatPromptRequest { SessionId = "chat-1", Text = "   ", AttachmentIds = [] });
+        Assert.Equal(ErrorCodes.InvalidRequest, empty.ErrorCode);
+
+        ChatPromptReply tooLong = await client.InvokeAsync<ChatPromptReply>(
+            HubMethods.Server.SendChatPrompt,
+            new SendChatPromptRequest
+            {
+                SessionId = "chat-1",
+                Text = new string('x', ChatAttachmentLimits.MaxPromptTextChars + 1),
+                AttachmentIds = [],
+            });
+        Assert.Equal(ErrorCodes.InvalidRequest, tooLong.ErrorCode);
+
+        await Task.Delay(100);
+        Assert.False(received.Task.IsCompleted);
+    }
+
+    [Fact]
+    public async Task OlderAgentsReturnAStableAttachmentUnavailableError()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "chat-1", "GitHub Copilot", SessionKind.AgentChat);
+
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        await AttachAsync(client, "machine-a", "chat-1");
+
+        ChatAttachmentReply attachment = await client.InvokeAsync<ChatAttachmentReply>(
+            HubMethods.Server.BeginChatAttachment,
+            new BeginChatAttachmentRequest
+            {
+                SessionId = "chat-1",
+                AttachmentId = Guid.NewGuid().ToString(),
+                FileName = "receipt.png",
+                MimeType = "image/png",
+                TotalBytes = 1,
+            });
+        ChatPromptReply prompt = await client.InvokeAsync<ChatPromptReply>(
+            HubMethods.Server.SendChatPrompt,
+            new SendChatPromptRequest { SessionId = "chat-1", Text = "hello", AttachmentIds = [] });
+
+        Assert.Equal(ErrorCodes.AttachmentUnavailable, attachment.ErrorCode);
+        Assert.Equal(ErrorCodes.AttachmentUnavailable, prompt.ErrorCode);
+
+        // Text through the original method keeps working against the same old agent,
+        // which is why SendChatMessage was left alone.
+        Assert.Null(await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SendChatMessage,
+            new SendChatMessageRequest { SessionId = "chat-1", Text = "hello" }));
+    }
+
+    [Fact]
+    public async Task ChatAttachmentsRequireAnAttachment()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "chat-1", "GitHub Copilot", SessionKind.AgentChat);
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+
+        ChatPromptReply prompt = await client.InvokeAsync<ChatPromptReply>(
+            HubMethods.Server.SendChatPrompt,
+            new SendChatPromptRequest { SessionId = "chat-1", Text = "hello", AttachmentIds = [] });
+        ChatAttachmentReply cancel = await client.InvokeAsync<ChatAttachmentReply>(
+            HubMethods.Server.CancelChatAttachment,
+            new CancelChatAttachmentRequest
+            {
+                SessionId = "chat-1",
+                AttachmentId = Guid.NewGuid().ToString(),
+            });
+
+        Assert.Equal(ErrorCodes.NotAttached, prompt.ErrorCode);
+        Assert.Equal(ErrorCodes.NotAttached, cancel.ErrorCode);
+    }
+
+    [Fact]
     public async Task ChatCommandsRequireAnAttachment()
     {
         HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");

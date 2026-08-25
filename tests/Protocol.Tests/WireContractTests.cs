@@ -97,6 +97,9 @@ public sealed class WireContractTests
         Assert.Contains("sessionAwaitingInput", covered);
         Assert.Contains("sessionAttention", covered);
         Assert.Contains("chatTranscript", covered);
+        Assert.Contains("chatAttachmentReply", covered);
+        Assert.Contains("chatPromptReply", covered);
+        Assert.Contains("chatSessionUpdatedWithCapabilities", covered);
         Assert.Contains("tokenExpiring", covered);
         Assert.Contains("error", covered);
         Assert.Contains("projectList", covered);
@@ -438,6 +441,79 @@ public sealed class WireContractTests
         {
             SessionId = "ff00ff00",
             UploadId = "29fb210b-e7b4-4d41-8913-74a57a4eb753",
+        });
+
+        // The chat attachment family (protocol version 6). Its own set of messages
+        // rather than the terminal ones with a different session kind, because the
+        // two share only their chunking: one ends as a path the user pastes, the
+        // other as typed content inside an ACP prompt.
+        Add(messages, "beginChatAttachmentRequest", new BeginChatAttachmentRequest
+        {
+            SessionId = "chat-123",
+            AttachmentId = "6cbb0f4d-2a41-4cf6-8b4a-0a26f2b71f61",
+            FileName = "receipt.png",
+            MimeType = "image/png",
+            TotalBytes = 100_000,
+        });
+
+        Add(messages, "chatAttachmentChunkRequest", new ChatAttachmentChunkRequest
+        {
+            SessionId = "chat-123",
+            AttachmentId = "6cbb0f4d-2a41-4cf6-8b4a-0a26f2b71f61",
+            Offset = 65_536,
+            Data = [0x00, 0x7f, 0x80, 0xff],
+        });
+
+        Add(messages, "cancelChatAttachmentRequest", new CancelChatAttachmentRequest
+        {
+            SessionId = "chat-123",
+            AttachmentId = "6cbb0f4d-2a41-4cf6-8b4a-0a26f2b71f61",
+        });
+
+        Add(messages, "sendChatPromptRequest", new SendChatPromptRequest
+        {
+            SessionId = "chat-123",
+            Text = "What does this say?",
+            AttachmentIds = ["6cbb0f4d-2a41-4cf6-8b4a-0a26f2b71f61"],
+        });
+
+        Add(messages, "chatAttachmentReply", new ChatAttachmentReply
+        {
+            AttachmentId = "6cbb0f4d-2a41-4cf6-8b4a-0a26f2b71f61",
+            ConfirmedBytes = 65_536,
+            TotalBytes = 100_000,
+            Completed = false,
+            ErrorCode = null,
+            ErrorMessage = null,
+        });
+
+        Add(messages, "chatPromptReply", new ChatPromptReply
+        {
+            Accepted = true,
+            ErrorCode = null,
+            ErrorMessage = null,
+        });
+
+        // The appended capabilities, pinned on the message a phone actually reads
+        // them from when an ACP process reconnects and re-negotiates.
+        Add(messages, "chatSessionUpdatedWithCapabilities", new ClientSessionUpdatedNotification
+        {
+            MachineId = "5d41402abc4b2a76b9719d911017c592",
+            Session = new SessionInfo
+            {
+                SessionId = "chat-123",
+                Program = "GitHub Copilot",
+                Cwd = @"C:\Projects\1RemoteCLI",
+                StartedAt = Instant,
+                DisplayName = "Issue 3",
+                CliType = CliType.CopilotCli,
+                Kind = SessionKind.AgentChat,
+                ChatCapabilities = new ChatCapabilities
+                {
+                    Image = true,
+                    EmbeddedContext = true,
+                },
+            },
         });
 
         Add(messages, "resizeTerminalRequest", new ResizeTerminalRequest

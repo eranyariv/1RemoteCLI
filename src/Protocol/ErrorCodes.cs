@@ -66,4 +66,28 @@ public static class ErrorCodes
 
     /// <summary>The connected agent predates terminal file uploads.</summary>
     public const string UploadUnavailable = "upload_unavailable";
+
+    /// <summary>One agent-chat attachment exceeds the shared per-file limit.</summary>
+    public const string AttachmentTooLarge = "attachment_too_large";
+
+    /// <summary>One prompt's attachments exceed the shared aggregate or count limit.</summary>
+    public const string AttachmentBudgetExceeded = "attachment_budget_exceeded";
+
+    /// <summary>The named attachment is missing, incomplete, or belongs to another client.</summary>
+    public const string AttachmentNotFound = "attachment_not_found";
+
+    /// <summary>The agent could not stage or read the attachment's bytes.</summary>
+    public const string AttachmentFailed = "attachment_failed";
+
+    /// <summary>The attachment was deliberately cancelled or removed before it was sent.</summary>
+    public const string AttachmentCancelled = "attachment_cancelled";
+
+    /// <summary>
+    /// The ACP agent never advertised the prompt capability this attachment needs,
+    /// or the file is not a type that capability can carry.
+    /// </summary>
+    public const string AttachmentUnsupported = "attachment_unsupported";
+
+    /// <summary>The connected agent predates agent-chat attachments.</summary>
+    public const string AttachmentUnavailable = "attachment_unavailable";
 }

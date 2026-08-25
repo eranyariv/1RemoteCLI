@@ -43,6 +43,7 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
     private readonly HubConnection _connection;
     private readonly MachineIdentity _identity;
     private readonly SessionRegistry _sessions;
+    private readonly ChatAttachmentStore _chatAttachments;
     private readonly Func<CancellationToken, Task<string?>> _tokenProvider;
     private readonly ILogger _logger;
     private AcpProvider? _chat;
@@ -94,7 +95,8 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
         Func<CancellationToken, Task<string?>> tokenProvider,
         ILogger? logger = null,
         Action<HttpConnectionOptions>? configureConnection = null,
-        NotificationLevel notificationLevel = NotificationLevel.AllAttentionEvents)
+        NotificationLevel notificationLevel = NotificationLevel.AllAttentionEvents,
+        string? chatAttachmentRoot = null)
     {
         ArgumentNullException.ThrowIfNull(hubUri);
 
@@ -108,6 +110,7 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
         }
 
         _notificationLevel = (int)notificationLevel;
+        _chatAttachments = new ChatAttachmentStore(chatAttachmentRoot, logger: _logger);
 
         _connection = new HubConnectionBuilder()
             .WithUrl(hubUri, options =>
@@ -137,6 +140,7 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
         _connection.Reconnecting += _ =>
         {
             _sessions.CancelActiveUploads();
+            _chatAttachments.RemoveAll();
             RaiseStateChanged();
             return Task.CompletedTask;
         };
@@ -144,6 +148,7 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
         _connection.Closed += _ =>
         {
             _sessions.CancelActiveUploads();
+            _chatAttachments.RemoveAll();
             _closed.TrySetResult();
             RaiseStateChanged();
             return Task.CompletedTask;
@@ -535,6 +540,34 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
                 }
             });
 
+        _connection.On<BeginChatAttachmentNotification, ChatAttachmentReply>(
+            HubMethods.Agent.BeginChatAttachment,
+            notification => RouteChatAttachment(
+                notification.SessionId,
+                notification.AttachmentId,
+                notification.TotalBytes,
+                () => _chatAttachments.Begin(notification)));
+
+        _connection.On<ChatAttachmentChunkNotification, ChatAttachmentReply>(
+            HubMethods.Agent.UploadChatAttachmentChunk,
+            notification => RouteChatAttachment(
+                notification.SessionId,
+                notification.AttachmentId,
+                0,
+                () => _chatAttachments.Append(notification)));
+
+        _connection.On<CancelChatAttachmentNotification, ChatAttachmentReply>(
+            HubMethods.Agent.CancelChatAttachment,
+            notification => RouteChatAttachment(
+                notification.SessionId,
+                notification.AttachmentId,
+                0,
+                () => _chatAttachments.Cancel(notification)));
+
+        _connection.On<SendChatPromptNotification, ChatPromptReply>(
+            HubMethods.Agent.SendChatPrompt,
+            notification => SendChatPrompt(notification));
+
         _connection.On<RespondChatPermissionNotification>(
             HubMethods.Agent.RespondChatPermission,
             async notification =>
@@ -570,6 +603,9 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
             notification =>
             {
                 _sessions.CancelUploadsForClient(
+                    notification.SessionId,
+                    notification.ClientConnectionId);
+                _chatAttachments.RemoveForClient(
                     notification.SessionId,
                     notification.ClientConnectionId);
                 _logger.ClientDetached(notification.SessionId);
@@ -616,6 +652,116 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
             };
         }
     }
+
+    /// <summary>
+    /// The chat counterpart. An attachment for a session this agent does not have is
+    /// refused rather than staged: the hub already resolved the caller's attachment,
+    /// so a session that is unknown here has genuinely gone.
+    /// </summary>
+    private ChatAttachmentReply RouteChatAttachment(
+        string sessionId,
+        string attachmentId,
+        long totalBytes,
+        Func<ChatAttachmentReply> action)
+    {
+        if (_chat is null || !_chat.TryGet(sessionId, out _))
+        {
+            return new ChatAttachmentReply
+            {
+                AttachmentId = attachmentId,
+                TotalBytes = totalBytes,
+                ErrorCode = ErrorCodes.SessionNotFound,
+                ErrorMessage = "That chat session is no longer available.",
+            };
+        }
+
+        try
+        {
+            return action();
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.Failed(ex, "Handling a chat attachment");
+            return new ChatAttachmentReply
+            {
+                AttachmentId = attachmentId,
+                TotalBytes = totalBytes,
+                ErrorCode = ErrorCodes.AttachmentFailed,
+                ErrorMessage = "The machine could not stage that attachment.",
+            };
+        }
+    }
+
+    /// <summary>
+    /// Reads the staged attachments, hands them to the ACP provider, and answers the
+    /// browser as soon as they are accepted.
+    /// <para>
+    /// The bytes are deleted only after the provider has taken them. A prompt refused
+    /// for any reason therefore leaves the user's selection exactly as it was, which
+    /// is the difference between "fix the one file and press send" and "choose all
+    /// four again".
+    /// </para>
+    /// </summary>
+    private ChatPromptReply SendChatPrompt(SendChatPromptNotification notification)
+    {
+        if (_chat is null)
+        {
+            return PromptRefusal(
+                ErrorCodes.AttachmentUnavailable,
+                "This machine is not running an agent chat.");
+        }
+
+        string[] attachmentIds = notification.AttachmentIds ?? [];
+        string text = (notification.Text ?? string.Empty).Trim();
+
+        if (text.Length == 0 && attachmentIds.Length == 0)
+        {
+            return PromptRefusal(
+                ErrorCodes.InvalidRequest,
+                "A prompt needs text, an attachment, or both.");
+        }
+
+        if (!_chatAttachments.TryRead(
+                notification.SessionId,
+                notification.ClientConnectionId,
+                attachmentIds,
+                out IReadOnlyList<ChatAttachmentContent> attachments,
+                out ChatPromptReply? failure))
+        {
+            return failure!;
+        }
+
+        try
+        {
+            _chat.StartPrompt(notification.SessionId, text, attachments);
+        }
+        catch (AcpPromptException ex)
+        {
+            return PromptRefusal(ex.Code, ex.Message);
+        }
+        catch (Exception ex)
+        {
+            _logger.Failed(ex, "Sending a chat prompt");
+            return PromptRefusal(
+                ErrorCodes.InternalError,
+                "The machine could not start that prompt.");
+        }
+
+        _chatAttachments.Consume(
+            notification.SessionId,
+            notification.ClientConnectionId,
+            attachmentIds);
+
+        return new ChatPromptReply { Accepted = true };
+    }
+
+    private static ChatPromptReply PromptRefusal(string code, string message) =>
+        new()
+        {
+            Accepted = false,
+            ErrorCode = code,
+            ErrorMessage = message,
+        };
 
     /// <summary>
     /// Records the user's correction and tells the hub, so every one of their devices
@@ -877,6 +1023,10 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
         AcpSession session,
         CancellationToken cancellationToken = default)
     {
+        // A chat that has gone takes its staged attachments with it: nothing can ever
+        // send them now, and they are the user's files.
+        _chatAttachments.RemoveSession(session.SessionId);
+
         await TryInvokeAsync(
             HubMethods.Server.SessionClosed,
             new AgentSessionClosedNotification { SessionId = session.SessionId, ExitCode = 0 },
@@ -1070,6 +1220,7 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
         CliType = session.CliType,
         AwaitingInput = session.AwaitingInput,
         Kind = SessionKind.AgentChat,
+        ChatCapabilities = session.PromptCapabilities.ToChatCapabilities(),
     };
 
     private static string AgentVersion => ProductVersion.Current;
@@ -1117,5 +1268,6 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
     {
         await StopQuietlyAsync().ConfigureAwait(false);
         await _connection.DisposeAsync().ConfigureAwait(false);
+        _chatAttachments.Dispose();
     }
 }

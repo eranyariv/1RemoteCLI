@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using OneRemoteCli.Protocol;
 using OneRemoteCli.Protocol.Hub;
 
 namespace OneRemoteCli.Daemon.Chat;
@@ -12,6 +14,7 @@ namespace OneRemoteCli.Daemon.Chat;
 public sealed class AcpProvider : IAsyncDisposable
 {
     private const int MaximumSessions = 100;
+    private const int MaximumTranscriptUriChars = 2048;
     private static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan RecentWindow = TimeSpan.FromDays(14);
@@ -27,6 +30,7 @@ public sealed class AcpProvider : IAsyncDisposable
     private readonly CopilotArchiveIndex _copilotIndex;
     private AcpClient? _client;
     private IAgentChatSink? _sink;
+    private AcpPromptCapabilities _capabilities = AcpPromptCapabilities.None;
     private int _activeTurns;
     private int _hideArchivedSessions;
 
@@ -67,6 +71,12 @@ public sealed class AcpProvider : IAsyncDisposable
     public int ActiveTurns => Volatile.Read(ref _activeTurns);
 
     public CliType CliType => _settings.CliType;
+
+    /// <summary>
+    /// What the current ACP process accepts in a prompt, or nothing at all while no
+    /// process is connected.
+    /// </summary>
+    public AcpPromptCapabilities PromptCapabilities => Volatile.Read(ref _capabilities);
 
     public bool HideArchivedSessions => Volatile.Read(ref _hideArchivedSessions) != 0;
 
@@ -123,6 +133,7 @@ public sealed class AcpProvider : IAsyncDisposable
             DateTimeOffset.UtcNow,
             _settings.Program,
             _settings.CliType);
+        session.UpdateCapabilities(PromptCapabilities);
 
         if (!_sessions.TryAdd(sessionId, session))
         {
@@ -161,6 +172,8 @@ public sealed class AcpProvider : IAsyncDisposable
                 _client.SessionUpdate += OnSessionUpdateAsync;
                 _client.PermissionRequested += OnPermissionRequestedAsync;
                 _client.ElicitationRequested += OnElicitationRequestedAsync;
+                await ApplyCapabilitiesAsync(_client.PromptCapabilities, cancellationToken)
+                    .ConfigureAwait(false);
 
                 while (!cancellationToken.IsCancellationRequested)
                 {
@@ -189,6 +202,13 @@ public sealed class AcpProvider : IAsyncDisposable
                 }
 
                 await CancelPendingInputsAsync().ConfigureAwait(false);
+
+                // The next process negotiates its own capabilities, so until one is
+                // running the phone must be told there are none. A composer that kept
+                // its Attach button while the agent is down would offer a picker whose
+                // upload could not be staged.
+                await ApplyCapabilitiesAsync(AcpPromptCapabilities.None).ConfigureAwait(false);
+
                 foreach (AcpSession session in _sessions.Values)
                 {
                     session.Loaded = false;
@@ -252,19 +272,81 @@ public sealed class AcpProvider : IAsyncDisposable
         AcpSession session = Get(sessionId);
         string prompt = NormalizePrompt(text);
 
-        _ = RunPromptAsync(session, prompt, CancellationToken.None);
+        _ = RunPromptAsync(session, prompt, [], CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Validates and starts a prompt that may carry attachments, and returns as soon
+    /// as it is accepted rather than when the turn ends.
+    /// <para>
+    /// The split matters to the phone. Everything that can be the user's fault — an
+    /// unsupported type, a file the machine could not read, a capability this agent
+    /// never advertised — is decided here, synchronously, so the composer can keep
+    /// the draft and say what went wrong. Once accepted, the turn streams back as
+    /// transcript events exactly like a text-only message, which can take minutes and
+    /// which nothing should be blocked on.
+    /// </para>
+    /// </summary>
+    /// <exception cref="AcpPromptException">The prompt was refused before anything was sent.</exception>
+    public ChatContentBlock[] StartPrompt(
+        string sessionId,
+        string text,
+        IReadOnlyList<ChatAttachmentContent> attachments)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(attachments);
+
+        AcpSession session = _sessions.TryGetValue(sessionId, out AcpSession? found)
+            ? found
+            : throw new AcpPromptException(
+                ErrorCodes.SessionNotFound,
+                $"That {_settings.DisplayName} chat is no longer available.");
+
+        if (attachments.Count > 0 && Volatile.Read(ref _client) is null && _call is null)
+        {
+            throw new AcpPromptException(
+                ErrorCodes.AttachmentUnavailable,
+                $"{_settings.DisplayName} is not running on this machine right now.");
+        }
+
+        string prompt = text.Trim();
+        JsonArray content = AcpPromptContent.Build(prompt, attachments, session.PromptCapabilities);
+        ChatContentBlock[] summary = AcpPromptContent.Summarize(attachments);
+
+        _ = RunPromptAsync(session, prompt, summary, CancellationToken.None, content);
+        return summary;
     }
 
     internal Task PromptAsync(
         string sessionId,
         string text,
         CancellationToken cancellationToken = default) =>
-        RunPromptAsync(Get(sessionId), NormalizePrompt(text), cancellationToken);
+        RunPromptAsync(Get(sessionId), NormalizePrompt(text), [], cancellationToken);
+
+    internal Task PromptAsync(
+        string sessionId,
+        string text,
+        IReadOnlyList<ChatAttachmentContent> attachments,
+        CancellationToken cancellationToken)
+    {
+        AcpSession session = Get(sessionId);
+        string prompt = text.Trim();
+        JsonArray content = AcpPromptContent.Build(prompt, attachments, session.PromptCapabilities);
+
+        return RunPromptAsync(
+            session,
+            prompt,
+            AcpPromptContent.Summarize(attachments),
+            cancellationToken,
+            content);
+    }
 
     private async Task RunPromptAsync(
         AcpSession session,
         string prompt,
-        CancellationToken cancellationToken)
+        ChatContentBlock[] attachmentSummary,
+        CancellationToken cancellationToken,
+        JsonArray? content = null)
     {
         Interlocked.Increment(ref _activeTurns);
         ActivityChanged?.Invoke();
@@ -272,7 +354,7 @@ public sealed class AcpProvider : IAsyncDisposable
         try
         {
             await EnsureLoadedAsync(session, cancellationToken).ConfigureAwait(false);
-            ChatEvent userMessage = session.AddUserPrompt(prompt);
+            ChatEvent userMessage = session.AddUserPrompt(prompt, attachmentSummary);
             if (_sink is not null)
             {
                 await _sink.OnChatTranscriptAsync(
@@ -287,7 +369,7 @@ public sealed class AcpProvider : IAsyncDisposable
                 new JsonObject
                 {
                     ["sessionId"] = session.SessionId,
-                    ["prompt"] = new JsonArray(
+                    ["prompt"] = content ?? new JsonArray(
                         new JsonObject
                         {
                             ["type"] = "text",
@@ -304,6 +386,36 @@ public sealed class AcpProvider : IAsyncDisposable
         {
             Interlocked.Decrement(ref _activeTurns);
             ActivityChanged?.Invoke();
+        }
+    }
+
+    /// <summary>
+    /// Records the negotiated capabilities and tells the relay about every session
+    /// whose answer changed, so a reconnect that gains or loses image support reaches
+    /// a phone that is already looking at the chat.
+    /// </summary>
+    internal async Task ApplyCapabilitiesAsync(
+        AcpPromptCapabilities capabilities,
+        CancellationToken cancellationToken = default)
+    {
+        Volatile.Write(ref _capabilities, capabilities);
+
+        foreach (AcpSession session in _sessions.Values)
+        {
+            if (!session.UpdateCapabilities(capabilities) || _sink is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                await _sink.OnChatUpdatedAsync(session, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _log?.Invoke(
+                    $"chat: could not publish capabilities for {session.SessionId} ({ex.Message}).");
+            }
         }
     }
 
@@ -495,6 +607,7 @@ public sealed class AcpProvider : IAsyncDisposable
                 item.UpdatedAt,
                 _settings.Program,
                 _settings.CliType);
+            added.UpdateCapabilities(PromptCapabilities);
             _sessions[item.SessionId] = added;
             changed = true;
 
@@ -635,10 +748,17 @@ public sealed class AcpProvider : IAsyncDisposable
     internal static ChatEvent? ApplyUpdate(AcpSession session, string kind, JsonElement update)
     {
         ChatContentBlock[]? content = Content(update);
+        bool userMessage = kind is "user_message" or "user_message_chunk";
+        string? text = userMessage ? UserMessageText(content) : ContentText(content);
+        if (userMessage)
+        {
+            content = UserMessageContent(content);
+        }
+
         return session.Apply(
             kind,
             String(update, "messageId") ?? String(update, "toolCallId"),
-            ContentText(content),
+            text,
             String(update, "title"),
             String(update, "status"),
             String(update, "kind"),
@@ -880,6 +1000,121 @@ public sealed class AcpProvider : IAsyncDisposable
 
         return lines.Length == 0 ? null : string.Join(Environment.NewLine, lines);
     }
+
+    /// <summary>
+    /// User messages loaded from ACP history can contain the original image or embedded
+    /// resource bytes. The local prompt already records a metadata-only summary, and a
+    /// historical replay must do the same: snapshots are broadcast and have an 8 MB
+    /// transport ceiling.
+    /// </summary>
+    private static ChatContentBlock[]? UserMessageContent(ChatContentBlock[]? content)
+    {
+        if (content is null)
+        {
+            return null;
+        }
+
+        return [.. content.Select(UserMessageBlock)];
+    }
+
+    private static ChatContentBlock UserMessageBlock(ChatContentBlock item)
+    {
+        if (item.Type == "text")
+        {
+            return new ChatContentBlock
+            {
+                Type = "text",
+                Text = item.Text,
+            };
+        }
+
+        string? uri = SafeUserMessageUri(item.Uri);
+        return new ChatContentBlock
+        {
+            Type = "resource_link",
+            Uri = uri,
+            Name = item.Name ?? NameFromUri(uri) ?? item.Title ?? AttachmentLabel(item.Type),
+            Title = item.Title,
+            Description = item.Description,
+            MimeType = item.MimeType,
+            Size = item.Size ?? ContentSize(item),
+        };
+    }
+
+    private static string? SafeUserMessageUri(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) ||
+            value.Length > MaximumTranscriptUriChars ||
+            !Uri.TryCreate(value, UriKind.Absolute, out Uri? uri) ||
+            uri.Scheme.Equals("data", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return value;
+    }
+
+    private static string? UserMessageText(ChatContentBlock[]? content)
+    {
+        if (content is null)
+        {
+            return null;
+        }
+
+        string[] text =
+        [
+            .. content
+                .Where(item => item.Type == "text" && !string.IsNullOrWhiteSpace(item.Text))
+                .Select(item => item.Text!),
+        ];
+
+        return text.Length == 0 ? null : string.Join(Environment.NewLine, text);
+    }
+
+    private static long? ContentSize(ChatContentBlock item)
+    {
+        if (item.Data is { Length: > 0 } data)
+        {
+            int padding = data.EndsWith("==", StringComparison.Ordinal)
+                ? 2
+                : data.EndsWith('=') ? 1 : 0;
+            return ((long)data.Length / 4 * 3) - padding;
+        }
+
+        return item.Text is { } text ? Encoding.UTF8.GetByteCount(text) : null;
+    }
+
+    private static string? NameFromUri(string? value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out Uri? uri))
+        {
+            return null;
+        }
+
+        string? segment = uri.Segments.LastOrDefault()?.Trim('/');
+        if (string.IsNullOrWhiteSpace(segment))
+        {
+            return null;
+        }
+
+        try
+        {
+            return Uri.UnescapeDataString(segment);
+        }
+        catch (UriFormatException)
+        {
+            return segment;
+        }
+    }
+
+    private static string AttachmentLabel(string type) =>
+        type switch
+        {
+            "image" => "Image attachment",
+            "audio" => "Audio attachment",
+            "resource" => "File attachment",
+            _ => "Attachment",
+        };
 
     private static ChatToolLocation[]? Locations(JsonElement update)
     {

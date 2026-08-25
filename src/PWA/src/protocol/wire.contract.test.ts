@@ -5,6 +5,8 @@ import fixture from './wire.fixture.json'
 import { PROTOCOL_VERSION } from './methods'
 import {
   decodeAwaitingInput,
+  decodeChatAttachmentReply,
+  decodeChatPromptReply,
   decodeChatTranscript,
   decodeError,
   decodeMachineList,
@@ -23,8 +25,11 @@ import {
   decodeTerminalOutput,
   decodeTokenExpiring,
   encodeAttachSession,
+  encodeBeginChatAttachment,
   encodeBeginTerminalUpload,
+  encodeCancelChatAttachment,
   encodeCancelTerminalUpload,
+  encodeChatAttachmentChunk,
   encodeClientHandshake,
   encodeCreateProject,
   encodeDeleteProject,
@@ -34,6 +39,7 @@ import {
   encodeResizeTerminal,
   encodeSendInput,
   encodeSendChatMessage,
+  encodeSendChatPrompt,
   encodeSetSessionName,
   encodeSetSessionPinned,
   encodeSetSessionProject,
@@ -326,6 +332,42 @@ describe('decoding what the hub sends', () => {
     expect(reply.errorCode).toBeNull()
   })
 
+  it('reads staged chat attachment progress, which never carries a path', () => {
+    const reply = decodeChatAttachmentReply(wire('chatAttachmentReply'))
+    const want = expected('chatAttachmentReply')
+
+    expect(reply.attachmentId).toBe(want.attachmentId)
+    expect(reply.confirmedBytes).toBe(want.confirmedBytes)
+    expect(reply.totalBytes).toBe(want.totalBytes)
+    expect(reply.completed).toBe(false)
+    expect(reply.errorCode).toBeNull()
+    expect(Object.keys(reply)).not.toContain('remotePath')
+  })
+
+  it('reads a prompt acknowledgement', () => {
+    const reply = decodeChatPromptReply(wire('chatPromptReply'))
+
+    expect(reply.accepted).toBe(true)
+    expect(reply.errorCode).toBeNull()
+  })
+
+  it('reads negotiated chat capabilities off an updated session', () => {
+    const updated = decodeSessionUpdated(wire('chatSessionUpdatedWithCapabilities'))
+
+    expect(updated.session.kind).toBe('AgentChat')
+    expect(updated.session.chatCapabilities).toEqual({ image: true, embeddedContext: true })
+  })
+
+  it('treats a chat session from an agent that predates attachments as unable to take them', () => {
+    // ChatCapabilities was appended after ProjectId, so a version 5 agent sends a
+    // fourteen-element session. Reading past the end has to land on null — "no
+    // attachment support" — rather than on an object the composer would trust.
+    const raw = wire('chatSessionUpdatedWithCapabilities') as unknown[]
+    const session = raw[1] as unknown[]
+
+    expect(decodeSessionUpdated([raw[0], session.slice(0, 14)]).session.chatCapabilities).toBeNull()
+  })
+
   it('treats a session from a hub that predates projects as General', () => {
     // ProjectId was appended after Kind, so a version 3 hub that only knows
     // about ACP sends a thirteen-element session (through Kind). Reading past
@@ -491,6 +533,46 @@ describe('encoding what we send the hub', () => {
     const want = shape('sendChatMessageRequest')
 
     expect(encodeSendChatMessage(want[0] as string, want[1] as string)).toEqual(want)
+  })
+
+  it('starts a bounded chat attachment, carrying the browser-declared type', () => {
+    const want = shape('beginChatAttachmentRequest')
+
+    expect(
+      encodeBeginChatAttachment(
+        want[0] as string,
+        want[1] as string,
+        want[2] as string,
+        want[3] as string,
+        want[4] as number,
+      ),
+    ).toEqual(want)
+  })
+
+  it('sends an ordered chat attachment chunk as raw bytes', () => {
+    const want = shape('chatAttachmentChunkRequest')
+    const encoded = encodeChatAttachmentChunk(
+      want[0] as string,
+      want[1] as string,
+      want[2] as number,
+      new Uint8Array([0x00, 0x7f, 0x80, 0xff]),
+    )
+
+    expect(encoded.slice(0, 3)).toEqual(want.slice(0, 3))
+    expect(Array.from(encoded[3] as Uint8Array)).toEqual(Array.from(want[3] as Uint8Array))
+  })
+
+  it('removes a staged chat attachment', () => {
+    const want = shape('cancelChatAttachmentRequest')
+    expect(encodeCancelChatAttachment(want[0] as string, want[1] as string)).toEqual(want)
+  })
+
+  it('sends a prompt of text plus staged attachment ids', () => {
+    const want = shape('sendChatPromptRequest')
+
+    expect(
+      encodeSendChatPrompt(want[0] as string, want[1] as string, want[2] as string[]),
+    ).toEqual(want)
   })
 
   it('sends a permission response', () => {

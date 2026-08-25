@@ -30,6 +30,13 @@ public sealed class AcpClient : IAsyncDisposable
         _errors = Task.Run(() => ReadErrorsAsync(_stopping.Token), CancellationToken.None);
     }
 
+    /// <summary>
+    /// What this agent said it accepts in a prompt. Set once, during
+    /// <see cref="StartAsync"/>, because ACP negotiates capabilities exactly once per
+    /// process — which is also why they have to be re-read after a reconnect.
+    /// </summary>
+    public AcpPromptCapabilities PromptCapabilities { get; private set; } = AcpPromptCapabilities.None;
+
     public event Func<string, JsonElement, ValueTask>? SessionUpdate;
 
     public event Func<JsonElement, JsonElement, ValueTask>? PermissionRequested;
@@ -95,6 +102,8 @@ public sealed class AcpClient : IAsyncDisposable
             {
                 throw new InvalidOperationException($"{agentName} negotiated unsupported ACP version {version}.");
             }
+
+            client.PromptCapabilities = AcpPromptCapabilities.Parse(initialized);
 
             return client;
         }

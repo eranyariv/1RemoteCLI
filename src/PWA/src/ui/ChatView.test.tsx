@@ -20,7 +20,21 @@ class FakeRelay {
   attach = vi.fn(async () => null as HubError | null)
   detach = vi.fn(async () => null as HubError | null)
   sendChatMessage = vi.fn(async () => null as HubError | null)
+  sendChatPrompt = vi.fn(async () => null as HubError | null)
+  cancelChatAttachment = vi.fn(async () => {})
   respondChatPermission = vi.fn(async () => null as HubError | null)
+
+  uploadChatAttachment = vi.fn(
+    async (
+      _sessionId: string,
+      _attachmentId: string,
+      file: File,
+      onProgress: (progress: { confirmedBytes: number; totalBytes: number }) => void,
+    ) => {
+      onProgress({ confirmedBytes: file.size, totalBytes: file.size })
+      return { ready: true, error: null as HubError | null, cancelled: false }
+    },
+  )
 
   on(event: string, handler: Handler): () => void {
     if (event === 'chatTranscript') this.handler = handler
@@ -62,6 +76,7 @@ const session: SessionInfo = {
   pinned: false,
   kind: 'AgentChat',
   projectId: null,
+  chatCapabilities: null,
 }
 
 function chatEvent(
@@ -109,6 +124,16 @@ describe('ChatView', () => {
   beforeEach(() => {
     relay = new FakeRelay()
     Element.prototype.scrollIntoView = vi.fn()
+    let ids = 0
+    vi.stubGlobal('crypto', {
+      ...globalThis.crypto,
+      randomUUID: () => `attachment-${++ids}`,
+    })
+    vi.stubGlobal('URL', {
+      ...globalThis.URL,
+      createObjectURL: vi.fn(() => 'blob:preview'),
+      revokeObjectURL: vi.fn(),
+    })
   })
 
   afterEach(cleanup)
@@ -466,5 +491,315 @@ describe('ChatView', () => {
     expect(screen.getByRole('table')).toBeTruthy()
     expect(screen.getByRole('columnheader', { name: 'Priority' })).toBeTruthy()
     expect(screen.getByRole('cell', { name: 'Build the plan view' }).querySelector('strong')).toBeTruthy()
+  })
+
+  describe('attachments', () => {
+    const withCapabilities = (image: boolean, embeddedContext: boolean): SessionInfo => ({
+      ...session,
+      chatCapabilities: { image, embeddedContext },
+    })
+
+    function view(target: SessionInfo) {
+      return render(
+        <ChatView
+          client={relay.client}
+          connected
+          machine={machine}
+          session={target}
+          onClose={() => {}}
+        />,
+      )
+    }
+
+    function pick(testId: string, ...files: File[]) {
+      const input = screen.getByTestId(testId) as HTMLInputElement
+      Object.defineProperty(input, 'files', { value: files, configurable: true })
+      fireEvent.change(input)
+    }
+
+    function image(name = 'receipt.png', size = 1024): File {
+      const file = new File([new Uint8Array(1)], name, { type: 'image/png' })
+      Object.defineProperty(file, 'size', { value: size })
+      return file
+    }
+
+    it('offers no attachment controls when the agent advertised none', () => {
+      view(session)
+
+      expect(screen.queryByLabelText('Attach a file')).toBeNull()
+      expect(screen.queryByLabelText('Attach a photo')).toBeNull()
+      expect(screen.queryByLabelText('Take a photo')).toBeNull()
+    })
+
+    it('offers only the picker the negotiated capabilities justify', () => {
+      const imagesOnly = view(withCapabilities(true, false))
+
+      expect(screen.getByLabelText('Attach a photo')).toBeTruthy()
+      expect(screen.getByLabelText('Take a photo')).toBeTruthy()
+      expect(screen.queryByLabelText('Attach a file')).toBeNull()
+
+      imagesOnly.unmount()
+      view(withCapabilities(false, true))
+
+      expect(screen.getByLabelText('Attach a file')).toBeTruthy()
+      expect(screen.queryByLabelText('Take a photo')).toBeNull()
+    })
+
+    it('stages a photo at selection time, previews it, and sends it with the text', async () => {
+      view(withCapabilities(true, true))
+
+      pick('chat-image-input', image())
+
+      await waitFor(() => expect(relay.uploadChatAttachment).toHaveBeenCalledTimes(1))
+      expect(screen.getByText('receipt.png')).toBeTruthy()
+      await waitFor(() => expect(screen.getByText(/ready/)).toBeTruthy())
+      expect(screen.getByAltText('')).toBeTruthy()
+
+      fireEvent.change(screen.getByLabelText('Message agent'), {
+        target: { value: '  what does this say?  ' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+      await waitFor(() =>
+        expect(relay.sendChatPrompt).toHaveBeenCalledWith('chat-1', 'what does this say?', [
+          'attachment-1',
+        ]),
+      )
+
+      // Cleared only once the machine accepted it.
+      await waitFor(() => expect(screen.queryByText('receipt.png')).toBeNull())
+      expect((screen.getByLabelText('Message agent') as HTMLTextAreaElement).value).toBe('')
+      expect(relay.sendChatMessage).not.toHaveBeenCalled()
+    })
+
+    it('sends an attachment with no text at all', async () => {
+      view(withCapabilities(true, true))
+      pick('chat-camera-input', image('photo.jpg'))
+
+      await waitFor(() => expect(screen.getByText(/ready/)).toBeTruthy())
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+      await waitFor(() =>
+        expect(relay.sendChatPrompt).toHaveBeenCalledWith('chat-1', '', ['attachment-1']),
+      )
+    })
+
+    it('keeps sending text-only prompts through the message method', async () => {
+      view(withCapabilities(true, true))
+
+      fireEvent.change(screen.getByLabelText('Message agent'), { target: { value: 'continue' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+      await waitFor(() => expect(relay.sendChatMessage).toHaveBeenCalledWith('chat-1', 'continue'))
+      expect(relay.sendChatPrompt).not.toHaveBeenCalled()
+    })
+
+    it('refuses a type this agent cannot carry, without uploading it', async () => {
+      view(withCapabilities(true, false))
+
+      pick('chat-image-input', new File([new Uint8Array(1)], 'notes.txt', { type: 'text/plain' }))
+
+      await waitFor(() =>
+        expect(screen.getByRole('alert').textContent).toContain('does not accept file attachments'),
+      )
+      expect(relay.uploadChatAttachment).not.toHaveBeenCalled()
+    })
+
+    it('refuses a fifth attachment and one that would blow the aggregate limit', async () => {
+      view(withCapabilities(true, true))
+
+      pick('chat-image-input', image('a.png'), image('b.png'), image('c.png'), image('d.png'))
+      await waitFor(() => expect(relay.uploadChatAttachment).toHaveBeenCalledTimes(4))
+
+      pick('chat-image-input', image('e.png'))
+      await waitFor(() =>
+        expect(screen.getByRole('alert').textContent).toContain('at most 4 attachments'),
+      )
+      expect(relay.uploadChatAttachment).toHaveBeenCalledTimes(4)
+
+      cleanup()
+      view(withCapabilities(true, true))
+      pick(
+        'chat-image-input',
+        image('big-1.png', 4 * 1024 * 1024),
+        image('big-2.png', 4 * 1024 * 1024),
+        image('big-3.png', 4 * 1024 * 1024),
+      )
+
+      await waitFor(() =>
+        expect(screen.getByRole('alert').textContent).toContain('All attachments on one prompt'),
+      )
+    })
+
+    it('keeps a batch rejection visible when a later file is accepted', async () => {
+      view(withCapabilities(true, true))
+
+      pick(
+        'chat-image-input',
+        image('too-big.png', 6 * 1024 * 1024),
+        image('accepted.png'),
+      )
+
+      await waitFor(() =>
+        expect(screen.getByRole('alert').textContent).toContain('larger than 5.0 MB'),
+      )
+      expect(screen.getByText('accepted.png')).toBeTruthy()
+      expect(relay.uploadChatAttachment).toHaveBeenCalledTimes(1)
+    })
+
+    it('holds Send while an upload is in flight and shows what it is doing', async () => {
+      let finish: ((outcome: unknown) => void) | null = null
+      relay.uploadChatAttachment.mockImplementationOnce(
+        (_sessionId: string, _attachmentId: string, file: File, onProgress) => {
+          onProgress({ confirmedBytes: file.size / 2, totalBytes: file.size })
+          return new Promise((resolve) => {
+            finish = resolve as (outcome: unknown) => void
+          }) as never
+        },
+      )
+
+      view(withCapabilities(true, true))
+      pick('chat-image-input', image())
+
+      await waitFor(() =>
+        expect((screen.getByRole('button', { name: 'Attaching…' }) as HTMLButtonElement).disabled).toBe(
+          true,
+        ),
+      )
+      expect(screen.getByText(/50%/)).toBeTruthy()
+
+      act(() => finish!({ ready: true, error: null, cancelled: false }))
+      await waitFor(() =>
+        expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(
+          false,
+        ),
+      )
+    })
+
+    it('shows a staging failure against the file it belongs to, and holds Send until it is removed', async () => {
+      relay.uploadChatAttachment.mockResolvedValueOnce({
+        ready: false,
+        error: { code: 'attachment_failed', message: 'The disk is full.', sessionId: 'chat-1' },
+        cancelled: false,
+      })
+
+      view(withCapabilities(true, true))
+      pick('chat-image-input', image())
+
+      await waitFor(() => expect(screen.getByText('The disk is full.')).toBeTruthy())
+      fireEvent.change(screen.getByLabelText('Message agent'), { target: { value: 'carry on' } })
+      expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove receipt.png' }))
+      await waitFor(() =>
+        expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(
+          false,
+        ),
+      )
+    })
+
+    it('removes an attachment on request, deleting the staged bytes and its preview', async () => {
+      view(withCapabilities(true, true))
+      pick('chat-image-input', image())
+
+      await waitFor(() => expect(screen.getByText(/ready/)).toBeTruthy())
+      fireEvent.click(screen.getByRole('button', { name: 'Remove receipt.png' }))
+
+      expect(relay.cancelChatAttachment).toHaveBeenCalledWith('chat-1', 'attachment-1')
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:preview')
+      expect(screen.queryByText('receipt.png')).toBeNull()
+    })
+
+    it('keeps the draft and the selection when the machine refuses the prompt', async () => {
+      relay.sendChatPrompt.mockResolvedValueOnce({
+        code: 'attachment_unsupported',
+        message: 'This agent does not accept images.',
+        sessionId: 'chat-1',
+      })
+
+      view(withCapabilities(true, true))
+      pick('chat-image-input', image())
+      await waitFor(() => expect(screen.getByText(/ready/)).toBeTruthy())
+
+      fireEvent.change(screen.getByLabelText('Message agent'), { target: { value: 'look' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+      await waitFor(() =>
+        expect(screen.getByRole('alert').textContent).toContain('does not accept images'),
+      )
+      expect(screen.getByText('receipt.png')).toBeTruthy()
+      expect((screen.getByLabelText('Message agent') as HTMLTextAreaElement).value).toBe('look')
+    })
+
+    it('does not accept or erase a new attachment while a prompt acknowledgement is pending', async () => {
+      let accept: ((error: HubError | null) => void) | null = null
+      relay.sendChatPrompt.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            accept = resolve
+          }),
+      )
+
+      view(withCapabilities(true, true))
+      pick('chat-image-input', image('sent.png'))
+      await waitFor(() => expect(screen.getByText(/ready/)).toBeTruthy())
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() =>
+        expect((screen.getByLabelText('Attach a file') as HTMLButtonElement).disabled).toBe(true),
+      )
+
+      pick('chat-image-input', image('late.png'))
+      expect(screen.getByRole('alert').textContent).toContain('current message')
+      expect(relay.uploadChatAttachment).toHaveBeenCalledTimes(1)
+
+      act(() => accept!(null))
+      await waitFor(() => expect(screen.queryByText('sent.png')).toBeNull())
+      expect(screen.queryByText('late.png')).toBeNull()
+    })
+
+    it('cancels everything still staged when the chat is closed', async () => {
+      const open = view(withCapabilities(true, true))
+      pick('chat-image-input', image())
+      await waitFor(() => expect(screen.getByText(/ready/)).toBeTruthy())
+
+      open.unmount()
+
+      expect(relay.cancelChatAttachment).toHaveBeenCalledWith('chat-1', 'attachment-1')
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:preview')
+    })
+
+    it('shows what was attached in the user bubble, without any bytes', () => {
+      view(withCapabilities(true, true))
+
+      act(() => {
+        relay.emit({
+          sessionId: 'chat-1',
+          seq: 8,
+          kind: 'Snapshot',
+          events: [
+            chatEvent({
+              eventId: 'prompt-1',
+              kind: 'UserMessage',
+              text: 'what does this say?',
+              content: [
+                contentBlock({
+                  type: 'resource_link',
+                  uri: 'attachment://1remotecli/attachment-1/receipt.png',
+                  name: 'receipt.png',
+                  mimeType: 'image/png',
+                  size: 2048,
+                }),
+              ],
+            }),
+          ],
+        })
+      })
+
+      const bubble = screen.getByText('what does this say?').closest('article')!
+      expect(bubble.textContent).toContain('receipt.png')
+      expect(bubble.textContent).toContain('2 KB')
+      expect(bubble.querySelector('img')).toBeNull()
+    })
   })
 })

@@ -20,6 +20,7 @@ public sealed class AcpSession(
     private string? _pendingPromptText;
     private string? _suppressedPromptEchoMessageId;
     private int _pendingPromptEchoLength;
+    private bool _pendingPromptHasAttachments;
     private long _syntheticId;
     private long _seq;
 
@@ -38,6 +39,35 @@ public sealed class AcpSession(
     public SemaphoreSlim LoadGate { get; } = new(1, 1);
 
     public bool Loaded { get; set; }
+
+    /// <summary>
+    /// What the ACP process behind this session accepts in a prompt.
+    /// <para>
+    /// Held per session rather than only on the provider because it travels to the
+    /// phone inside <c>SessionInfo</c>, and because it changes underneath a session
+    /// that is already discovered: a restarted ACP process re-negotiates, and a
+    /// composer still offering a camera button would be offering one nothing can
+    /// honour.
+    /// </para>
+    /// </summary>
+    public AcpPromptCapabilities PromptCapabilities { get; private set; } = AcpPromptCapabilities.None;
+
+    /// <summary>Returns true when the value actually moved, so callers can avoid a needless broadcast.</summary>
+    public bool UpdateCapabilities(AcpPromptCapabilities capabilities)
+    {
+        ArgumentNullException.ThrowIfNull(capabilities);
+
+        lock (_gate)
+        {
+            if (PromptCapabilities == capabilities)
+            {
+                return false;
+            }
+
+            PromptCapabilities = capabilities;
+            return true;
+        }
+    }
 
     public bool AwaitingInput { get; private set; }
 
@@ -134,10 +164,22 @@ public sealed class AcpSession(
     /// Some ACP agents replay user messages on load but do not echo a live
     /// <c>session/prompt</c>, so waiting for an update loses both the bubble and the
     /// boundary between adjacent assistant turns.
+    /// <para>
+    /// <paramref name="attachments"/> is a metadata-only summary — name, type, size.
+    /// The bytes that were sent are never put in the transcript: they would be echoed
+    /// back to every attached device, written into logs the moment anything failed,
+    /// and re-sent on every snapshot, all to show the user a file they chose from
+    /// their own phone.
+    /// </para>
     /// </summary>
-    public ChatEvent AddUserPrompt(string text)
+    public ChatEvent AddUserPrompt(string text, ChatContentBlock[]? attachments = null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(text);
+        ArgumentNullException.ThrowIfNull(text);
+
+        if (text.Length == 0 && (attachments is null || attachments.Length == 0))
+        {
+            throw new ArgumentException("A prompt needs text, an attachment, or both.", nameof(text));
+        }
 
         lock (_gate)
         {
@@ -147,6 +189,7 @@ public sealed class AcpSession(
                 EventId = eventId,
                 Kind = ChatEventKind.UserMessage,
                 Text = text,
+                Content = attachments is null ? [] : [.. attachments.Select(Copy)],
             };
 
             Upsert(item);
@@ -156,6 +199,7 @@ public sealed class AcpSession(
             _pendingPromptText = text;
             _suppressedPromptEchoMessageId = null;
             _pendingPromptEchoLength = 0;
+            _pendingPromptHasAttachments = attachments is { Length: > 0 };
             _seq++;
             UpdatedAt = DateTimeOffset.UtcNow;
             return Copy(item);
@@ -339,15 +383,32 @@ public sealed class AcpSession(
 
     private bool SuppressPromptEcho(string? messageId, string? text, bool replace)
     {
-        if (_pendingPromptId is null &&
-            _suppressedPromptEchoMessageId is not null &&
+        if (_suppressedPromptEchoMessageId is not null &&
             messageId == _suppressedPromptEchoMessageId)
         {
             return true;
         }
 
+        // An attachment can be replayed before or after the text block, and some ACP
+        // agents omit the message id on chunks. Keep the pending echo alive until the
+        // first non-user update so neither ordering can put the selected file's bytes
+        // into the transcript.
+        if (_pendingPromptId is not null &&
+            _pendingPromptHasAttachments &&
+            _byId.ContainsKey(_pendingPromptId) &&
+            (_pendingPromptText is { Length: 0 } || string.IsNullOrEmpty(text)))
+        {
+            if (!string.IsNullOrWhiteSpace(messageId))
+            {
+                _suppressedPromptEchoMessageId = messageId;
+            }
+
+            return true;
+        }
+
         if (_pendingPromptId is null ||
             _pendingPromptText is null ||
+            _pendingPromptText.Length == 0 ||
             !_byId.ContainsKey(_pendingPromptId) ||
             string.IsNullOrEmpty(text))
         {
@@ -375,7 +436,8 @@ public sealed class AcpSession(
         _pendingPromptEchoLength = replace
             ? _pendingPromptText.Length
             : _pendingPromptEchoLength + text.Length;
-        if (_pendingPromptEchoLength >= _pendingPromptText.Length)
+        if (_pendingPromptEchoLength >= _pendingPromptText.Length &&
+            !_pendingPromptHasAttachments)
         {
             ClearPendingPromptEcho(clearMessageId: false);
         }
@@ -387,6 +449,7 @@ public sealed class AcpSession(
         _pendingPromptId = null;
         _pendingPromptText = null;
         _pendingPromptEchoLength = 0;
+        _pendingPromptHasAttachments = false;
         if (clearMessageId)
         {
             _suppressedPromptEchoMessageId = null;

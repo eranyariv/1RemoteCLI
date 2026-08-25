@@ -1,7 +1,9 @@
 using Microsoft.Data.Sqlite;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using OneRemoteCli.Daemon.Chat;
+using OneRemoteCli.Protocol;
 using OneRemoteCli.Protocol.Hub;
 
 namespace OneRemoteCli.Daemon.Tests;
@@ -320,6 +322,97 @@ public sealed class AcpProviderTests
     }
 
     [Fact]
+    public void HistoricalUserAttachmentsAreReducedToMetadataWhileAgentImagesRemainDisplayable()
+    {
+        var session = new AcpSession(
+            "session-1",
+            @"C:\repo",
+            "Chat",
+            DateTimeOffset.UtcNow);
+        string imageData = Convert.ToBase64String(new byte[1024]);
+        string blobData = Convert.ToBase64String(new byte[2048]);
+
+        ChatEvent? user = AcpProvider.ApplyUpdate(
+            session,
+            "user_message",
+            JsonSerializer.Deserialize<JsonElement>(
+                $$"""
+                {
+                  "messageId": "user-1",
+                  "content": [
+                    { "type": "text", "text": "Inspect these" },
+                    {
+                      "type": "image",
+                      "mimeType": "image/png",
+                      "data": "{{imageData}}",
+                      "uri": "attachment://1remotecli/image-1/phone%20photo.png"
+                    },
+                    {
+                      "type": "resource",
+                      "resource": {
+                        "uri": "attachment://1remotecli/file-1/notes.txt",
+                        "mimeType": "text/plain",
+                        "text": "private file contents"
+                      }
+                    },
+                    {
+                      "type": "resource",
+                      "resource": {
+                        "uri": "attachment://1remotecli/file-2/archive.zip",
+                        "mimeType": "application/zip",
+                        "blob": "{{blobData}}"
+                      }
+                    },
+                    {
+                      "type": "image",
+                      "mimeType": "image/png",
+                      "data": "{{imageData}}",
+                      "uri": "data:image/png;base64,{{imageData}}"
+                    }
+                  ]
+                }
+                """));
+        ChatEvent? agent = AcpProvider.ApplyUpdate(
+            session,
+            "agent_message_chunk",
+            JsonSerializer.Deserialize<JsonElement>(
+                $$"""
+                {
+                  "messageId": "agent-1",
+                  "content": {
+                    "type": "image",
+                    "mimeType": "image/png",
+                    "data": "{{imageData}}"
+                  }
+                }
+                """));
+
+        Assert.Equal("Inspect these", user!.Text);
+        Assert.DoesNotContain("private file contents", user.Text, StringComparison.Ordinal);
+        Assert.Equal(5, user.Content.Length);
+        Assert.Equal("text", user.Content[0].Type);
+        Assert.Equal("phone photo.png", user.Content[1].Name);
+        Assert.Equal(1024, user.Content[1].Size);
+        Assert.Equal("notes.txt", user.Content[2].Name);
+        Assert.Equal(Encoding.UTF8.GetByteCount("private file contents"), user.Content[2].Size);
+        Assert.Equal("archive.zip", user.Content[3].Name);
+        Assert.Equal(2048, user.Content[3].Size);
+        Assert.Equal("Image attachment", user.Content[4].Name);
+        Assert.Null(user.Content[4].Uri);
+        Assert.All(user.Content, block =>
+        {
+            Assert.Null(block.Data);
+            if (block.Type != "text")
+            {
+                Assert.Null(block.Text);
+                Assert.Null(block.RawJson);
+            }
+        });
+
+        Assert.Equal(imageData, Assert.Single(agent!.Content).Data);
+    }
+
+    [Fact]
     public async Task PublishesPromptAsAUserTurnBeforeCallingAcp()
     {
         RecordingPromptSink? sink = null;
@@ -408,8 +501,193 @@ public sealed class AcpProviderTests
         Assert.Equal([1, 0], activity);
     }
 
-    private static JsonElement Page(int start, int count, string? nextCursor)
+    [Fact]
+    public async Task SendsAttachmentsAsOrderedAcpContentAndEchoesOnlyTheirMetadata()
     {
+        var calls = new List<(string Method, JsonObject Parameters)>();
+
+        Task<JsonElement> Call(string method, JsonObject parameters, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            calls.Add((method, parameters));
+
+            return Task.FromResult(method switch
+            {
+                "session/new" => JsonSerializer.SerializeToElement(new { sessionId = "attached" }),
+                "session/prompt" => JsonSerializer.SerializeToElement(new { stopReason = "end_turn" }),
+                _ => throw new InvalidOperationException(method),
+            });
+        }
+
+        var sink = new RecordingPromptSink();
+        await using var provider = new AcpProvider(Call);
+        provider.AttachSink(sink);
+
+        AcpSession session = await provider.CreateAsync(@"C:\repo", "Attached");
+        session.Loaded = true;
+        session.UpdateCapabilities(new AcpPromptCapabilities(Image: true, EmbeddedContext: true));
+
+        byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01];
+        await provider.PromptAsync(
+            "attached",
+            "  look at these  ",
+            [
+                new ChatAttachmentContent(Guid.NewGuid().ToString(), "photo.png", "image/png", png),
+                new ChatAttachmentContent(
+                    Guid.NewGuid().ToString(),
+                    "notes.txt",
+                    "text/plain",
+                    "hello"u8.ToArray()),
+            ],
+            CancellationToken.None);
+
+        JsonArray prompt = calls.Single(call => call.Method == "session/prompt")
+            .Parameters["prompt"]!.AsArray();
+
+        Assert.Equal(3, prompt.Count);
+        Assert.Equal("look at these", prompt[0]!["text"]!.GetValue<string>());
+        Assert.Equal("image", prompt[1]!["type"]!.GetValue<string>());
+        Assert.Equal("resource", prompt[2]!["type"]!.GetValue<string>());
+        Assert.Equal("hello", prompt[2]!["resource"]!["text"]!.GetValue<string>());
+
+        // The bubble names the files. It must not carry a byte of them: the transcript
+        // is broadcast to every attached device and replayed on every snapshot.
+        ChatEvent echoed = Assert.Single(sink.Events);
+        Assert.Equal("look at these", echoed.Text);
+        Assert.Equal(2, echoed.Content.Length);
+        Assert.Equal(["photo.png", "notes.txt"], echoed.Content.Select(block => block.Name));
+        Assert.All(echoed.Content, block => Assert.Null(block.Data));
+        Assert.All(echoed.Content, block => Assert.Null(block.Text));
+        Assert.DoesNotContain(
+            Convert.ToBase64String(png),
+            JsonSerializer.Serialize(echoed.Content.Select(block => block.Uri)),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AttachmentOnlyPromptsAreAllowedAndTextOnlyPromptsAreUnchanged()
+    {
+        var calls = new List<(string Method, JsonObject Parameters)>();
+
+        Task<JsonElement> Call(string method, JsonObject parameters, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            calls.Add((method, parameters));
+
+            return Task.FromResult(method switch
+            {
+                "session/new" => JsonSerializer.SerializeToElement(new { sessionId = "attached" }),
+                "session/prompt" => JsonSerializer.SerializeToElement(new { stopReason = "end_turn" }),
+                _ => throw new InvalidOperationException(method),
+            });
+        }
+
+        await using var provider = new AcpProvider(Call);
+        AcpSession session = await provider.CreateAsync(@"C:\repo", "Attached");
+        session.Loaded = true;
+        session.UpdateCapabilities(new AcpPromptCapabilities(Image: true, EmbeddedContext: true));
+
+        await provider.PromptAsync(
+            "attached",
+            string.Empty,
+            [
+                new ChatAttachmentContent(
+                    Guid.NewGuid().ToString(),
+                    "photo.png",
+                    "image/png",
+                    [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+            ],
+            CancellationToken.None);
+
+        JsonArray attachmentOnly = calls.Last().Parameters["prompt"]!.AsArray();
+        Assert.Equal("image", Assert.Single(attachmentOnly)!["type"]!.GetValue<string>());
+
+        await provider.PromptAsync("attached", "just words");
+
+        JsonArray textOnly = calls.Last().Parameters["prompt"]!.AsArray();
+        JsonNode text = Assert.Single(textOnly)!;
+        Assert.Equal("text", text["type"]!.GetValue<string>());
+        Assert.Equal("just words", text["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task AnUnsupportedAttachmentIsRefusedBeforeAnythingIsSent()
+    {
+        var calls = new List<string>();
+
+        Task<JsonElement> Call(string method, JsonObject parameters, CancellationToken cancellationToken)
+        {
+            calls.Add(method);
+            return Task.FromResult(method switch
+            {
+                "session/new" => JsonSerializer.SerializeToElement(new { sessionId = "attached" }),
+                _ => throw new InvalidOperationException(method),
+            });
+        }
+
+        await using var provider = new AcpProvider(Call);
+        AcpSession session = await provider.CreateAsync(@"C:\repo", "Attached");
+        session.Loaded = true;
+
+        // Nothing negotiated: the default is no attachment support at all.
+        AcpPromptException refused = Assert.Throws<AcpPromptException>(() => provider.StartPrompt(
+            "attached",
+            "look",
+            [
+                new ChatAttachmentContent(
+                    Guid.NewGuid().ToString(),
+                    "photo.png",
+                    "image/png",
+                    [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+            ]));
+
+        Assert.Equal(ErrorCodes.AttachmentUnsupported, refused.Code);
+        Assert.DoesNotContain("session/prompt", calls);
+
+        AcpPromptException missing = Assert.Throws<AcpPromptException>(() =>
+            provider.StartPrompt("no-such-chat", "hello", []));
+        Assert.Equal(ErrorCodes.SessionNotFound, missing.Code);
+    }
+
+    [Fact]
+    public async Task DiscoveredSessionsAreToldWhenCapabilitiesChange()
+    {
+        Task<JsonElement> Call(string method, JsonObject parameters, CancellationToken cancellationToken) =>
+            Task.FromResult(method switch
+            {
+                "session/new" => JsonSerializer.SerializeToElement(
+                    new { sessionId = parameters["cwd"]!.GetValue<string>() }),
+                _ => throw new InvalidOperationException(method),
+            });
+
+        var sink = new RecordingUpdateSink();
+        await using var provider = new AcpProvider(Call);
+        provider.AttachSink(sink);
+
+        AcpSession first = await provider.CreateAsync(@"C:\one", "One");
+        AcpSession second = await provider.CreateAsync(@"C:\two", "Two");
+        Assert.Equal(AcpPromptCapabilities.None, first.PromptCapabilities);
+
+        var negotiated = new AcpPromptCapabilities(Image: true, EmbeddedContext: false);
+        await provider.ApplyCapabilitiesAsync(negotiated);
+
+        Assert.Equal(negotiated, first.PromptCapabilities);
+        Assert.Equal(negotiated, second.PromptCapabilities);
+        Assert.Equal([first.SessionId, second.SessionId], sink.Updated.Order());
+
+        // Re-negotiating the same answer changes nothing, so nothing is broadcast.
+        sink.Updated.Clear();
+        await provider.ApplyCapabilitiesAsync(negotiated);
+        Assert.Empty(sink.Updated);
+
+        // Losing the ACP process has to reach the phone too, or a composer keeps
+        // offering a picker whose upload can no longer be staged.
+        await provider.ApplyCapabilitiesAsync(AcpPromptCapabilities.None);
+        Assert.Equal(AcpPromptCapabilities.None, first.PromptCapabilities);
+        Assert.Equal(2, sink.Updated.Count);
+    }
+
+    private static JsonElement Page(int start, int count, string? nextCursor)    {
         DateTimeOffset now = DateTimeOffset.UtcNow;
         var sessions = Enumerable.Range(start, count).Select(index => new
         {
@@ -439,9 +717,47 @@ public sealed class AcpProviderTests
         await command.ExecuteNonQueryAsync();
     }
 
-    private sealed class RecordingChatSink : IAgentChatSink
+    /// <summary>Notes which sessions the relay was told changed, and nothing else.</summary>
+    private sealed class RecordingUpdateSink : IAgentChatSink
     {
-        public List<string?> TranscriptTargets { get; } = [];
+        public List<string> Updated { get; } = [];
+
+        public ValueTask OnChatOpenedAsync(
+            AcpSession session,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnChatUpdatedAsync(
+            AcpSession session,
+            CancellationToken cancellationToken = default)
+        {
+            Updated.Add(session.SessionId);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask OnChatClosedAsync(
+            AcpSession session,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnChatTranscriptAsync(
+            AcpSession session,
+            ChatTranscriptKind kind,
+            ChatEvent[] events,
+            string? targetConnectionId = null,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnChatAttentionAsync(
+            AcpSession session,
+            bool awaitingInput,
+            string? hint,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.CompletedTask;
+    }
+
+    private sealed class RecordingChatSink : IAgentChatSink
+    {        public List<string?> TranscriptTargets { get; } = [];
 
         public ValueTask OnChatOpenedAsync(
             AcpSession session,

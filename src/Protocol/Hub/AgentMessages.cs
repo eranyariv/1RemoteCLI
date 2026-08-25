@@ -350,6 +350,136 @@ public sealed class SendChatMessageNotification
     public string Text { get; set; } = string.Empty;
 }
 
+/// <summary>Hub to agent. Opens an attachment staging slot owned by one attached client.</summary>
+[MessagePackObject]
+public sealed class BeginChatAttachmentNotification
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string ClientConnectionId { get; set; } = string.Empty;
+
+    [Key(2)]
+    public string AttachmentId { get; set; } = string.Empty;
+
+    [Key(3)]
+    public string FileName { get; set; } = string.Empty;
+
+    [Key(4)]
+    public string MimeType { get; set; } = string.Empty;
+
+    [Key(5)]
+    public long TotalBytes { get; set; }
+}
+
+/// <summary>Hub to agent. Stages one chunk after the previous chunk was acknowledged.</summary>
+[MessagePackObject]
+public sealed class ChatAttachmentChunkNotification
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string ClientConnectionId { get; set; } = string.Empty;
+
+    [Key(2)]
+    public string AttachmentId { get; set; } = string.Empty;
+
+    [Key(3)]
+    public long Offset { get; set; }
+
+    [Key(4)]
+    public byte[] Data { get; set; } = [];
+}
+
+/// <summary>Hub to agent. Removes a staged attachment owned by this client.</summary>
+[MessagePackObject]
+public sealed class CancelChatAttachmentNotification
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string ClientConnectionId { get; set; } = string.Empty;
+
+    [Key(2)]
+    public string AttachmentId { get; set; } = string.Empty;
+}
+
+/// <summary>Hub to agent. Sends optional text plus staged attachments as one ACP prompt.</summary>
+[MessagePackObject]
+public sealed class SendChatPromptNotification
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string ClientConnectionId { get; set; } = string.Empty;
+
+    [Key(2)]
+    public string Text { get; set; } = string.Empty;
+
+    [Key(3)]
+    public string[] AttachmentIds { get; set; } = [];
+}
+
+/// <summary>
+/// Agent result returned through the hub to the browser after each attachment
+/// operation. Confirmed bytes are bytes already staged on the machine, never bytes
+/// merely queued for the agent.
+/// <para>
+/// Unlike <see cref="TerminalUploadReply"/> this carries no path, and deliberately
+/// so: a browser-selected chat attachment becomes prompt content, and a machine path
+/// for it would be both meaningless to the agent and a needless disclosure to the
+/// phone.
+/// </para>
+/// </summary>
+[MessagePackObject]
+public sealed class ChatAttachmentReply
+{
+    [Key(0)]
+    public string AttachmentId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public long ConfirmedBytes { get; set; }
+
+    [Key(2)]
+    public long TotalBytes { get; set; }
+
+    /// <summary>Set once every byte is staged and the attachment may be referenced by a prompt.</summary>
+    [Key(3)]
+    public bool Completed { get; set; }
+
+    [Key(4)]
+    public string? ErrorCode { get; set; }
+
+    [Key(5)]
+    public string? ErrorMessage { get; set; }
+}
+
+/// <summary>
+/// Agent result returned through the hub to the browser after a prompt is submitted.
+/// <para>
+/// Acknowledges that the agent validated ownership, capabilities and metadata and
+/// successfully read the staged bytes — not that the ACP turn finished. The turn
+/// continues to arrive as ordinary streamed transcript events, exactly as it does
+/// for a text-only message.
+/// </para>
+/// </summary>
+[MessagePackObject]
+public sealed class ChatPromptReply
+{
+    [Key(0)]
+    public bool Accepted { get; set; }
+
+    [Key(1)]
+    public string? ErrorCode { get; set; }
+
+    [Key(2)]
+    public string? ErrorMessage { get; set; }
+}
+
 /// <summary>Hub to agent. Resolve an ACP permission request with one advertised option.</summary>
 [MessagePackObject]
 public sealed class RespondChatPermissionNotification

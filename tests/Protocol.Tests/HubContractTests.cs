@@ -156,6 +156,115 @@ public class HubContractTests
     }
 
     [Fact]
+    public void ChatAttachmentMessagesPreserveOrderingAndBytes()
+    {
+        const string attachmentId = "6cbb0f4d-2a41-4cf6-8b4a-0a26f2b71f61";
+
+        BeginChatAttachmentRequest begin = RoundTrip(new BeginChatAttachmentRequest
+        {
+            SessionId = "chat-1",
+            AttachmentId = attachmentId,
+            FileName = "receipt.png",
+            MimeType = "image/png",
+            TotalBytes = 4,
+        });
+        Assert.Equal("receipt.png", begin.FileName);
+        Assert.Equal("image/png", begin.MimeType);
+        Assert.Equal(4, begin.TotalBytes);
+
+        ChatAttachmentChunkRequest chunk = RoundTrip(new ChatAttachmentChunkRequest
+        {
+            SessionId = "chat-1",
+            AttachmentId = attachmentId,
+            Offset = 2,
+            Data = [0x00, 0xff],
+        });
+        Assert.Equal(2, chunk.Offset);
+        Assert.Equal([0x00, 0xff], chunk.Data);
+
+        ChatAttachmentReply reply = RoundTrip(new ChatAttachmentReply
+        {
+            AttachmentId = attachmentId,
+            ConfirmedBytes = 4,
+            TotalBytes = 4,
+            Completed = true,
+        });
+        Assert.True(reply.Completed);
+        Assert.Null(reply.ErrorCode);
+
+        SendChatPromptRequest prompt = RoundTrip(new SendChatPromptRequest
+        {
+            SessionId = "chat-1",
+            Text = "What does this say?",
+            AttachmentIds = [attachmentId],
+        });
+        Assert.Equal("What does this say?", prompt.Text);
+        Assert.Equal([attachmentId], prompt.AttachmentIds);
+
+        ChatPromptReply accepted = RoundTrip(new ChatPromptReply { Accepted = true });
+        Assert.True(accepted.Accepted);
+        Assert.Null(accepted.ErrorCode);
+    }
+
+    /// <summary>
+    /// A chat attachment reply must never grow a path field. The whole point of the
+    /// separate family is that browser-selected chat bytes become prompt content, so
+    /// there is nothing on the machine for the phone to be told about.
+    /// </summary>
+    [Fact]
+    public void ChatAttachmentRepliesCarryNoMachinePath()
+    {
+        Assert.DoesNotContain(
+            typeof(ChatAttachmentReply).GetProperties(),
+            property => property.Name.Contains("Path", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ChatCapabilitiesAreAppendedAndDefaultToNothing()
+    {
+        SessionInfo negotiated = RoundTrip(new SessionInfo
+        {
+            SessionId = "chat-1",
+            Kind = SessionKind.AgentChat,
+            ChatCapabilities = new ChatCapabilities { Image = true, EmbeddedContext = false },
+        });
+
+        Assert.NotNull(negotiated.ChatCapabilities);
+        Assert.True(negotiated.ChatCapabilities!.Image);
+        Assert.False(negotiated.ChatCapabilities.EmbeddedContext);
+
+        // What a version 5 agent sends: the payload ends before the appended field,
+        // which has to read as "no attachment support" rather than as unknown.
+        byte[] bytes = MessagePackSerializer.Serialize(
+            new VersionFiveSessionInfo
+            {
+                SessionId = "chat-1",
+                Program = "GitHub Copilot",
+                Kind = SessionKind.AgentChat,
+            },
+            Options);
+
+        SessionInfo older = MessagePackSerializer.Deserialize<SessionInfo>(bytes, Options);
+
+        Assert.Null(older.ChatCapabilities);
+        Assert.Equal(SessionKind.AgentChat, older.Kind);
+    }
+
+    [Fact]
+    public void ChatAttachmentLimitsStayBelowTheTerminalUploadCeiling()
+    {
+        // Base64 inflates by four thirds before the bytes reach the ACP agent, and
+        // then again against a context window, so these two are deliberately not the
+        // same number as the terminal limit.
+        Assert.True(ChatAttachmentLimits.MaxAttachmentBytes < TerminalUploadLimits.MaxFileBytes);
+        Assert.True(ChatAttachmentLimits.MaxPromptBytes < TerminalUploadLimits.MaxFileBytes);
+        Assert.True(
+            ChatAttachmentLimits.MaxPromptBytes <
+            ChatAttachmentLimits.MaxAttachmentBytes * ChatAttachmentLimits.MaxAttachmentCount);
+        Assert.Equal(TerminalUploadLimits.MaxChunkBytes, ChatAttachmentLimits.MaxChunkBytes);
+    }
+
+    [Fact]
     public void MachineInfoNestsItsSessions()
     {
         var received = RoundTrip(new MachineInfo
@@ -215,5 +324,52 @@ public class HubContractTests
 
         [Key(4)]
         public int ProtocolVersion { get; set; }
+    }
+
+    /// <summary>A session as a version 5 agent describes one: nothing past ProjectId.</summary>
+    [MessagePackObject]
+    public sealed class VersionFiveSessionInfo
+    {
+        [Key(0)]
+        public string SessionId { get; set; } = string.Empty;
+
+        [Key(1)]
+        public string Program { get; set; } = string.Empty;
+
+        [Key(2)]
+        public string[] Args { get; set; } = [];
+
+        [Key(3)]
+        public string Cwd { get; set; } = string.Empty;
+
+        [Key(4)]
+        public int Cols { get; set; }
+
+        [Key(5)]
+        public int Rows { get; set; }
+
+        [Key(6)]
+        public DateTimeOffset StartedAt { get; set; }
+
+        [Key(7)]
+        public string? DisplayName { get; set; }
+
+        [Key(8)]
+        public bool AwaitingInput { get; set; }
+
+        [Key(9)]
+        public CliType CliType { get; set; }
+
+        [Key(10)]
+        public string? CustomName { get; set; }
+
+        [Key(11)]
+        public bool Pinned { get; set; }
+
+        [Key(12)]
+        public SessionKind Kind { get; set; }
+
+        [Key(13)]
+        public string? ProjectId { get; set; }
     }
 }

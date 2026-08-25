@@ -142,6 +142,88 @@ public sealed class SendChatMessageRequest
     public string Text { get; set; } = string.Empty;
 }
 
+/// <summary>
+/// Client to hub. Starts one bounded attachment upload for an attached agent-chat
+/// session.
+/// <para>
+/// Deliberately not <see cref="BeginTerminalUploadRequest"/> with a different session
+/// kind. The two share their transport mechanics and nothing else: a terminal upload
+/// ends as a file the user pastes a path to, while this one ends as typed content
+/// inside an ACP prompt and must never surface a path at all.
+/// </para>
+/// </summary>
+[MessagePackObject]
+public sealed class BeginChatAttachmentRequest
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string AttachmentId { get; set; } = string.Empty;
+
+    [Key(2)]
+    public string FileName { get; set; } = string.Empty;
+
+    /// <summary>The browser's guess. The agent re-derives the real type from the bytes.</summary>
+    [Key(3)]
+    public string MimeType { get; set; } = string.Empty;
+
+    [Key(4)]
+    public long TotalBytes { get; set; }
+}
+
+/// <summary>Client to hub. Appends one ordered chunk to an attachment the agent accepted.</summary>
+[MessagePackObject]
+public sealed class ChatAttachmentChunkRequest
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string AttachmentId { get; set; } = string.Empty;
+
+    [Key(2)]
+    public long Offset { get; set; }
+
+    [Key(3)]
+    public byte[] Data { get; set; } = [];
+}
+
+/// <summary>Client to hub. Removes a staged attachment, complete or not, and its bytes.</summary>
+[MessagePackObject]
+public sealed class CancelChatAttachmentRequest
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string AttachmentId { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Client to hub. Sends optional text plus previously staged attachments as one ACP
+/// prompt.
+/// <para>
+/// <see cref="SendChatMessageRequest"/> is left exactly as it was and remains the
+/// path a text-only prompt takes, so a phone talking to an agent that predates
+/// attachments keeps working unchanged.
+/// </para>
+/// </summary>
+[MessagePackObject]
+public sealed class SendChatPromptRequest
+{
+    [Key(0)]
+    public string SessionId { get; set; } = string.Empty;
+
+    /// <summary>May be empty when at least one attachment is present.</summary>
+    [Key(1)]
+    public string Text { get; set; } = string.Empty;
+
+    /// <summary>Completed attachment ids, in the order the user selected them.</summary>
+    [Key(2)]
+    public string[] AttachmentIds { get; set; } = [];
+}
+
 /// <summary>Client to hub. Selects one option from a pending chat permission request.</summary>
 [MessagePackObject]
 public sealed class RespondChatPermissionRequest

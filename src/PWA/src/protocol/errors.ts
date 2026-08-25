@@ -28,6 +28,13 @@ export const ErrorCodes = {
   UploadFailed: 'upload_failed',
   UploadCancelled: 'upload_cancelled',
   UploadUnavailable: 'upload_unavailable',
+  AttachmentTooLarge: 'attachment_too_large',
+  AttachmentBudgetExceeded: 'attachment_budget_exceeded',
+  AttachmentNotFound: 'attachment_not_found',
+  AttachmentFailed: 'attachment_failed',
+  AttachmentCancelled: 'attachment_cancelled',
+  AttachmentUnsupported: 'attachment_unsupported',
+  AttachmentUnavailable: 'attachment_unavailable',
 } as const
 
 /**
@@ -79,6 +86,20 @@ export function describeError(code: string, fallback?: string): string {
       return 'The upload was cancelled.'
     case ErrorCodes.UploadUnavailable:
       return 'Update the agent on this machine before attaching files.'
+    case ErrorCodes.AttachmentTooLarge:
+      return fallback ?? 'That attachment is larger than this chat allows.'
+    case ErrorCodes.AttachmentBudgetExceeded:
+      return fallback ?? 'That is more than one prompt can carry. Remove an attachment and try again.'
+    case ErrorCodes.AttachmentNotFound:
+      return 'That attachment is no longer ready to send. Choose it again.'
+    case ErrorCodes.AttachmentFailed:
+      return fallback ?? 'The machine could not prepare that attachment.'
+    case ErrorCodes.AttachmentCancelled:
+      return 'The attachment was removed.'
+    case ErrorCodes.AttachmentUnsupported:
+      return fallback ?? 'This agent cannot accept that kind of attachment.'
+    case ErrorCodes.AttachmentUnavailable:
+      return 'Update the agent on this machine before attaching files to a chat.'
     default:
       return fallback ?? 'Something went wrong talking to the hub.'
   }

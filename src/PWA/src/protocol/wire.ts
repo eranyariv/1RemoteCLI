@@ -63,6 +63,21 @@ export interface SessionInfo {
   kind: SessionKind
   /** The project this session is grouped under. Null means the user's General project. */
   projectId: string | null
+  /**
+   * What the ACP agent behind an `AgentChat` session accepts in a prompt.
+   *
+   * Null on terminal sessions, and on any chat session relayed by an agent that
+   * predates protocol version 6 — which is exactly what this decoder produces when
+   * the payload stops before the field. Null therefore has to mean "no attachment
+   * support" rather than "unknown": a composer that offered a picker on a guess
+   * would fail after the user had already chosen the photo.
+   */
+  chatCapabilities: ChatCapabilities | null
+}
+
+export interface ChatCapabilities {
+  image: boolean
+  embeddedContext: boolean
 }
 
 export interface MachineInfo {
@@ -177,6 +192,23 @@ export interface TerminalUploadReply {
   errorMessage: string | null
 }
 
+/** `ChatAttachmentReply` — no path, deliberately: chat attachments are prompt content. */
+export interface ChatAttachmentReply {
+  attachmentId: string
+  confirmedBytes: number
+  totalBytes: number
+  completed: boolean
+  errorCode: string | null
+  errorMessage: string | null
+}
+
+/** `ChatPromptReply` — the agent accepted the prompt, not that the turn is finished. */
+export interface ChatPromptReply {
+  accepted: boolean
+  errorCode: string | null
+  errorMessage: string | null
+}
+
 // Primitives.
 
 function tuple(value: unknown, name: string): unknown[] {
@@ -264,7 +296,13 @@ export function decodeSession(value: unknown): SessionInfo {
     // to land on null — the user's General project — rather than on the string
     // "undefined" reaching a project lookup that will never find it.
     projectId: typeof s[13] === 'string' && s[13].length > 0 ? s[13] : null,
+    chatCapabilities: chatCapabilities(s[14]),
   }
+}
+
+function chatCapabilities(value: unknown): ChatCapabilities | null {
+  if (!Array.isArray(value)) return null
+  return { image: bool(value[0]), embeddedContext: bool(value[1]) }
 }
 
 function cliType(value: unknown): CliType {
@@ -476,6 +514,29 @@ export function decodeTerminalUploadReply(value: unknown): TerminalUploadReply {
   }
 }
 
+/** `ChatAttachmentReply` — direct result after the agent handled a staging operation. */
+export function decodeChatAttachmentReply(value: unknown): ChatAttachmentReply {
+  const reply = tuple(value, 'ChatAttachmentReply')
+  return {
+    attachmentId: str(reply[0]),
+    confirmedBytes: num(reply[1]),
+    totalBytes: num(reply[2]),
+    completed: bool(reply[3]),
+    errorCode: typeof reply[4] === 'string' ? reply[4] : null,
+    errorMessage: typeof reply[5] === 'string' ? reply[5] : null,
+  }
+}
+
+/** `ChatPromptReply` — the agent accepted the prompt and its attachments. */
+export function decodeChatPromptReply(value: unknown): ChatPromptReply {
+  const reply = tuple(value, 'ChatPromptReply')
+  return {
+    accepted: bool(reply[0]),
+    errorCode: typeof reply[1] === 'string' ? reply[1] : null,
+    errorMessage: typeof reply[2] === 'string' ? reply[2] : null,
+  }
+}
+
 /** `ProjectInfo`, decoded on its own — it is nested inside every project message below. */
 export function decodeProject(value: unknown): ProjectInfo {
   const p = tuple(value, 'ProjectInfo')
@@ -580,6 +641,46 @@ export function encodeInterruptSession(sessionId: string): unknown[] {
 
 export function encodeSendChatMessage(sessionId: string, text: string): unknown[] {
   return [sessionId, text]
+}
+
+/** `BeginChatAttachmentRequest` */
+export function encodeBeginChatAttachment(
+  sessionId: string,
+  attachmentId: string,
+  fileName: string,
+  mimeType: string,
+  totalBytes: number,
+): unknown[] {
+  return [sessionId, attachmentId, fileName, mimeType, totalBytes]
+}
+
+/** `ChatAttachmentChunkRequest` */
+export function encodeChatAttachmentChunk(
+  sessionId: string,
+  attachmentId: string,
+  offset: number,
+  data: Uint8Array,
+): unknown[] {
+  return [sessionId, attachmentId, offset, data]
+}
+
+/** `CancelChatAttachmentRequest` */
+export function encodeCancelChatAttachment(sessionId: string, attachmentId: string): unknown[] {
+  return [sessionId, attachmentId]
+}
+
+/**
+ * `SendChatPromptRequest`
+ *
+ * Separate from `SendChatMessage`, which is left exactly as it was so a phone
+ * talking to an agent that predates attachments keeps sending text the old way.
+ */
+export function encodeSendChatPrompt(
+  sessionId: string,
+  text: string,
+  attachmentIds: string[],
+): unknown[] {
+  return [sessionId, text, attachmentIds]
 }
 
 export function encodeRespondChatPermission(

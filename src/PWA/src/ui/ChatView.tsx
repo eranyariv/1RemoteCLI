@@ -1,6 +1,18 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 
-import type { ChatEvent, MachineInfo, SessionInfo } from '../protocol/wire'
+import {
+  attachmentsAllowed,
+  describeType,
+  formatBytes,
+  isImageFile,
+  rejectAttachment,
+  CHAT_IMAGE_ACCEPT,
+  MAX_CHAT_ATTACHMENT_COUNT,
+  MAX_CHAT_PROMPT_TEXT_CHARS,
+  type ChatAttachmentDraft,
+} from '../chat/attachment'
+import { describeError } from '../protocol/errors'
+import type { ChatContentBlock, ChatEvent, MachineInfo, SessionInfo } from '../protocol/wire'
 import type { RelayClient } from '../relay/client'
 import { sessionLabel } from '../relay/machines'
 import { AcpContentBlocks, AcpEventView, type AcpDetailLevel } from './AcpEventView'
@@ -15,6 +27,21 @@ function isElicitation(item: ChatEvent): boolean {
   return (
     item.kind === 'Permission' &&
     item.options.some((option) => option.kind === 'select')
+  )
+}
+
+/**
+ * The metadata-only record the agent echoes for an attachment the user just sent.
+ *
+ * Recognised by its synthetic `attachment:` URI, which is what the daemon puts on a
+ * browser-selected file precisely because it is not a path to anything. The bytes
+ * are never in the transcript, so a summary is all there is to draw.
+ */
+function isAttachmentSummary(block: ChatContentBlock): boolean {
+  return (
+    block.type === 'resource_link' &&
+    (block.uri?.startsWith('attachment://') ?? false) &&
+    block.name !== null
   )
 }
 
@@ -37,7 +64,27 @@ export function ChatView({
   const [sending, setSending] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [detailLevel, setDetailLevel] = useState<DetailLevel>('summary')
+  const [attachments, setAttachments] = useState<ChatAttachmentDraft[]>([])
+  const [composerError, setComposerError] = useState<string | null>(null)
   const bottom = useRef<HTMLDivElement>(null)
+  const fileInput = useRef<HTMLInputElement | null>(null)
+  const imageInput = useRef<HTMLInputElement | null>(null)
+  const cameraInput = useRef<HTMLInputElement | null>(null)
+
+  /**
+   * Uploads in flight, and the object URLs their previews hold.
+   *
+   * Kept in refs rather than state because both have to be reachable from an unmount
+   * that is happening for reasons the render has nothing to say about: a preview that
+   * is not revoked leaks the whole file, and staged bytes nobody cancels sit on the
+   * machine until a sweeper notices.
+   */
+  const uploads = useRef(new Map<string, AbortController>())
+  const previews = useRef(new Map<string, string>())
+  const attachmentsRef = useRef<ChatAttachmentDraft[]>([])
+
+  const capabilities = session.chatCapabilities
+  const canAttach = attachmentsAllowed(capabilities)
 
   useEffect(() => {
     const off = client.on('chatTranscript', (transcript) => {
@@ -100,14 +147,188 @@ export function ChatView({
     })
   }, [detailLevel, events])
 
+  useEffect(() => {
+    attachmentsRef.current = attachments
+  }, [attachments])
+
+  const forget = useCallback((attachmentId: string) => {
+    uploads.current.get(attachmentId)?.abort()
+    uploads.current.delete(attachmentId)
+
+    const preview = previews.current.get(attachmentId)
+    if (preview) {
+      URL.revokeObjectURL(preview)
+      previews.current.delete(attachmentId)
+    }
+  }, [])
+
+  // Everything still staged when the view goes away is cancelled and revoked. A
+  // composer the user walked away from must not leave their photo on a machine —
+  // including an attachment that finished uploading and was never sent.
+  useEffect(
+    () => () => {
+      for (const controller of uploads.current.values()) controller.abort()
+      uploads.current.clear()
+
+      for (const item of attachmentsRef.current) {
+        void client.cancelChatAttachment(session.sessionId, item.attachmentId)
+      }
+
+      for (const preview of previews.current.values()) URL.revokeObjectURL(preview)
+      previews.current.clear()
+    },
+    [client, session.sessionId],
+  )
+
+  const attach = useCallback(
+    (files: FileList | null) => {
+      if (!files || files.length === 0) return
+      if (sending) {
+        setComposerError('Wait for the current message to be accepted before attaching another file.')
+        return
+      }
+
+      // Validated against a local running list rather than against state, because a
+      // multi-file pick is one synchronous loop and React has not re-rendered between
+      // its iterations — checking state would let four 4 MB files past a 10 MB
+      // aggregate limit.
+      let selected = [...attachmentsRef.current]
+      let batchError: string | null = null
+
+      for (const file of Array.from(files)) {
+        const rejection = rejectAttachment(file, capabilities, selected)
+        if (rejection) {
+          batchError ??= rejection
+          continue
+        }
+
+        const attachmentId = crypto.randomUUID()
+        const previewUrl = isImageFile(file) ? URL.createObjectURL(file) : null
+        if (previewUrl) previews.current.set(attachmentId, previewUrl)
+
+        const item: ChatAttachmentDraft = {
+          attachmentId,
+          name: file.name,
+          mimeType: file.type,
+          size: file.size,
+          status: 'uploading',
+          confirmedBytes: 0,
+          previewUrl,
+          error: null,
+        }
+        selected = [...selected, item]
+        setAttachments((current) => [...current, item])
+
+        const controller = new AbortController()
+        uploads.current.set(attachmentId, controller)
+
+        // Staged as soon as it is chosen, so the wait happens while the user is
+        // still typing rather than after they press Send.
+        void client
+          .uploadChatAttachment(
+            session.sessionId,
+            attachmentId,
+            file,
+            (progress) =>
+              setAttachments((current) =>
+                current.map((existing) =>
+                  existing.attachmentId === attachmentId
+                    ? { ...existing, confirmedBytes: progress.confirmedBytes }
+                    : existing,
+                ),
+              ),
+            controller.signal,
+          )
+          .then((outcome) => {
+            uploads.current.delete(attachmentId)
+
+            if (outcome.cancelled) {
+              setAttachments((current) =>
+                current.filter((existing) => existing.attachmentId !== attachmentId),
+              )
+              return
+            }
+
+            setAttachments((current) =>
+              current.map((existing) =>
+                existing.attachmentId === attachmentId
+                  ? {
+                      ...existing,
+                      status: outcome.ready ? 'ready' : 'failed',
+                      confirmedBytes: outcome.ready ? existing.size : existing.confirmedBytes,
+                      error: outcome.error
+                        ? describeError(outcome.error.code, outcome.error.message)
+                        : null,
+                    }
+                  : existing,
+              ),
+            )
+          })
+      }
+
+      // A multi-file picker can contain both accepted and rejected files. Report the
+      // rejected one after processing the whole batch so a later valid file cannot
+      // erase the explanation.
+      setComposerError(batchError)
+    },
+    [capabilities, client, sending, session.sessionId],
+  )
+
+  const remove = useCallback(
+    (attachmentId: string) => {
+      forget(attachmentId)
+      setAttachments((current) => current.filter((item) => item.attachmentId !== attachmentId))
+      void client.cancelChatAttachment(session.sessionId, attachmentId)
+    },
+    [client, forget, session.sessionId],
+  )
+
+  const uploading = attachments.some((item) => item.status === 'uploading')
+  const failed = attachments.some((item) => item.status === 'failed')
+  const ready = attachments.filter((item) => item.status === 'ready')
+
+  // A failure blocks Send rather than being quietly dropped from the prompt: the
+  // user chose that file, and sending without it while it is still sitting in the
+  // composer would look like it went.
+  const canSend =
+    connected && !sending && !uploading && !failed && (draft.trim().length > 0 || ready.length > 0)
+
   const send = async (event: FormEvent) => {
     event.preventDefault()
     const text = draft.trim()
-    if (!text || sending || !connected) return
+    if (!canSend) return
 
     setSending(true)
-    const error = await client.sendChatMessage(session.sessionId, text)
-    if (!error) setDraft('')
+    setComposerError(null)
+    const submittedDraft = draft
+    const submittedAttachments = [...ready]
+    const submittedIds = new Set(submittedAttachments.map((item) => item.attachmentId))
+
+    // Text with nothing attached still travels as `SendChatMessage`, which is the
+    // one path an agent that predates attachments understands.
+    const error =
+      submittedAttachments.length === 0
+        ? await client.sendChatMessage(session.sessionId, text)
+        : await client.sendChatPrompt(
+            session.sessionId,
+            text,
+            submittedAttachments.map((item) => item.attachmentId),
+          )
+
+    if (!error) {
+      // Do not erase a next message typed while the acknowledgement was in flight,
+      // or an attachment selected from a picker that was already open.
+      setDraft((current) => (current === submittedDraft ? '' : current))
+      for (const item of submittedAttachments) forget(item.attachmentId)
+      setAttachments((current) =>
+        current.filter((item) => !submittedIds.has(item.attachmentId)),
+      )
+    } else {
+      // The draft and the selection are kept: the machine rejected the prompt
+      // before consuming anything, so there is something here worth correcting.
+      setComposerError(describeError(error.code, error.message))
+    }
+
     setSending(false)
   }
 
@@ -190,30 +411,170 @@ export function ChatView({
 
       <form
         onSubmit={(event) => void send(event)}
-        className="flex gap-2 border-t border-slate-800 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3"
+        className="border-t border-slate-800 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3"
       >
-        <textarea
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey) {
-              event.preventDefault()
-              event.currentTarget.form?.requestSubmit()
-            }
-          }}
-          rows={2}
-          maxLength={20_000}
-          placeholder="Message agent"
-          aria-label="Message agent"
-          className="min-h-12 min-w-0 flex-1 resize-none rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-[16px] outline-none placeholder:text-slate-600 focus:border-sky-500"
-        />
-        <button
-          type="submit"
-          disabled={!connected || sending || draft.trim().length === 0}
-          className="min-h-12 self-end rounded-xl bg-sky-600 px-4 text-sm font-semibold disabled:opacity-40"
-        >
-          {sending ? 'Sending…' : 'Send'}
-        </button>
+        {canAttach ? (
+          <>
+            <input
+              ref={fileInput}
+              type="file"
+              multiple
+              className="hidden"
+              data-testid="chat-file-input"
+              accept={capabilities?.embeddedContext ? undefined : CHAT_IMAGE_ACCEPT}
+              onChange={(event) => {
+                attach(event.currentTarget.files)
+                event.currentTarget.value = ''
+              }}
+            />
+            <input
+              ref={imageInput}
+              type="file"
+              multiple
+              accept={CHAT_IMAGE_ACCEPT}
+              className="hidden"
+              data-testid="chat-image-input"
+              onChange={(event) => {
+                attach(event.currentTarget.files)
+                event.currentTarget.value = ''
+              }}
+            />
+            {/*
+              A separate input, not a mode on the one above: `capture` is what makes a
+              phone open the camera directly instead of the photo library, and putting
+              it on the shared input would take the library away from everyone.
+            */}
+            <input
+              ref={cameraInput}
+              type="file"
+              accept={CHAT_IMAGE_ACCEPT}
+              capture="environment"
+              className="hidden"
+              data-testid="chat-camera-input"
+              onChange={(event) => {
+                attach(event.currentTarget.files)
+                event.currentTarget.value = ''
+              }}
+            />
+          </>
+        ) : null}
+
+        {composerError ? (
+          <p
+            role="alert"
+            className="mb-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200"
+          >
+            {composerError}
+          </p>
+        ) : null}
+
+        {attachments.length > 0 ? (
+          <ul className="mb-2 grid gap-2" aria-label="Attachments">
+            {attachments.map((item) => (
+              <li
+                key={item.attachmentId}
+                className="flex min-w-0 items-center gap-3 rounded-xl border border-slate-800 bg-slate-900 px-3 py-2"
+              >
+                {item.previewUrl ? (
+                  <img
+                    src={item.previewUrl}
+                    alt=""
+                    className="size-10 shrink-0 rounded-lg object-cover"
+                  />
+                ) : (
+                  <span
+                    aria-hidden
+                    className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-slate-800 text-[10px] font-semibold text-slate-400"
+                  >
+                    {describeType(item.mimeType, item.name).slice(0, 4)}
+                  </span>
+                )}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs text-slate-200">{item.name}</span>
+                  <span className="block truncate text-[11px] text-slate-500">
+                    {describeType(item.mimeType, item.name)} · {formatBytes(item.size)}
+                    {item.status === 'uploading'
+                      ? ` · ${
+                          item.size === 0
+                            ? 100
+                            : Math.round((item.confirmedBytes / item.size) * 100)
+                        }%`
+                      : item.status === 'ready'
+                        ? ' · ready'
+                        : ''}
+                  </span>
+                  {item.status === 'failed' && item.error ? (
+                    <span className="block text-[11px] text-rose-300">{item.error}</span>
+                  ) : null}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => remove(item.attachmentId)}
+                  aria-label={`Remove ${item.name}`}
+                  className="min-h-10 shrink-0 rounded-lg px-2 text-sm text-slate-400 active:bg-slate-800"
+                >
+                  ✕
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+
+        <div className="flex gap-2">
+          {canAttach ? (
+            <div className="flex shrink-0 flex-col justify-end gap-1">
+              <button
+                type="button"
+                onClick={() =>
+                  (capabilities?.embeddedContext ? fileInput : imageInput).current?.click()
+                }
+                disabled={
+                  !connected || sending || attachments.length >= MAX_CHAT_ATTACHMENT_COUNT
+                }
+                aria-label={capabilities?.embeddedContext ? 'Attach a file' : 'Attach a photo'}
+                className="min-h-12 rounded-xl border border-slate-700 px-3 text-sm text-slate-300 active:bg-slate-800 disabled:opacity-40"
+              >
+                📎
+              </button>
+              {capabilities?.image ? (
+                <button
+                  type="button"
+                  onClick={() => cameraInput.current?.click()}
+                  disabled={
+                    !connected || sending || attachments.length >= MAX_CHAT_ATTACHMENT_COUNT
+                  }
+                  aria-label="Take a photo"
+                  className="min-h-12 rounded-xl border border-slate-700 px-3 text-sm text-slate-300 active:bg-slate-800 disabled:opacity-40"
+                >
+                  📷
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+
+          <textarea
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault()
+                event.currentTarget.form?.requestSubmit()
+              }
+            }}
+            rows={2}
+            maxLength={MAX_CHAT_PROMPT_TEXT_CHARS}
+            placeholder="Message agent"
+            aria-label="Message agent"
+            className="min-h-12 min-w-0 flex-1 resize-none rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-[16px] outline-none placeholder:text-slate-600 focus:border-sky-500"
+          />
+          <button
+            type="submit"
+            disabled={!canSend}
+            className="min-h-12 self-end rounded-xl bg-sky-600 px-4 text-sm font-semibold disabled:opacity-40"
+          >
+            {sending ? 'Sending…' : uploading ? 'Attaching…' : 'Send'}
+          </button>
+        </div>
       </form>
     </section>
   )
@@ -243,6 +604,9 @@ function TranscriptItem({
 
   if (item.kind === 'UserMessage' || item.kind === 'AgentMessage') {
     const user = item.kind === 'UserMessage'
+    const attached = user ? item.content.filter(isAttachmentSummary) : []
+    const rest = user ? item.content.filter((block) => !isAttachmentSummary(block)) : item.content
+
     return (
       <article
         className={`min-w-0 rounded-2xl px-3 py-2.5 text-sm leading-6 ${
@@ -255,7 +619,30 @@ function TranscriptItem({
           <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{item.text}</p>
         ) : null}
         {item.text && !user ? <MarkdownText>{item.text}</MarkdownText> : null}
-        <AcpContentBlocks blocks={item.content} includeText={false} />
+        {attached.length > 0 ? (
+          <ul className="mt-2 grid gap-1.5" aria-label="Sent attachments">
+            {attached.map((block, index) => (
+              <li
+                key={`${block.uri ?? block.name ?? 'attachment'}-${index}`}
+                className="flex min-w-0 items-center gap-2 rounded-lg bg-slate-900/70 px-2 py-1.5"
+              >
+                <span
+                  aria-hidden
+                  className="flex size-6 shrink-0 items-center justify-center rounded bg-slate-800 text-[9px] font-semibold text-slate-400"
+                >
+                  {describeType(block.mimeType ?? '', block.name ?? '').slice(0, 4)}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-xs text-slate-200">
+                  {block.name ?? 'Attachment'}
+                </span>
+                <span className="shrink-0 text-[11px] text-slate-500">
+                  {formatBytes(block.size ?? 0)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        <AcpContentBlocks blocks={rest} includeText={false} />
       </article>
     )
   }

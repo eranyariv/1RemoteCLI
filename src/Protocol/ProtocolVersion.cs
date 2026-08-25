@@ -25,9 +25,16 @@ public static class ProtocolVersion
     /// Version 5 appends the machine's phone-notification level to registration and
     /// adds a method for changing it live. Value zero preserves version 4 behavior,
     /// so older agents continue sending all attention events.
+    /// Version 6 adds agent-chat attachments: <c>BeginChatAttachment</c>,
+    /// <c>UploadChatAttachmentChunk</c>, <c>CancelChatAttachment</c> and
+    /// <c>SendChatPrompt</c>, plus an appended
+    /// <see cref="Hub.SessionInfo.ChatCapabilities"/> describing what the ACP agent
+    /// behind a chat session accepts. Additive again: <c>SendChatMessage</c> is
+    /// untouched and remains the path for text-only prompts, and a peer that omits
+    /// the appended field is read as advertising no attachment support at all.
     /// </para>
     /// </summary>
-    public const int Current = 5;
+    public const int Current = 6;
 
     /// <summary>Oldest version this build still accepts from a peer.</summary>
     public const int MinimumSupported = 1;

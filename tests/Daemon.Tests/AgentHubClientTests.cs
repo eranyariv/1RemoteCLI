@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -7,6 +9,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using OneRemoteCli.Daemon.Agent;
+using OneRemoteCli.Daemon.Chat;
 using OneRemoteCli.Daemon.Hub;
 using OneRemoteCli.Protocol;
 using OneRemoteCli.Protocol.Hub;
@@ -252,6 +255,182 @@ public sealed class AgentHubClientTests : IAsyncLifetime
             Assert.Equal("hello", File.ReadAllText(completed.RemotePath!));
             Assert.True(sessions.Remove(session.SessionId));
             Assert.False(File.Exists(completed.RemotePath));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task StagesChatAttachmentsAndSendsThemAsAcpPromptContent()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"agent-chat-attachment-{Guid.NewGuid():n}");
+        var prompts = new List<JsonObject>();
+
+        Task<JsonElement> Call(string method, JsonObject parameters, CancellationToken cancellationToken)
+        {
+            if (method == "session/prompt")
+            {
+                prompts.Add(parameters);
+            }
+
+            return Task.FromResult(method switch
+            {
+                "session/new" => JsonSerializer.SerializeToElement(new { sessionId = "chat-1" }),
+                "session/prompt" => JsonSerializer.SerializeToElement(new { stopReason = "end_turn" }),
+                _ => throw new InvalidOperationException(method),
+            });
+        }
+
+        try
+        {
+            await using var chat = new AcpProvider(Call);
+            AgentHubClient client = await StartAsync(
+                new SessionRegistry(),
+                chatAttachmentRoot: root);
+            client.AttachChatProvider(chat);
+            await Next<RegisterMachineRequest>();
+
+            AcpSession session = await chat.CreateAsync(@"C:\repo", "Chat");
+            session.Loaded = true;
+            await chat.ApplyCapabilitiesAsync(new AcpPromptCapabilities(Image: true, EmbeddedContext: true));
+
+            AgentSessionUpdatedNotification updated = await Next<AgentSessionUpdatedNotification>();
+            Assert.NotNull(updated.Session.ChatCapabilities);
+            Assert.True(updated.Session.ChatCapabilities!.Image);
+
+            byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x07];
+            string attachmentId = Guid.NewGuid().ToString();
+
+            ChatAttachmentReply begun =
+                await InvokeAgentAsync<BeginChatAttachmentNotification, ChatAttachmentReply>(
+                    HubMethods.Agent.BeginChatAttachment,
+                    new BeginChatAttachmentNotification
+                    {
+                        SessionId = session.SessionId,
+                        ClientConnectionId = "phone",
+                        AttachmentId = attachmentId,
+                        FileName = "receipt.png",
+                        MimeType = "image/png",
+                        TotalBytes = png.Length,
+                    });
+            Assert.Null(begun.ErrorCode);
+
+            ChatAttachmentReply staged =
+                await InvokeAgentAsync<ChatAttachmentChunkNotification, ChatAttachmentReply>(
+                    HubMethods.Agent.UploadChatAttachmentChunk,
+                    new ChatAttachmentChunkNotification
+                    {
+                        SessionId = session.SessionId,
+                        ClientConnectionId = "phone",
+                        AttachmentId = attachmentId,
+                        Offset = 0,
+                        Data = png,
+                    });
+            Assert.True(staged.Completed);
+            Assert.NotEmpty(Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories));
+
+            // Another client cannot spend an attachment it did not stage.
+            ChatPromptReply stolen = await InvokeAgentAsync<SendChatPromptNotification, ChatPromptReply>(
+                HubMethods.Agent.SendChatPrompt,
+                new SendChatPromptNotification
+                {
+                    SessionId = session.SessionId,
+                    ClientConnectionId = "other-phone",
+                    Text = "mine now",
+                    AttachmentIds = [attachmentId],
+                });
+            Assert.False(stolen.Accepted);
+            Assert.Equal(ErrorCodes.AttachmentNotFound, stolen.ErrorCode);
+
+            ChatPromptReply accepted = await InvokeAgentAsync<SendChatPromptNotification, ChatPromptReply>(
+                HubMethods.Agent.SendChatPrompt,
+                new SendChatPromptNotification
+                {
+                    SessionId = session.SessionId,
+                    ClientConnectionId = "phone",
+                    Text = "what does this say?",
+                    AttachmentIds = [attachmentId],
+                });
+
+            Assert.True(accepted.Accepted);
+            Assert.Null(accepted.ErrorCode);
+
+            await WaitUntil(() => prompts.Count == 1);
+            JsonArray content = prompts[0]["prompt"]!.AsArray();
+            Assert.Equal("text", content[0]!["type"]!.GetValue<string>());
+            Assert.Equal("image", content[1]!["type"]!.GetValue<string>());
+            Assert.Equal("image/png", content[1]!["mimeType"]!.GetValue<string>());
+            Assert.Equal(Convert.ToBase64String(png), content[1]!["data"]!.GetValue<string>());
+
+            // Consumed means gone: the staged copy of the user's photo does not
+            // outlive the prompt that spent it.
+            await WaitUntil(() => !Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Any());
+
+            ChatTranscriptNotification transcript = await Next<ChatTranscriptNotification>();
+            ChatEvent echoed = Assert.Single(transcript.Events);
+            Assert.Equal("what does this say?", echoed.Text);
+            Assert.Equal("receipt.png", Assert.Single(echoed.Content).Name);
+            Assert.All(echoed.Content, block => Assert.Null(block.Data));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task DetachingRemovesTheAttachmentsThatClientStaged()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"agent-chat-detach-{Guid.NewGuid():n}");
+
+        Task<JsonElement> Call(string method, JsonObject parameters, CancellationToken cancellationToken) =>
+            Task.FromResult(method switch
+            {
+                "session/new" => JsonSerializer.SerializeToElement(new { sessionId = "chat-1" }),
+                _ => throw new InvalidOperationException(method),
+            });
+
+        try
+        {
+            await using var chat = new AcpProvider(Call);
+            AgentHubClient client = await StartAsync(
+                new SessionRegistry(),
+                chatAttachmentRoot: root);
+            client.AttachChatProvider(chat);
+            await Next<RegisterMachineRequest>();
+
+            AcpSession session = await chat.CreateAsync(@"C:\repo", "Chat");
+            string attachmentId = Guid.NewGuid().ToString();
+
+            await InvokeAgentAsync<BeginChatAttachmentNotification, ChatAttachmentReply>(
+                HubMethods.Agent.BeginChatAttachment,
+                new BeginChatAttachmentNotification
+                {
+                    SessionId = session.SessionId,
+                    ClientConnectionId = "phone",
+                    AttachmentId = attachmentId,
+                    FileName = "half.png",
+                    MimeType = "image/png",
+                    TotalBytes = 4,
+                });
+
+            await SendToAgentAsync(
+                HubMethods.Agent.DetachRequested,
+                new DetachRequestedNotification
+                {
+                    SessionId = session.SessionId,
+                    ClientConnectionId = "phone",
+                });
+
+            await WaitUntil(() => !Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Any());
         }
         finally
         {
@@ -549,7 +728,8 @@ public sealed class AgentHubClientTests : IAsyncLifetime
     private async Task<AgentHubClient> StartAsync(
         SessionRegistry sessions,
         RecordingLogger? logs = null,
-        NotificationLevel notificationLevel = NotificationLevel.AllAttentionEvents)
+        NotificationLevel notificationLevel = NotificationLevel.AllAttentionEvents,
+        string? chatAttachmentRoot = null)
     {
         var client = new AgentHubClient(
             _hubUri,
@@ -557,7 +737,8 @@ public sealed class AgentHubClientTests : IAsyncLifetime
             sessions,
             _ => Task.FromResult<string?>("token"),
             logs?.CreateLogger("agent") ?? NullLogger.Instance,
-            notificationLevel: notificationLevel);
+            notificationLevel: notificationLevel,
+            chatAttachmentRoot: chatAttachmentRoot);
 
         _clients.Add(client);
 
@@ -706,6 +887,21 @@ public sealed class AgentHubClientTests : IAsyncLifetime
         }
 
         public ErrorNotification? SessionOpened(AgentSessionOpenedNotification notification)
+        {
+            recorder.Calls.Writer.TryWrite(notification);
+            return null;
+        }
+
+        public ErrorNotification? SessionUpdated(AgentSessionUpdatedNotification notification)
+        {
+            recorder.Calls.Writer.TryWrite(notification);
+            return null;
+        }
+
+        public void ChatTranscript(ChatTranscriptNotification notification) =>
+            recorder.Calls.Writer.TryWrite(notification);
+
+        public ErrorNotification? SessionAttention(SessionAttentionNotification notification)
         {
             recorder.Calls.Writer.TryWrite(notification);
             return null;

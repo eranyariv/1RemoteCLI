@@ -76,6 +76,135 @@ public sealed class AcpSessionTests
     }
 
     [Fact]
+    public void AnAttachmentOnlyPromptIsEchoedAsMetadataAndSuppressesTheAgentsReplay()
+    {
+        var session = Create();
+
+        ChatEvent prompt = session.AddUserPrompt(
+            string.Empty,
+            [
+                new ChatContentBlock
+                {
+                    Type = "resource_link",
+                    Name = "receipt.png",
+                    MimeType = "image/png",
+                    Size = 2048,
+                    Uri = "attachment://1remotecli/id/receipt.png",
+                },
+            ]);
+
+        // The agent replays the prompt it was just sent. It has no text to match on,
+        // so the replay is recognised by being the first text-free user message after
+        // one was sent — otherwise the phone shows the same bubble twice.
+        ChatEvent? echoed = session.Apply("user_message", "agent-user-1", null, null, null, null);
+        ChatEvent? sameReplay = session.Apply(
+            "user_message_chunk",
+            "agent-user-1",
+            "receipt.png",
+            null,
+            null,
+            null);
+
+        Assert.Null(echoed);
+        Assert.Null(sameReplay);
+
+        ChatEvent item = Assert.Single(session.Snapshot());
+        Assert.Equal(prompt.EventId, item.EventId);
+        Assert.Equal(string.Empty, item.Text);
+
+        ChatContentBlock block = Assert.Single(item.Content);
+        Assert.Equal("receipt.png", block.Name);
+        Assert.Equal(2048, block.Size);
+        Assert.Null(block.Data);
+    }
+
+    [Fact]
+    public void TextAndAttachmentPromptSuppressesContentBeforeTextWithoutRelayingBytes()
+    {
+        var session = Create();
+        ChatEvent prompt = session.AddUserPrompt(
+            "Read this",
+            [
+                new ChatContentBlock
+                {
+                    Type = "resource_link",
+                    Name = "receipt.png",
+                    MimeType = "image/png",
+                    Size = 2048,
+                    Uri = "attachment://1remotecli/id/receipt.png",
+                },
+            ]);
+
+        ChatEvent? image = session.Apply(
+            "user_message_chunk",
+            null,
+            null,
+            null,
+            null,
+            null,
+            content:
+            [
+                new ChatContentBlock
+                {
+                    Type = "image",
+                    MimeType = "image/png",
+                    Data = "raw-base64-that-must-not-enter-the-transcript",
+                },
+            ]);
+        ChatEvent? text = session.Apply(
+            "user_message_chunk",
+            null,
+            "Read this",
+            null,
+            null,
+            null);
+        ChatEvent? answer = session.Apply(
+            "agent_message_chunk",
+            null,
+            "Done",
+            null,
+            null,
+            null);
+
+        Assert.Null(image);
+        Assert.Null(text);
+        Assert.Equal("Done", answer!.Text);
+
+        ChatEvent[] transcript = session.Snapshot();
+        Assert.Equal(2, transcript.Length);
+        Assert.Equal(prompt.EventId, transcript[0].EventId);
+        Assert.Equal("Read this", transcript[0].Text);
+        ChatContentBlock summary = Assert.Single(transcript[0].Content);
+        Assert.Equal("receipt.png", summary.Name);
+        Assert.Null(summary.Data);
+        Assert.DoesNotContain(
+            transcript,
+            item => item.Text.Contains("raw-base64", StringComparison.Ordinal) ||
+                    item.Content.Any(block => block.Data is not null));
+    }
+
+    [Fact]
+    public void APromptWithNeitherTextNorAttachmentsIsRefused()
+    {
+        var session = Create();
+
+        Assert.Throws<ArgumentException>(() => session.AddUserPrompt(string.Empty));
+        Assert.Throws<ArgumentException>(() => session.AddUserPrompt(string.Empty, []));
+    }
+
+    [Fact]
+    public void CapabilitiesOnlyReportAChangeWhenTheyActuallyMove()
+    {
+        var session = Create();
+        Assert.Equal(AcpPromptCapabilities.None, session.PromptCapabilities);
+
+        var negotiated = new AcpPromptCapabilities(Image: true, EmbeddedContext: true);
+        Assert.True(session.UpdateCapabilities(negotiated));
+        Assert.False(session.UpdateCapabilities(negotiated));
+        Assert.True(session.UpdateCapabilities(AcpPromptCapabilities.None));
+    }
+
+    [Fact]
     public void ToolUpdatesReplaceToolCallsWithoutLosingPriorFields()
     {
         var session = Create();

@@ -11,6 +11,8 @@ import { Client, PROTOCOL_VERSION, Server } from '../protocol/methods'
 import { ErrorCodes, describeError } from '../protocol/errors'
 import {
   decodeAwaitingInput,
+  decodeChatAttachmentReply,
+  decodeChatPromptReply,
   decodeChatTranscript,
   decodeError,
   decodeMachineList,
@@ -26,9 +28,12 @@ import {
   decodeSessionUpdated,
   decodeTerminalUploadReply,
   decodeTerminalOutput,
+  encodeBeginChatAttachment,
   encodeBeginTerminalUpload,
+  encodeCancelChatAttachment,
   encodeCancelTerminalUpload,
   encodeAttachSession,
+  encodeChatAttachmentChunk,
   encodeClientHandshake,
   encodeCreateProject,
   encodeDeleteProject,
@@ -40,12 +45,14 @@ import {
   encodeRefreshToken,
   encodeSendInput,
   encodeSendChatMessage,
+  encodeSendChatPrompt,
   encodeSetSessionName,
   encodeSetSessionPinned,
   encodeSetSessionProject,
   encodeSetSessionType,
   encodeTerminalUploadChunk,
   encodeUpdateProject,
+  type ChatAttachmentReply,
   type CliType,
   type ChatTranscript,
   type HubError,
@@ -57,6 +64,11 @@ import {
   type TerminalUploadReply,
 } from '../protocol/wire'
 import type { PushRegistration } from '../push/subscription'
+import {
+  CHAT_ATTACHMENT_CHUNK_BYTES,
+  MAX_CHAT_ATTACHMENT_BYTES,
+  formatBytes,
+} from '../chat/attachment'
 import {
   MAX_TERMINAL_UPLOAD_BYTES,
   TERMINAL_UPLOAD_CHUNK_BYTES,
@@ -99,6 +111,13 @@ export interface TerminalUploadProgress {
 
 export interface TerminalUploadOutcome {
   remotePath: string | null
+  error: HubError | null
+  cancelled: boolean
+}
+
+/** The result of staging one chat attachment on the machine that owns the chat. */
+export interface ChatAttachmentOutcome {
+  ready: boolean
   error: HubError | null
   cancelled: boolean
 }
@@ -575,6 +594,172 @@ export class RelayClient {
     return this.request(Server.SendChatMessage, encodeSendChatMessage(sessionId, text))
   }
 
+  /**
+   * Stages one browser-selected file on the machine that owns this chat, in ordered
+   * chunks the agent acknowledges one at a time.
+   *
+   * Nothing is pasted anywhere and no path comes back: the staged bytes exist only
+   * so that `sendChatPrompt` can turn them into ACP prompt content.
+   */
+  async uploadChatAttachment(
+    sessionId: string,
+    attachmentId: string,
+    file: File,
+    onProgress: (progress: TerminalUploadProgress) => void,
+    signal?: AbortSignal,
+  ): Promise<ChatAttachmentOutcome> {
+    if (file.size === 0) {
+      return this.attachmentFailure(ErrorCodes.InvalidRequest, `${file.name} is empty.`, sessionId)
+    }
+
+    if (file.size > MAX_CHAT_ATTACHMENT_BYTES) {
+      return this.attachmentFailure(
+        ErrorCodes.AttachmentTooLarge,
+        `Chat attachments are limited to ${formatBytes(MAX_CHAT_ATTACHMENT_BYTES)} each.`,
+        sessionId,
+      )
+    }
+
+    if (signal?.aborted) return { ready: false, error: null, cancelled: true }
+
+    let started = false
+    let completed = false
+
+    try {
+      let reply = await this.chatAttachmentRequest(
+        Server.BeginChatAttachment,
+        encodeBeginChatAttachment(sessionId, attachmentId, file.name, file.type, file.size),
+        attachmentId,
+        file.size,
+      )
+
+      if (reply.errorCode) return this.attachmentReplyFailure(reply, sessionId)
+      started = true
+
+      if (
+        reply.attachmentId !== attachmentId ||
+        reply.totalBytes !== file.size ||
+        reply.confirmedBytes !== 0
+      ) {
+        return this.attachmentFailure(
+          ErrorCodes.AttachmentFailed,
+          'The machine returned inconsistent attachment metadata.',
+          sessionId,
+        )
+      }
+
+      onProgress({ confirmedBytes: 0, totalBytes: file.size })
+
+      while (reply.confirmedBytes < file.size) {
+        if (signal?.aborted) return { ready: false, error: null, cancelled: true }
+
+        const offset = reply.confirmedBytes
+        const end = Math.min(offset + CHAT_ATTACHMENT_CHUNK_BYTES, file.size)
+        const data = new Uint8Array(await file.slice(offset, end).arrayBuffer())
+
+        if (signal?.aborted) return { ready: false, error: null, cancelled: true }
+
+        reply = await this.chatAttachmentRequest(
+          Server.UploadChatAttachmentChunk,
+          encodeChatAttachmentChunk(sessionId, attachmentId, offset, data),
+          attachmentId,
+          file.size,
+        )
+
+        if (reply.errorCode) return this.attachmentReplyFailure(reply, sessionId)
+
+        if (
+          reply.attachmentId !== attachmentId ||
+          reply.totalBytes !== file.size ||
+          reply.confirmedBytes !== end
+        ) {
+          return this.attachmentFailure(
+            ErrorCodes.AttachmentFailed,
+            'The machine returned inconsistent attachment progress.',
+            sessionId,
+          )
+        }
+
+        onProgress({ confirmedBytes: reply.confirmedBytes, totalBytes: reply.totalBytes })
+      }
+
+      if (!reply.completed) {
+        return this.attachmentFailure(
+          ErrorCodes.AttachmentFailed,
+          'The machine staged the bytes but did not mark the attachment ready.',
+          sessionId,
+        )
+      }
+
+      completed = true
+      return { ready: true, error: null, cancelled: false }
+    } finally {
+      // A half-staged attachment is deleted rather than left for the sweeper: it is
+      // the user's file, and nothing will ever be able to send it.
+      if (started && !completed) {
+        await this.chatAttachmentRequest(
+          Server.CancelChatAttachment,
+          encodeCancelChatAttachment(sessionId, attachmentId),
+          attachmentId,
+          file.size,
+        )
+      }
+    }
+  }
+
+  /** Removes a staged attachment, complete or not, and its bytes with it. */
+  async cancelChatAttachment(sessionId: string, attachmentId: string): Promise<void> {
+    await this.chatAttachmentRequest(
+      Server.CancelChatAttachment,
+      encodeCancelChatAttachment(sessionId, attachmentId),
+      attachmentId,
+      0,
+    )
+  }
+
+  /**
+   * Sends optional text plus staged attachments as one prompt.
+   *
+   * Resolves once the agent has accepted them — validated ownership, capabilities
+   * and types, and read the bytes back off disk — not once the turn has finished.
+   */
+  async sendChatPrompt(
+    sessionId: string,
+    text: string,
+    attachmentIds: string[],
+  ): Promise<HubError | null> {
+    if (!this.connected) {
+      return { code: ErrorCodes.MachineOffline, message: 'Not connected to the hub.', sessionId }
+    }
+
+    try {
+      const reply = decodeChatPromptReply(
+        await this.connection!.invoke(
+          Server.SendChatPrompt,
+          encodeSendChatPrompt(sessionId, text, attachmentIds),
+        ),
+      )
+
+      if (reply.accepted) return null
+
+      const problem: HubError = {
+        code: reply.errorCode ?? ErrorCodes.InternalError,
+        message: reply.errorMessage ?? 'The machine refused that prompt.',
+        sessionId,
+      }
+      this.emit('error', problem)
+      return problem
+    } catch (error) {
+      const problem: HubError = {
+        code: ErrorCodes.InternalError,
+        message: errorText(error),
+        sessionId,
+      }
+      this.emit('error', problem)
+      return problem
+    }
+  }
+
   async respondChatPermission(
     sessionId: string,
     requestId: string,
@@ -756,6 +941,60 @@ export class RelayClient {
       remotePath: null,
       error: { code, message, sessionId },
       cancelled: code === ErrorCodes.UploadCancelled,
+    }
+  }
+
+  private async chatAttachmentRequest(
+    method: string,
+    argument: unknown,
+    attachmentId: string,
+    totalBytes: number,
+  ): Promise<ChatAttachmentReply> {
+    if (!this.connected) {
+      return {
+        attachmentId,
+        confirmedBytes: 0,
+        totalBytes,
+        completed: false,
+        errorCode: ErrorCodes.MachineOffline,
+        errorMessage: 'Not connected to the hub.',
+      }
+    }
+
+    try {
+      return decodeChatAttachmentReply(await this.connection!.invoke(method, argument))
+    } catch (error) {
+      return {
+        attachmentId,
+        confirmedBytes: 0,
+        totalBytes,
+        completed: false,
+        errorCode: ErrorCodes.AttachmentFailed,
+        errorMessage: errorText(error),
+      }
+    }
+  }
+
+  private attachmentReplyFailure(
+    reply: ChatAttachmentReply,
+    sessionId: string,
+  ): ChatAttachmentOutcome {
+    return this.attachmentFailure(
+      reply.errorCode ?? ErrorCodes.AttachmentFailed,
+      reply.errorMessage ?? 'The attachment could not be staged.',
+      sessionId,
+    )
+  }
+
+  private attachmentFailure(
+    code: string,
+    message: string,
+    sessionId: string,
+  ): ChatAttachmentOutcome {
+    return {
+      ready: false,
+      error: { code, message, sessionId },
+      cancelled: code === ErrorCodes.AttachmentCancelled,
     }
   }
 

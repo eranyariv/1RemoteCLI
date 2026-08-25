@@ -424,76 +424,14 @@ internal sealed class TerminalUploadStore : IDisposable
     private static bool TryUploadId(string value, out Guid uploadId) =>
         Guid.TryParse(value, out uploadId);
 
-    private static bool ContainedBy(string root, string path)
-    {
-        string prefix = Path.GetFullPath(root)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            + Path.DirectorySeparatorChar;
-        return Path.GetFullPath(path).StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
-    }
+    private static bool ContainedBy(string root, string path) =>
+        SafeTempFiles.ContainedBy(root, path);
 
-    private static string SanitizeFileName(string original)
-    {
-        string leaf = original.Replace('\\', '/');
-        leaf = leaf[(leaf.LastIndexOf('/') + 1)..];
+    private static string SanitizeFileName(string original) =>
+        SafeTempFiles.SanitizeFileName(original);
 
-        char[] invalid = Path.GetInvalidFileNameChars();
-        char[] sanitized =
-        [
-            .. leaf.Select(character =>
-                char.IsControl(character) ||
-                character == ':' ||
-                character is '%' or '!' ||
-                invalid.Contains(character)
-                    ? '_'
-                    : character),
-        ];
-
-        string result = new string(sanitized).Trim().TrimEnd('.');
-        if (result.Length == 0 || result is "." or "..")
-        {
-            result = "attachment";
-        }
-
-        if (result.Length > 180)
-        {
-            string extension = Path.GetExtension(result);
-            int stemLength = Math.Max(1, 180 - extension.Length);
-            result = result[..stemLength] + extension;
-        }
-
-        string stem = Path.GetFileNameWithoutExtension(result);
-        if (WindowsDeviceNames.Contains(stem))
-        {
-            result = "_" + result;
-        }
-
-        return result;
-    }
-
-    private static string ContainedPath(string root, string child)
-    {
-        string fullRoot = Path.GetFullPath(root);
-        string fullPath = Path.GetFullPath(Path.Combine(fullRoot, child));
-        string prefix = fullRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            + Path.DirectorySeparatorChar;
-
-        if (!fullPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException("A terminal upload path escaped its temporary root.");
-        }
-
-        return fullPath;
-    }
-
-    private static readonly HashSet<string> WindowsDeviceNames =
-        new(
-            [
-                "CON", "PRN", "AUX", "NUL",
-                "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-                "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-            ],
-            StringComparer.OrdinalIgnoreCase);
+    private static string ContainedPath(string root, string child) =>
+        SafeTempFiles.ContainedPath(root, child);
 
     private sealed class ActiveUpload(
         string uploadId,

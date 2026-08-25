@@ -137,11 +137,28 @@ public sealed class AuthorizationTests : IAsyncLifetime
         // A method may also delegate, which several of the client methods do. That is
         // fine only if the helper resolves too — so the helpers are checked by the same
         // rule rather than trusted, and adding one that does not resolve fails here.
-        string[] helpers = ["ForwardAsync", "InvokeTerminalUploadAsync"];
+        //
+        // A helper may itself delegate to another helper on this list, which is what
+        // the terminal-upload and chat-attachment families do: both are the same
+        // request/result call with a different reply shape, so the resolution lives
+        // once in InvokeKindedAsync rather than being copied per family.
+        string[] helpers =
+        [
+            "ForwardAsync",
+            "InvokeTerminalUploadAsync",
+            "InvokeChatAttachmentAsync",
+            "InvokeKindedAsync",
+        ];
 
         foreach (string helper in helpers)
         {
-            Assert.Contains("Context.ConnectionId", Body(source, helper), StringComparison.Ordinal);
+            string body = Body(source, helper);
+
+            Assert.True(
+                body.Contains("Context.ConnectionId", StringComparison.Ordinal)
+                || helpers.Any(other =>
+                    other != helper && body.Contains(other + "(", StringComparison.Ordinal)),
+                $"{helper} neither resolves the caller's identity nor delegates to a helper that does.");
         }
 
         foreach (MethodInfo method in Surface())

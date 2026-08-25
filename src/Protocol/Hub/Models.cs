@@ -288,6 +288,37 @@ public sealed class SessionInfo
     /// </summary>
     [Key(13)]
     public string? ProjectId { get; set; }
+
+    /// <summary>
+    /// What the ACP agent behind an <see cref="SessionKind.AgentChat"/> session said
+    /// it can be sent, negotiated once per ACP process.
+    /// <para>
+    /// Null on every terminal session, and on any chat session relayed by an agent
+    /// that predates protocol version 6 — which is exactly what an older peer's
+    /// decoder produces when it stops reading before this field. Null therefore has
+    /// to mean "no attachment support", never "unknown, try it and see": a composer
+    /// that offers a picker the agent cannot honour would fail after the user has
+    /// already chosen a photo.
+    /// </para>
+    /// </summary>
+    [Key(14)]
+    public ChatCapabilities? ChatCapabilities { get; set; }
+}
+
+/// <summary>
+/// The subset of ACP <c>promptCapabilities</c> the phone needs in order to decide
+/// what its composer may offer. Both flags are strict: absent means false.
+/// </summary>
+[MessagePackObject]
+public sealed class ChatCapabilities
+{
+    /// <summary>The agent accepts ACP <c>image</c> content blocks in a prompt.</summary>
+    [Key(0)]
+    public bool Image { get; set; }
+
+    /// <summary>The agent accepts ACP embedded <c>resource</c> content blocks in a prompt.</summary>
+    [Key(1)]
+    public bool EmbeddedContext { get; set; }
 }
 
 /// <summary>

@@ -16,7 +16,6 @@ public sealed class AcpProvider : IAsyncDisposable
     private const int MaximumSessions = 100;
     private const int MaximumTranscriptUriChars = 2048;
     private static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan RecentWindow = TimeSpan.FromDays(14);
 
     private readonly ConcurrentDictionary<string, AcpSession> _sessions = new(StringComparer.Ordinal);
@@ -159,8 +158,12 @@ public sealed class AcpProvider : IAsyncDisposable
             return;
         }
 
+        var backoff = new AcpDiscoveryBackoff();
+
         while (!cancellationToken.IsCancellationRequested)
         {
+            TimeSpan retryDelay = AcpDiscoveryBackoff.MinimumDelay;
+
             try
             {
                 _client = await AcpClient.StartAsync(
@@ -178,6 +181,15 @@ public sealed class AcpProvider : IAsyncDisposable
                 while (!cancellationToken.IsCancellationRequested)
                 {
                     await RefreshAsync(cancellationToken).ConfigureAwait(false);
+
+                    int recoveredFailures = backoff.Recovered();
+                    if (recoveredFailures > 0)
+                    {
+                        _log?.Invoke(
+                            $"chat: {_settings.DisplayName} ACP is available again after " +
+                            $"{recoveredFailures:N0} failed {(recoveredFailures == 1 ? "attempt" : "attempts")}.");
+                    }
+
                     await _refreshRequested.WaitAsync(RefreshInterval, cancellationToken)
                         .ConfigureAwait(false);
                 }
@@ -188,7 +200,18 @@ public sealed class AcpProvider : IAsyncDisposable
             }
             catch (Exception ex)
             {
-                _log?.Invoke($"chat: {_settings.DisplayName} ACP is unavailable ({ex.Message}); retrying.");
+                AcpDiscoveryFailure failure = backoff.Failed(ex);
+                retryDelay = failure.Delay;
+
+                if (failure.ShouldLog)
+                {
+                    string state = failure.FailureCount == 1
+                        ? "is unavailable"
+                        : $"is still unavailable after {failure.FailureCount:N0} failed attempts";
+                    _log?.Invoke(
+                        $"chat: {_settings.DisplayName} ACP {state} ({ex.Message}); " +
+                        $"retrying in {failure.Delay.TotalSeconds:N0} seconds.");
+                }
             }
             finally
             {
@@ -217,7 +240,7 @@ public sealed class AcpProvider : IAsyncDisposable
 
             try
             {
-                await Task.Delay(RetryInterval, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(retryDelay, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {

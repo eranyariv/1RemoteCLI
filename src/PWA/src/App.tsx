@@ -15,6 +15,7 @@ import { ProjectEditor } from './ui/ProjectEditor'
 import { ProjectDetails } from './ui/ProjectDetails'
 import { ProjectTiles } from './ui/ProjectTiles'
 import { SignInScreen } from './ui/SignInScreen'
+import { VoiceMode } from './ui/VoiceMode'
 
 /**
  * The terminal — xterm and its addons — is over half the bundle and is not needed
@@ -326,6 +327,17 @@ export default function App() {
           onClose={() => setEditorState(null)}
         />
       ) : null}
+
+      <VoiceMode
+        client={relay.client}
+        relayStatus={relay.status}
+        projects={relay.projects}
+        machines={relay.machines}
+        selectedProjectId={selectedProjectId}
+        onSelectProject={setSelectedProjectId}
+        onOpenSession={openSession}
+        onCloseSession={closeSession}
+      />
     </div>
   )
 }

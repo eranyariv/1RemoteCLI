@@ -37,7 +37,7 @@ Then open the app on your phone and tap the session. Full walkthrough: **[docs/g
 | [Using it from your phone](docs/phone-setup.md) | Home screen, notifications, driving a session |
 | [Troubleshooting](docs/troubleshooting.md) | When it does not work |
 | [Security](docs/security.md) | **Read before pointing it at a machine that matters** |
-| [Deployment](docs/deployment.md) · [Azure setup](docs/azure-setup.md) | Running the service |
+| [Deployment](docs/deployment.md) · [Azure setup](docs/azure-setup.md) · [Voice mode](specs/voice-mode-deployment.md) | Running the service |
 | [Design spec](specs/1RemoteCLI-design-spec.md) | How and why it works the way it does |
 
 ## How it works

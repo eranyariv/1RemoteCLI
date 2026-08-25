@@ -13,6 +13,11 @@ The account, tenant, and subscription identifiers are not kept in this repositor
 | --- | --- |
 | Region | `israelcentral` |
 
+Voice mode adds an Azure AI Speech resource in a Speech-supported region and a
+server-side short-lived-token exchange. Its resource, configuration, quotas,
+costs, and mobile constraints are specified in
+[Voice mode deployment](../specs/voice-mode-deployment.md).
+
 Azure requires MFA for resource management. If a command fails with `RequestDisallowedByAzure` and mentions MFA, re-authenticate with the challenge `az` prints:
 
 ```powershell

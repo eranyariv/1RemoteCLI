@@ -1,14 +1,17 @@
 using System.Security.Claims;
 using Lib.Net.Http.WebPush;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.Extensions.Options;
+using System.Threading.RateLimiting;
 using OneRemoteCli.Hub.Auth;
 using OneRemoteCli.Hub.Ops;
 using OneRemoteCli.Hub.Projects;
 using OneRemoteCli.Hub.Push;
 using OneRemoteCli.Hub.Relay;
+using OneRemoteCli.Hub.Speech;
 using OneRemoteCli.Protocol;
 using OneRemoteCli.Protocol.Hub;
 
@@ -30,6 +33,32 @@ if (args.Contains("--generate-vapid", StringComparer.Ordinal))
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddEntraAuthentication(builder.Configuration);
+
+// Azure AI Speech for voice mode (issue #168). The browser receives only a
+// short-lived Speech token; the resource key stays in App Service configuration or
+// behind a Key Vault reference. Token grants are rate-limited per signed-in identity
+// because they are the point where a user gains access to the metered Azure resource.
+builder.Services.Configure<AzureSpeechOptions>(
+    builder.Configuration.GetSection(AzureSpeechOptions.Section));
+builder.Services.AddHttpClient(AzureSpeechTokenBroker.HttpClientName, client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(10);
+}).RemoveAllLoggers();
+builder.Services.AddSingleton<ISpeechTokenBroker, AzureSpeechTokenBroker>();
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("voice-token", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            UserKey.From(context.User) ?? "anonymous",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 12,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true,
+            }));
+});
 
 // The routing registry is a singleton because it *is* the hub's state. This is the
 // load-bearing single-instance assumption of spec §4.6: an agent connected to one
@@ -166,6 +195,7 @@ app.UseStaticFiles(new StaticFileOptions
 
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 
 // Deployed behind App Service, which terminates TLS and forwards over plain HTTP,
 // so the app itself does no HTTPS redirection.
@@ -193,6 +223,56 @@ app.MapGet("/push/vapid", (IOptions<VapidOptions> options) =>
 app.MapGet("/whoami", [Authorize] (ClaimsPrincipal user) => Results.Ok(new WhoAmIResponse(
     UserKey: UserKey.From(user),
     Username: UserKey.PreferredUsername(user))));
+
+// Voice diagnostics contain configuration names and safe public choices, never the
+// resource key or a usable token. Authentication keeps even deployment topology on
+// the same surface as the rest of the signed-in app.
+app.MapGet("/api/voice/health", [Authorize] (IOptions<AzureSpeechOptions> configured) =>
+{
+    AzureSpeechOptions speech = configured.Value;
+    return Results.Ok(new VoiceHealthResponse(
+        Status: speech.Configured ? "ready" : "not_configured",
+        Provider: "Azure AI Speech",
+        Region: speech.Configured ? speech.Region : null,
+        RecognitionLanguage: speech.RecognitionLanguage,
+        VoiceName: speech.VoiceName,
+        MaxUtteranceSeconds: 30,
+        MaxRecognizedTextCharacters: 4000,
+        MaxSpokenTextCharacters: 2000));
+});
+
+app.MapPost("/api/voice/token", [Authorize] async (
+    HttpContext context,
+    ISpeechTokenBroker tokens,
+    CancellationToken cancellationToken) =>
+{
+    if (UserKey.From(context.User) is null)
+    {
+        return Results.Unauthorized();
+    }
+
+    try
+    {
+        SpeechTokenGrant grant = await tokens.GetAsync(cancellationToken);
+        context.Response.Headers.CacheControl = "no-store";
+        context.Response.Headers.Pragma = "no-cache";
+        return Results.Ok(grant);
+    }
+    catch (InvalidOperationException error)
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status503ServiceUnavailable,
+            title: "Voice service is not configured",
+            detail: error.Message);
+    }
+    catch (SpeechProviderException error)
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status502BadGateway,
+            title: "Voice provider is unavailable",
+            detail: error.Message);
+    }
+}).RequireRateLimiting("voice-token");
 
 // Project icons (issue #110). Deliberately plain, authenticated HTTP next to the
 // SignalR hub rather than messages on it: an upload is a binary blob up to
@@ -347,6 +427,13 @@ if (!app.Services.GetRequiredService<IOptions<OperatorChannelOptions>>().Value.C
         OperatorChannelOptions.Section);
 }
 
+if (!app.Services.GetRequiredService<IOptions<AzureSpeechOptions>>().Value.Configured)
+{
+    app.Logger.LogInformation(
+        "Voice mode is off: Azure Speech is not configured under '{Section}'.",
+        AzureSpeechOptions.Section);
+}
+
 // Replays the allowlist amendments made by /allow and /deny before the first request
 // is served, so a restart does not silently undo an admission the operator made from
 // their phone. Also announces the restart itself.
@@ -400,6 +487,16 @@ internal sealed record HealthResponse(string Status, string Version, DateTimeOff
 internal sealed record WhoAmIResponse(string? UserKey, string? Username);
 
 internal sealed record ProjectIconResponse(int IconVersion);
+
+internal sealed record VoiceHealthResponse(
+    string Status,
+    string Provider,
+    string? Region,
+    string RecognitionLanguage,
+    string VoiceName,
+    int MaxUtteranceSeconds,
+    int MaxRecognizedTextCharacters,
+    int MaxSpokenTextCharacters);
 
 /// <summary>Exposed so tests can host this exact application.</summary>
 public partial class Program;

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using OneRemoteCli.Protocol.Hub;
 
 namespace OneRemoteCli.Daemon.Agent;
 
@@ -8,6 +9,9 @@ internal sealed record AgentPreferences
     public bool HideArchivedSessions { get; init; } = true;
 
     public bool AutomaticUpdates { get; init; } = true;
+
+    public NotificationLevel PhoneNotificationLevel { get; init; } =
+        NotificationLevel.AllAttentionEvents;
 
     public static AgentPreferences Default => new();
 }
@@ -56,6 +60,9 @@ internal sealed partial class AgentPreferencesStore(
                 AutomaticUpdates =
                     ReadBoolean(document.RootElement, "automaticUpdates")
                     ?? defaults.AutomaticUpdates,
+                PhoneNotificationLevel =
+                    ReadNotificationLevel(document.RootElement, "phoneNotificationLevel")
+                    ?? defaults.PhoneNotificationLevel,
             };
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
@@ -85,9 +92,43 @@ internal sealed partial class AgentPreferencesStore(
         return null;
     }
 
+    private static NotificationLevel? ReadNotificationLevel(JsonElement root, string name)
+    {
+        foreach (JsonProperty property in root.EnumerateObject())
+        {
+            if (!string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            NotificationLevel level = default;
+            bool parsed = property.Value.ValueKind switch
+            {
+                JsonValueKind.String => Enum.TryParse(
+                    property.Value.GetString(),
+                    ignoreCase: true,
+                    out level),
+                JsonValueKind.Number => property.Value.TryGetByte(out byte value)
+                    && Enum.IsDefined(level = (NotificationLevel)value),
+                _ => false,
+            };
+
+            return parsed && Enum.IsDefined(level)
+                ? level
+                : throw new JsonException($"Agent preference '{name}' is not a notification level.");
+        }
+
+        return null;
+    }
+
     public string? Save(AgentPreferences preferences)
     {
         ArgumentNullException.ThrowIfNull(preferences);
+
+        if (!Enum.IsDefined(preferences.PhoneNotificationLevel))
+        {
+            return "The phone notification level is invalid.";
+        }
 
         try
         {

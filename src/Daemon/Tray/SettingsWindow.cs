@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using OneRemoteCli.Daemon.Update;
+using OneRemoteCli.Protocol.Hub;
 using static OneRemoteCli.Daemon.Tray.NativeMethods;
 
 namespace OneRemoteCli.Daemon.Tray;
@@ -62,7 +63,9 @@ public sealed record SettingsActions(
     Func<bool>? ReadHideArchivedSessions = null,
     Func<bool, string?>? WriteHideArchivedSessions = null,
     Func<bool>? ReadAutomaticUpdates = null,
-    Func<bool, string?>? WriteAutomaticUpdates = null);
+    Func<bool, string?>? WriteAutomaticUpdates = null,
+    Func<NotificationLevel>? ReadNotificationLevel = null,
+    Func<NotificationLevel, string?>? WriteNotificationLevel = null);
 
 /// <summary>
 /// The agent's settings window.
@@ -98,6 +101,9 @@ internal sealed class SettingsWindow
     private const int IdSessionsTab = 110;
     private const int IdSettingsTab = 111;
     private const int IdAutomaticUpdates = 112;
+    private const int IdNotificationsOff = 113;
+    private const int IdNotificationsActionRequired = 114;
+    private const int IdNotificationsAllAttentionEvents = 115;
 
     private const int Style =
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX |
@@ -180,6 +186,10 @@ internal sealed class SettingsWindow
     private IntPtr _startAtLogon;
     private IntPtr _hideArchivedSessions;
     private IntPtr _automaticUpdates;
+    private IntPtr _phoneNotificationsLabel;
+    private IntPtr _notificationsOff;
+    private IntPtr _notificationsActionRequired;
+    private IntPtr _notificationsAllAttentionEvents;
     private IntPtr _versionLabel;
     private IntPtr _changeHistory;
     private IntPtr _updateLabel;
@@ -664,6 +674,51 @@ internal sealed class SettingsWindow
             _automaticUpdates,
             _actions.ReadAutomaticUpdates is not null &&
             _actions.WriteAutomaticUpdates is not null);
+        _phoneNotificationsLabel = PageControl(
+            _settingsControls,
+            Static(instance, 0, 0, 100, RowHeight, SettingsPresenter.PhoneNotificationsLabel));
+        _notificationsOff = PageControl(
+            _settingsControls,
+            Create(
+                instance,
+                "BUTTON",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_AUTORADIOBUTTON,
+                0,
+                0,
+                100,
+                RowHeight + 4,
+                IdNotificationsOff,
+                SettingsPresenter.NotificationsOffLabel));
+        _notificationsActionRequired = PageControl(
+            _settingsControls,
+            Create(
+                instance,
+                "BUTTON",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
+                0,
+                0,
+                100,
+                RowHeight + 4,
+                IdNotificationsActionRequired,
+                SettingsPresenter.NotificationsActionRequiredLabel));
+        _notificationsAllAttentionEvents = PageControl(
+            _settingsControls,
+            Create(
+                instance,
+                "BUTTON",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
+                0,
+                0,
+                100,
+                RowHeight + 4,
+                IdNotificationsAllAttentionEvents,
+                SettingsPresenter.NotificationsAllAttentionEventsLabel));
+        bool canSetNotifications =
+            _actions.ReadNotificationLevel is not null &&
+            _actions.WriteNotificationLevel is not null;
+        EnableWindow(_notificationsOff, canSetNotifications);
+        EnableWindow(_notificationsActionRequired, canSetNotifications);
+        EnableWindow(_notificationsAllAttentionEvents, canSetNotifications);
 
         _close = Button(
             instance,
@@ -827,6 +882,17 @@ internal sealed class SettingsWindow
             pageX,
             pageY + ((RowHeight + Tight) * 2),
             pageWidth,
+            RowHeight + 4);
+        int notificationsY = pageY + ((RowHeight + Tight) * 3) + Tight;
+        Move(_phoneNotificationsLabel, pageX, notificationsY, pageWidth, RowHeight);
+        notificationsY += RowHeight + Tight;
+        Move(_notificationsOff, pageX, notificationsY, 72, RowHeight + 4);
+        Move(_notificationsActionRequired, pageX + 88, notificationsY, 140, RowHeight + 4);
+        Move(
+            _notificationsAllAttentionEvents,
+            pageX + 244,
+            notificationsY,
+            pageWidth - 244,
             RowHeight + 4);
     }
 
@@ -1103,6 +1169,11 @@ internal sealed class SettingsWindow
         if (_actions.ReadAutomaticUpdates is not null)
         {
             Check(_automaticUpdates, Ask(_actions.ReadAutomaticUpdates));
+        }
+
+        if (_actions.ReadNotificationLevel is not null)
+        {
+            SelectNotificationLevel(_actions.ReadNotificationLevel());
         }
     }
 
@@ -1433,6 +1504,18 @@ internal sealed class SettingsWindow
                 OnAutomaticUpdatesToggled();
                 break;
 
+            case IdNotificationsOff:
+                OnNotificationLevelSelected(NotificationLevel.Off);
+                break;
+
+            case IdNotificationsActionRequired:
+                OnNotificationLevelSelected(NotificationLevel.ActionRequired);
+                break;
+
+            case IdNotificationsAllAttentionEvents:
+                OnNotificationLevelSelected(NotificationLevel.AllAttentionEvents);
+                break;
+
             case IdStatusTab:
                 ShowPage(SettingsPage.Status);
                 break;
@@ -1566,6 +1649,41 @@ internal sealed class SettingsWindow
         {
             Say(new SettingsNotice(problem, NoticeKind.Problem));
         }
+    }
+
+    private void OnNotificationLevelSelected(NotificationLevel wanted)
+    {
+        if (_actions.ReadNotificationLevel is null ||
+            _actions.WriteNotificationLevel is null)
+        {
+            return;
+        }
+
+        string? problem;
+
+        try
+        {
+            problem = _actions.WriteNotificationLevel(wanted);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            problem = ex.Message;
+        }
+
+        SelectNotificationLevel(_actions.ReadNotificationLevel());
+
+        if (problem is not null)
+        {
+            Say(new SettingsNotice(problem, NoticeKind.Problem));
+        }
+    }
+
+    private void SelectNotificationLevel(NotificationLevel level)
+    {
+        PhoneNotificationView view = SettingsPresenter.PhoneNotifications(level);
+        Check(_notificationsOff, view.Off);
+        Check(_notificationsActionRequired, view.ActionRequired);
+        Check(_notificationsAllAttentionEvents, view.AllAttentionEvents);
     }
 
     private void OnWrapShortcut()

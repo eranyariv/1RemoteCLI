@@ -278,7 +278,7 @@ The count is independent of the connection state and is shown in all three: sess
 
 The tooltip is the whole diagnostic surface for someone whose phone has stopped seeing a machine, so it leads with the state and the machine name and is truncated to the 127 characters Windows will show — beyond that Windows drops the tooltip entirely rather than truncating it.
 
-Menu: the account line, *Settings…* (the default action), *Open the web app*, *Update to x.yy* when there is one, *Quit*. A single left click, keyboard activation, and right click all open this same menu; with notification-area version 4 behavior the first two arrive as `NIN_SELECT` and `NIN_KEYSELECT`, not raw mouse messages. Deliberately short — everything else lives in the settings window, so there is only ever one place that answers "am I signed in".
+Menu: the account line, *Settings…* (the default action), *Open the web app*, *Update to x.yy* when there is one, *Quit*. A single left click, keyboard activation, and right click all open this same menu; with notification-area version 4 behavior the first two arrive as `NIN_SELECT` and `NIN_KEYSELECT`, not raw mouse messages. A double left click opens or focuses Settings. The single-left-click menu is delayed by Windows' configured double-click interval and cancelled when the double click arrives; opening it immediately would block the tray thread in `TrackPopupMenuEx` before the shell could deliver the second click. Keyboard and right-click menus remain immediate. Deliberately short — everything else lives in the settings window, so there is only ever one place that answers "am I signed in".
 
 The native hover tooltip is capped by Windows at 127 characters and does not support rich text or per-line bold styling. Its first line therefore identifies `1RemoteCLI Agent` and the current `x.yy` version in plain text, followed by connection/machine and session/action details. Product and state come before arbitrary machine text so truncation cannot remove the facts needed to diagnose the icon.
 
@@ -286,7 +286,7 @@ The icon runs its own STA thread with its own message pump. The agent's main thr
 
 **Settings window.** A raw Win32 dialog created on the tray thread — no Windows Forms and no WPF, because the Windows Desktop runtime pack was removed from the build and adding it back doubles the download for one dialog. Controls are `CreateWindowExW` children of a registered window class, laid out at fixed offsets scaled by `GetDpiForWindow`, and given a `CreateFontW` "Segoe UI" via `WM_SETFONT` — without which every control draws in the 1990s bitmap system font.
 
-It shows the signed-in account and hub connection in words; live sessions with their program, age and whether each is waiting for input; settings for starting at sign-in, session visibility, and automatic updates; *Wrap a desktop shortcut…*; the version with *Open logs* and *Send feedback…*; and, only when there is something to say about it, a line about updates with an *Update now* button.
+It shows the signed-in account and hub connection in words; live sessions with their program, age and whether each is waiting for input; settings for starting at sign-in, session visibility, automatic updates, and the phone-notification level for this machine; *Wrap a desktop shortcut…*; the version with *Open logs* and *Send feedback…*; and, only when there is something to say about it, a line about updates with an *Update now* button.
 
 The update row is laid out **below** the version line and hidden by default, so appearing and disappearing costs a window resize rather than a `MoveWindow` on every control beneath it. The window is silent about updates until there is something to say: a permanent "no updates available" is one more line to read in a window somebody opened because something else was wrong.
 
@@ -493,7 +493,8 @@ ASP.NET Core 8 with self-hosted SignalR on a **single instance** of App Service 
 **Registry.**
 
 ```
-UserKey ─┬─ Machines: machineId → { connectionId, displayName, os, lastSeen }
+UserKey ─┬─ Machines: machineId → { connectionId, displayName, os, lastSeen,
+         │                          notificationLevel }
          │                          └─ Sessions: sessionId → { program, args, cwd,
          │                                                     cols, rows, startedAt }
          └─ Clients:  connectionId → { attachedTo: (machineId, sessionId)? }
@@ -626,7 +627,8 @@ Length-prefixed MessagePack frames over the named pipe.
     "displayName": "Primary Dev Workstation",
     "os": "Microsoft Windows 11 Pro 10.0.26100",
     "agentVersion": "1.0.0",
-    "protocolVersion": 2
+    "protocolVersion": 5,
+    "notificationLevel": "AllAttentionEvents"
   }]
 }
 ```
@@ -658,7 +660,7 @@ Length-prefixed MessagePack frames over the named pipe.
 
 `kind` is `"delta"` or `"snapshot"`; a snapshot resets the client's terminal before it is applied.
 
-Also: `SessionClosed { sessionId, exitCode }`, `SessionUpdated { session }`, `SessionAwaitingInput { sessionId, hint }`, `SessionAttention { sessionId, awaitingInput, hint }`, `ChatTranscript { sessionId, seq, kind, events[], targetConnectionId? }`, `RefreshToken { token }`.
+Also: `SetMachineNotificationLevel { notificationLevel }`, `SessionClosed { sessionId, exitCode }`, `SessionUpdated { session }`, `SessionAwaitingInput { sessionId, hint }`, `SessionAttention { sessionId, awaitingInput, hint }`, `ChatTranscript { sessionId, seq, kind, events[], targetConnectionId? }`, `RefreshToken { token }`.
 
 `SessionUpdated` is deliberately not a second `SessionOpened`, even though the registry's add is an upsert and would store the right thing. An open is counted in the usage figures, and being told twice what a session is should not look like having started it twice.
 
@@ -716,6 +718,8 @@ Version 2 added `cliType` and its two messages. The minimum supported version st
 
 Version 3 adds `SessionInfo.kind = Terminal | AgentChat`, typed transcript and explicit attention notifications, the chat message and permission-response methods, and projects. `kind` is appended at key 12 and `projectId` at key 13. An older client therefore treats every session as a terminal in General, while a newer client defaults a missing or unknown kind to `Terminal` and a missing project to General. Version 3 peers are required for chat and project methods themselves, but the minimum supported version remains 1 because the wire changes are additive. The wire fixture contains all transcript event shapes, project messages and client requests so the browser's hand-written positional decoder stays pinned to the C# serializer.
 
+Version 4 adds bounded, chunked terminal file uploads. Version 5 appends `notificationLevel` to `RegisterMachine` and adds `SetMachineNotificationLevel`, so a connected agent can apply a Settings change without reconnecting. `AllAttentionEvents` is numeric value zero: a version 4 registration that ends before the appended field therefore retains the historical behavior. The hub continues accepting protocol versions 1 through 5 because each version remains additive.
+
 ---
 
 ## 6. Notifications
@@ -754,6 +758,8 @@ Web Push with VAPID, via `Lib.Net.Http.WebPush`. Hand-rolling RFC 8291's ECDH an
 **Who gets woken.** The PWA subscribes through the service worker and offers the subscription to the hub with `RegisterPush`, which stores it against `UserKey` — never against the connection, since a phone gets a new connection every time it wakes. Subscriptions are keyed by endpoint within the user, because the endpoint is the browser's own identity for the subscription and re-registering must replace rather than accumulate; keyed any other way, an overnight phone would end up buzzing once per reconnect.
 
 **When.** On terminal `SessionAwaitingInput`, structured-chat `SessionAttention(awaitingInput = true)`, and `SessionClosed`, and in every case only when that user has **no client attached to that session**. A chat permission uses the provider's explicit title rather than the terminal prompt heuristic. Buzzing about the session already open in the user's hand is how a person learns to ignore notifications, which costs the ones that matter. The attached-client count is read inside the same lock as the routing decision — a second query could see a different answer if somebody attached in the gap — and so `SessionAddress` carries it out of the registry alongside the machine and session names.
+
+**Per-machine level.** The agent Settings tab offers three radio choices. *All attention events* is the default and preserves the behavior above. *Action required* sends waiting-for-input and structured permission pushes but suppresses completion/failure pushes. *Off* suppresses every Web Push originating from that machine. This preference filters only queued Web Push: live `SessionAwaitingInput`/`SessionAttention` fan-out and the session's stored attention state are unchanged, so an open PWA remains accurate at every level. The choice is stored in the agent's local preferences, included in every registration, updated live through the authenticated agent connection, and held separately on each machine record; changing one computer cannot silence another.
 
 **Naming.** A session is named by its own display name if the agent gave it one, otherwise by its program. Never by its session id: "claude is waiting" is the whole message, where the id would mean nothing to somebody reading a lock screen.
 

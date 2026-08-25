@@ -79,6 +79,11 @@ public readonly record struct SettingsView(
     bool CanUpdate = false,
     bool CanCheckForUpdates = true);
 
+public readonly record struct PhoneNotificationView(
+    bool Off,
+    bool ActionRequired,
+    bool AllAttentionEvents);
+
 /// <summary>
 /// What the settings window says.
 /// <para>
@@ -111,6 +116,20 @@ public static class SettingsPresenter
     public const string HideArchivedSessionsLabel = "Show only sessions visible in GitHub Copilot";
 
     public const string AutomaticUpdatesLabel = "Automatically update 1RemoteCLI";
+
+    public const string PhoneNotificationsLabel = "Phone notifications from this machine";
+
+    public const string NotificationsOffLabel = "Off";
+
+    public const string NotificationsActionRequiredLabel = "Action required";
+
+    public const string NotificationsAllAttentionEventsLabel = "All attention events";
+
+    public static PhoneNotificationView PhoneNotifications(NotificationLevel level) =>
+        new(
+            Off: level == NotificationLevel.Off,
+            ActionRequired: level == NotificationLevel.ActionRequired,
+            AllAttentionEvents: level == NotificationLevel.AllAttentionEvents);
 
     public const string WrapShortcutLabel = "Wrap a desktop shortcut\u2026";
 

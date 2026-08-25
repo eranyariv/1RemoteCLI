@@ -53,10 +53,44 @@ public class HubContractTests
             Os = "Microsoft Windows 11 Pro 10.0.26100",
             AgentVersion = "1.0.0",
             ProtocolVersion = ProtocolVersion.Current,
+            NotificationLevel = NotificationLevel.ActionRequired,
         });
 
         Assert.Equal(ProtocolVersion.Current, received.ProtocolVersion);
+        Assert.Equal(NotificationLevel.ActionRequired, received.NotificationLevel);
         Assert.True(ProtocolVersion.IsSupported(received.ProtocolVersion));
+    }
+
+    [Fact]
+    public void MachineNotificationLevelSurvivesTheRoundTrip()
+    {
+        SetMachineNotificationLevelRequest received = RoundTrip(
+            new SetMachineNotificationLevelRequest
+            {
+                NotificationLevel = NotificationLevel.Off,
+            });
+
+        Assert.Equal(NotificationLevel.Off, received.NotificationLevel);
+    }
+
+    [Fact]
+    public void VersionFourRegistrationDefaultsToAllAttentionEvents()
+    {
+        byte[] bytes = MessagePackSerializer.Serialize(
+            new VersionFourRegisterMachineRequest
+            {
+                MachineId = "machine",
+                DisplayName = "Machine",
+                Os = "Windows",
+                AgentVersion = "0.36",
+                ProtocolVersion = 4,
+            },
+            Options);
+
+        RegisterMachineRequest received =
+            MessagePackSerializer.Deserialize<RegisterMachineRequest>(bytes, Options);
+
+        Assert.Equal(NotificationLevel.AllAttentionEvents, received.NotificationLevel);
     }
 
     [Fact]
@@ -163,4 +197,23 @@ public class HubContractTests
 
     private static T RoundTrip<T>(T value) =>
         MessagePackSerializer.Deserialize<T>(MessagePackSerializer.Serialize(value, Options), Options);
+
+    [MessagePackObject]
+    public sealed class VersionFourRegisterMachineRequest
+    {
+        [Key(0)]
+        public string MachineId { get; set; } = string.Empty;
+
+        [Key(1)]
+        public string DisplayName { get; set; } = string.Empty;
+
+        [Key(2)]
+        public string Os { get; set; } = string.Empty;
+
+        [Key(3)]
+        public string AgentVersion { get; set; } = string.Empty;
+
+        [Key(4)]
+        public int ProtocolVersion { get; set; }
+    }
 }

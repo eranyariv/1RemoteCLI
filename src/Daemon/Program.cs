@@ -544,6 +544,9 @@ public static class Program
         var broker = new TokenBroker();
         var sessions = new SessionRegistry(logger: loggers.CreateLogger("TerminalUploads"));
         Uri hubUri = HubEndpoint.Resolve();
+        var preferenceStore = new AgentPreferencesStore(
+            log: settingsLogger.Update);
+        AgentPreferences preferences = preferenceStore.Load();
 
         await using var hub = new AgentHubClient(
             hubUri,
@@ -568,11 +571,8 @@ public static class Program
                     return null;
                 }
             },
-            loggers.CreateLogger("Hub"));
-
-        var preferenceStore = new AgentPreferencesStore(
-            log: settingsLogger.Update);
-        AgentPreferences preferences = preferenceStore.Load();
+            loggers.CreateLogger("Hub"),
+            notificationLevel: preferences.PhoneNotificationLevel);
 
         await using var chats = new AcpProvider(
             loggers.CreateLogger("Chat").Update,
@@ -853,6 +853,18 @@ public static class Program
                 if (problem is null)
                 {
                     updates.SetAutomaticUpdatesEnabled(wanted);
+                }
+
+                return problem;
+            },
+            ReadNotificationLevel: () => hub.NotificationLevel,
+            WriteNotificationLevel: wanted =>
+            {
+                string? problem = SavePreferences(
+                    currentPreferences with { PhoneNotificationLevel = wanted });
+                if (problem is null)
+                {
+                    hub.SetNotificationLevel(wanted);
                 }
 
                 return problem;

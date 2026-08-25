@@ -125,9 +125,13 @@ public sealed class RelayHub(
     /// <summary>An agent announces its machine. Also the agent's protocol handshake.</summary>
     public async Task<ErrorNotification?> RegisterMachine(RegisterMachineRequest request)
     {
-        if (request is null || string.IsNullOrWhiteSpace(request.MachineId))
+        if (request is null ||
+            string.IsNullOrWhiteSpace(request.MachineId) ||
+            !Enum.IsDefined(request.NotificationLevel))
         {
-            return Error(ErrorCodes.InvalidRequest, "RegisterMachine needs a machine id.");
+            return Error(
+                ErrorCodes.InvalidRequest,
+                "RegisterMachine needs a machine id and valid notification level.");
         }
 
         if (!ProtocolVersion.IsSupported(request.ProtocolVersion))
@@ -152,6 +156,22 @@ public sealed class RelayHub(
             new MachineOnlineNotification { Machine = machine });
 
         return null;
+    }
+
+    /// <summary>Applies a machine-scoped phone-notification preference without reconnecting.</summary>
+    public Task<ErrorNotification?> SetMachineNotificationLevel(
+        SetMachineNotificationLevelRequest request)
+    {
+        if (request is null || !Enum.IsDefined(request.NotificationLevel))
+        {
+            return Task.FromResult<ErrorNotification?>(
+                Error(ErrorCodes.InvalidRequest, "SetMachineNotificationLevel needs a valid level."));
+        }
+
+        return Task.FromResult(
+            _registry.SetNotificationLevel(Context.ConnectionId, request.NotificationLevel)
+                ? null
+                : Error(ErrorCodes.MachineNotFound, "Register the machine first."));
     }
 
     /// <summary>An agent reports a new session on its machine.</summary>
@@ -258,7 +278,8 @@ public sealed class RelayHub(
 
         // Not pushed to someone who was watching it end. They saw the exit code on the
         // screen a moment ago; a lock-screen copy of it is pure noise.
-        if (address.AttachedClients == 0)
+        if (address.AttachedClients == 0 &&
+            address.NotificationLevel == NotificationLevel.AllAttentionEvents)
         {
             _push.Enqueue(
                 address.UserKey,
@@ -382,7 +403,8 @@ public sealed class RelayHub(
         // The push, however, is only for a phone that is *not* looking. Notifying
         // someone about a prompt already on their screen is how a user learns that
         // these notifications do not mean anything.
-        if (address.AttachedClients == 0)
+        if (address.AttachedClients == 0 &&
+            address.NotificationLevel != NotificationLevel.Off)
         {
             _push.Enqueue(
                 address.UserKey,
@@ -424,7 +446,9 @@ public sealed class RelayHub(
                 Hint = notification.Hint,
             });
 
-        if (notification.AwaitingInput && address.AttachedClients == 0)
+        if (notification.AwaitingInput &&
+            address.AttachedClients == 0 &&
+            address.NotificationLevel != NotificationLevel.Off)
         {
             _push.Enqueue(
                 address.UserKey,

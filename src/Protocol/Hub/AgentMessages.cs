@@ -22,6 +22,20 @@ public sealed class RegisterMachineRequest
 
     [Key(4)]
     public int ProtocolVersion { get; set; }
+
+    /// <summary>
+    /// Appended so an older agent that omits it keeps the historical all-events behavior.
+    /// </summary>
+    [Key(5)]
+    public NotificationLevel NotificationLevel { get; set; } = NotificationLevel.AllAttentionEvents;
+}
+
+/// <summary>Agent to hub. Changes how much activity from this machine wakes the phone.</summary>
+[MessagePackObject]
+public sealed class SetMachineNotificationLevelRequest
+{
+    [Key(0)]
+    public NotificationLevel NotificationLevel { get; set; }
 }
 
 /// <summary>Agent to hub. A wrapper started a new session on this machine.</summary>

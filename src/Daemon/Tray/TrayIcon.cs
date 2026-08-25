@@ -34,6 +34,7 @@ public sealed class TrayIcon : IDisposable
     /// the handle is already unique per process, so one id is enough.
     /// </summary>
     private const int IconId = 1;
+    private const int DelayedMenuTimer = 1;
 
     private readonly string _machineName;
     private readonly Dictionary<TrayCommand, Action> _commands;
@@ -51,6 +52,8 @@ public sealed class TrayIcon : IDisposable
 
     private IntPtr _window;
     private bool _iconAdded;
+    private int _delayedMenuX;
+    private int _delayedMenuY;
 
     /// <summary>
     /// Explorer broadcasts this when it restarts, and every tray icon has to add itself
@@ -267,6 +270,11 @@ public sealed class TrayIcon : IDisposable
                 OnIconClicked(wParam, lParam);
                 return IntPtr.Zero;
 
+            case WM_TIMER when (int)wParam == DelayedMenuTimer:
+                KillTimer(window, (IntPtr)DelayedMenuTimer);
+                ShowMenu(_delayedMenuX, _delayedMenuY);
+                return IntPtr.Zero;
+
             case WM_TRAY_UPDATE:
                 Render();
                 return IntPtr.Zero;
@@ -298,9 +306,35 @@ public sealed class TrayIcon : IDisposable
     /// </summary>
     private void OnIconClicked(IntPtr wParam, IntPtr lParam)
     {
-        if (TrayIconInteraction.OpensMenu(LowWord(lParam)))
+        int x = SignedLowWord(wParam);
+        int y = SignedHighWord(wParam);
+
+        switch (TrayIconInteraction.ActionFor(LowWord(lParam)))
         {
-            ShowMenu(SignedLowWord(wParam), SignedHighWord(wParam));
+            case TrayIconAction.DelayMenu:
+                _delayedMenuX = x;
+                _delayedMenuY = y;
+                KillTimer(_window, (IntPtr)DelayedMenuTimer);
+                if (SetTimer(
+                        _window,
+                        (IntPtr)DelayedMenuTimer,
+                        GetDoubleClickTime(),
+                        IntPtr.Zero) == IntPtr.Zero)
+                {
+                    ShowMenu(x, y);
+                }
+
+                break;
+
+            case TrayIconAction.ShowMenu:
+                KillTimer(_window, (IntPtr)DelayedMenuTimer);
+                ShowMenu(x, y);
+                break;
+
+            case TrayIconAction.ShowSettings:
+                KillTimer(_window, (IntPtr)DelayedMenuTimer);
+                _settings.Show();
+                break;
         }
     }
 
@@ -483,6 +517,8 @@ public sealed class TrayIcon : IDisposable
 
     private void Cleanup()
     {
+        KillTimer(_window, (IntPtr)DelayedMenuTimer);
+
         if (_iconAdded)
         {
             // Explicitly: an icon the shell was never told about leaves a ghost in the
@@ -550,13 +586,23 @@ public sealed class TrayIcon : IDisposable
     private sealed record TrayState(AgentState State, int Sessions, string? Account, UpdateStatus Update = default);
 }
 
+internal enum TrayIconAction
+{
+    None,
+    DelayMenu,
+    ShowMenu,
+    ShowSettings,
+}
+
 /// <summary>Maps shell notification codes to tray behavior without requiring a live shell.</summary>
 internal static class TrayIconInteraction
 {
-    /// <summary>
-    /// Left click, keyboard activation, and right click all reveal the same menu.
-    /// The first two are version 4 notifications rather than raw mouse messages.
-    /// </summary>
-    public static bool OpensMenu(int notification) =>
-        notification is NIN_SELECT or NIN_KEYSELECT or WM_CONTEXTMENU;
+    public static TrayIconAction ActionFor(int notification) =>
+        notification switch
+        {
+            NIN_SELECT => TrayIconAction.DelayMenu,
+            NIN_KEYSELECT or WM_CONTEXTMENU => TrayIconAction.ShowMenu,
+            WM_LBUTTONDBLCLK => TrayIconAction.ShowSettings,
+            _ => TrayIconAction.None,
+        };
 }

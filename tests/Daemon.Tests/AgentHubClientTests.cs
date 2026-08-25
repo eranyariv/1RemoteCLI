@@ -77,8 +77,27 @@ public sealed class AgentHubClientTests : IAsyncLifetime
         Assert.Equal("machine-under-test", request.MachineId);
         Assert.Equal("Test Machine", request.DisplayName);
         Assert.Equal(ProtocolVersion.Current, request.ProtocolVersion);
+        Assert.Equal(NotificationLevel.AllAttentionEvents, request.NotificationLevel);
         Assert.NotEmpty(request.Os);
         Assert.NotEmpty(request.AgentVersion);
+    }
+
+    [Fact]
+    public async Task RegistersAndChangesThePhoneNotificationLevel()
+    {
+        AgentHubClient client = await StartAsync(
+            new SessionRegistry(),
+            notificationLevel: NotificationLevel.ActionRequired);
+
+        RegisterMachineRequest registration = await Next<RegisterMachineRequest>();
+        Assert.Equal(NotificationLevel.ActionRequired, registration.NotificationLevel);
+
+        client.SetNotificationLevel(NotificationLevel.Off);
+
+        SetMachineNotificationLevelRequest update =
+            await Next<SetMachineNotificationLevelRequest>();
+        Assert.Equal(NotificationLevel.Off, update.NotificationLevel);
+        Assert.Equal(NotificationLevel.Off, client.NotificationLevel);
     }
 
     [Fact]
@@ -527,14 +546,18 @@ public sealed class AgentHubClientTests : IAsyncLifetime
         await WaitUntil(() => client.IsConnected);
     }
 
-    private async Task<AgentHubClient> StartAsync(SessionRegistry sessions, RecordingLogger? logs = null)
+    private async Task<AgentHubClient> StartAsync(
+        SessionRegistry sessions,
+        RecordingLogger? logs = null,
+        NotificationLevel notificationLevel = NotificationLevel.AllAttentionEvents)
     {
         var client = new AgentHubClient(
             _hubUri,
             Identity(),
             sessions,
             _ => Task.FromResult<string?>("token"),
-            logs?.CreateLogger("agent") ?? NullLogger.Instance);
+            logs?.CreateLogger("agent") ?? NullLogger.Instance,
+            notificationLevel: notificationLevel);
 
         _clients.Add(client);
 
@@ -673,6 +696,13 @@ public sealed class AgentHubClientTests : IAsyncLifetime
         {
             recorder.Calls.Writer.TryWrite(request);
             return recorder.RefuseRegistration;
+        }
+
+        public ErrorNotification? SetMachineNotificationLevel(
+            SetMachineNotificationLevelRequest request)
+        {
+            recorder.Calls.Writer.TryWrite(request);
+            return null;
         }
 
         public ErrorNotification? SessionOpened(AgentSessionOpenedNotification notification)

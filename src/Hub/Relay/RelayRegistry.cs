@@ -23,13 +23,15 @@ namespace OneRemoteCli.Hub.Relay;
 /// rather than usually true.
 /// </para>
 /// </param>
+/// <param name="NotificationLevel">How much activity from this machine may become Web Push.</param>
 public sealed record SessionAddress(
     string UserKey,
     string MachineId,
     string SessionId,
     string MachineName = "",
     string SessionName = "",
-    int AttachedClients = 0);
+    int AttachedClients = 0,
+    NotificationLevel NotificationLevel = NotificationLevel.AllAttentionEvents);
 
 /// <summary>A client's current view of one session, and the agent that serves it.</summary>
 /// <param name="AgentConnectionId">Null when the machine has gone offline since the attach.</param>
@@ -270,6 +272,7 @@ public sealed class RelayRegistry
             machine.DisplayName = request.DisplayName;
             machine.Os = request.Os;
             machine.AgentVersion = request.AgentVersion;
+            machine.NotificationLevel = request.NotificationLevel;
             machine.LastSeen = _time.GetUtcNow();
 
             if (_connections.TryGetValue(connectionId, out ConnectionRecord? record))
@@ -278,6 +281,29 @@ public sealed class RelayRegistry
             }
 
             return machine.ToInfo();
+        }
+    }
+
+    /// <summary>Changes the push level of the machine bound to this agent connection.</summary>
+    public bool SetNotificationLevel(string connectionId, NotificationLevel level)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionId);
+        if (!Enum.IsDefined(level))
+        {
+            throw new ArgumentOutOfRangeException(nameof(level));
+        }
+
+        lock (_gate)
+        {
+            RegisteredMachine? machine = MachineOf(connectionId, out _);
+            if (machine is null)
+            {
+                return false;
+            }
+
+            machine.NotificationLevel = level;
+            machine.LastSeen = _time.GetUtcNow();
+            return true;
         }
     }
 
@@ -389,7 +415,8 @@ public sealed class RelayRegistry
                 sessionId,
                 machine.DisplayName,
                 NameOf(removed),
-                watchers);
+                watchers,
+                machine.NotificationLevel);
         }
     }
 
@@ -416,7 +443,8 @@ public sealed class RelayRegistry
                 sessionId,
                 machine.DisplayName,
                 NameOf(session),
-                CountWatchers(userKey, machine.MachineId, sessionId));
+                CountWatchers(userKey, machine.MachineId, sessionId),
+                machine.NotificationLevel);
         }
     }
 
@@ -441,7 +469,8 @@ public sealed class RelayRegistry
                 sessionId,
                 machine.DisplayName,
                 NameOf(session),
-                CountWatchers(userKey, machine.MachineId, sessionId));
+                CountWatchers(userKey, machine.MachineId, sessionId),
+                machine.NotificationLevel);
         }
     }
 
@@ -1095,6 +1124,9 @@ public sealed class RegisteredMachine(string machineId)
     public string Os { get; internal set; } = string.Empty;
 
     public string AgentVersion { get; internal set; } = string.Empty;
+
+    public NotificationLevel NotificationLevel { get; internal set; } =
+        NotificationLevel.AllAttentionEvents;
 
     public DateTimeOffset LastSeen { get; internal set; }
 

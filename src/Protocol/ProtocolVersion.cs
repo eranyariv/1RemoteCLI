@@ -22,9 +22,12 @@ public static class ProtocolVersion
     /// reason as version 2, so <see cref="MinimumSupported"/> stays put again.
     /// Version 4 adds bounded, chunked terminal file uploads. The methods are
     /// additive and older agents remain useful for every feature they already had.
+    /// Version 5 appends the machine's phone-notification level to registration and
+    /// adds a method for changing it live. Value zero preserves version 4 behavior,
+    /// so older agents continue sending all attention events.
     /// </para>
     /// </summary>
-    public const int Current = 4;
+    public const int Current = 5;
 
     /// <summary>Oldest version this build still accepts from a peer.</summary>
     public const int MinimumSupported = 1;

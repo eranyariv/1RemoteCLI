@@ -2,6 +2,19 @@ using MessagePack;
 
 namespace OneRemoteCli.Protocol.Hub;
 
+/// <summary>How much activity from one machine may wake the user's phone.</summary>
+public enum NotificationLevel : byte
+{
+    /// <summary>Waiting-for-input prompts and session completion or failure.</summary>
+    AllAttentionEvents = 0,
+
+    /// <summary>Only events that need an explicit answer or permission.</summary>
+    ActionRequired = 1,
+
+    /// <summary>No Web Push from this machine. Live in-app state is unchanged.</summary>
+    Off = 2,
+}
+
 /// <summary>
 /// Whether a <see cref="TerminalOutputNotification"/> continues the stream or
 /// replaces it. A snapshot resets the client's terminal before it is applied.

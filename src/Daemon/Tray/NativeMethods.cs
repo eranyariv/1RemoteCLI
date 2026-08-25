@@ -776,6 +776,9 @@ internal static partial class NativeMethods
     [LibraryImport("user32.dll", SetLastError = true)]
     internal static partial IntPtr SetTimer(IntPtr hWnd, IntPtr eventId, uint milliseconds, IntPtr callback);
 
+    [LibraryImport("user32.dll")]
+    internal static partial uint GetDoubleClickTime();
+
     [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool KillTimer(IntPtr hWnd, IntPtr eventId);

@@ -46,6 +46,7 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
     private readonly Func<CancellationToken, Task<string?>> _tokenProvider;
     private readonly ILogger _logger;
     private AcpProvider? _chat;
+    private int _notificationLevel;
 
     /// <summary>Last message logged, so a hub that is down for an hour does not produce an hour of identical lines.</summary>
     private int? _lastComplaint;
@@ -92,7 +93,8 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
         SessionRegistry sessions,
         Func<CancellationToken, Task<string?>> tokenProvider,
         ILogger? logger = null,
-        Action<HttpConnectionOptions>? configureConnection = null)
+        Action<HttpConnectionOptions>? configureConnection = null,
+        NotificationLevel notificationLevel = NotificationLevel.AllAttentionEvents)
     {
         ArgumentNullException.ThrowIfNull(hubUri);
 
@@ -100,6 +102,12 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _tokenProvider = tokenProvider ?? throw new ArgumentNullException(nameof(tokenProvider));
         _logger = logger ?? NullLogger.Instance;
+        if (!Enum.IsDefined(notificationLevel))
+        {
+            throw new ArgumentOutOfRangeException(nameof(notificationLevel));
+        }
+
+        _notificationLevel = (int)notificationLevel;
 
         _connection = new HubConnectionBuilder()
             .WithUrl(hubUri, options =>
@@ -153,6 +161,9 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
     /// </summary>
     public bool IsSignedOut => _signedOut;
 
+    public NotificationLevel NotificationLevel =>
+        (NotificationLevel)Volatile.Read(ref _notificationLevel);
+
     /// <summary>
     /// Raised whenever <see cref="IsConnected"/> or <see cref="IsSignedOut"/> may have
     /// changed. Deliberately carries no payload: the handler reads the properties, so
@@ -165,6 +176,31 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
         _chat = provider ?? throw new ArgumentNullException(nameof(provider));
         provider.AttachSink(this);
     }
+
+    /// <summary>
+    /// Applies a persisted phone-notification preference now. A disconnected agent
+    /// carries the current value on its next registration instead.
+    /// </summary>
+    public void SetNotificationLevel(NotificationLevel level)
+    {
+        if (!Enum.IsDefined(level))
+        {
+            throw new ArgumentOutOfRangeException(nameof(level));
+        }
+
+        Volatile.Write(ref _notificationLevel, (int)level);
+
+        if (IsConnected)
+        {
+            _ = PublishNotificationLevelAsync(level);
+        }
+    }
+
+    private async Task PublishNotificationLevelAsync(NotificationLevel level) =>
+        await TryInvokeAsync(
+            HubMethods.Server.SetMachineNotificationLevel,
+            new SetMachineNotificationLevelRequest { NotificationLevel = level },
+            CancellationToken.None).ConfigureAwait(false);
 
     private void RaiseStateChanged()
     {
@@ -778,6 +814,7 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
                     Os = RuntimeInformation.OSDescription,
                     AgentVersion = AgentVersion,
                     ProtocolVersion = ProtocolVersion.Current,
+                    NotificationLevel = NotificationLevel,
                 },
                 cancellationToken).ConfigureAwait(false);
 

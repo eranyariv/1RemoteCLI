@@ -1,4 +1,5 @@
 using OneRemoteCli.Daemon.Agent;
+using OneRemoteCli.Protocol.Hub;
 
 namespace OneRemoteCli.Daemon.Tests;
 
@@ -20,6 +21,7 @@ public sealed class AgentPreferencesTests : IDisposable
 
         Assert.True(preferences.HideArchivedSessions);
         Assert.True(preferences.AutomaticUpdates);
+        Assert.Equal(NotificationLevel.AllAttentionEvents, preferences.PhoneNotificationLevel);
         Assert.False(File.Exists(PreferencesPath));
     }
 
@@ -38,6 +40,7 @@ public sealed class AgentPreferencesTests : IDisposable
         AgentPreferences saved = store.Load();
         Assert.False(saved.HideArchivedSessions);
         Assert.False(saved.AutomaticUpdates);
+        Assert.Equal(NotificationLevel.AllAttentionEvents, saved.PhoneNotificationLevel);
     }
 
     [Fact]
@@ -51,6 +54,34 @@ public sealed class AgentPreferencesTests : IDisposable
 
         Assert.False(preferences.HideArchivedSessions);
         Assert.True(preferences.AutomaticUpdates);
+        Assert.Equal(NotificationLevel.AllAttentionEvents, preferences.PhoneNotificationLevel);
+    }
+
+    [Theory]
+    [InlineData(NotificationLevel.AllAttentionEvents)]
+    [InlineData(NotificationLevel.ActionRequired)]
+    [InlineData(NotificationLevel.Off)]
+    public void PersistsEveryPhoneNotificationLevel(NotificationLevel level)
+    {
+        var store = new AgentPreferencesStore(PreferencesPath);
+
+        Assert.Null(store.Save(new AgentPreferences { PhoneNotificationLevel = level }));
+
+        Assert.Equal(level, store.Load().PhoneNotificationLevel);
+    }
+
+    [Fact]
+    public void RefusesAnUnknownPhoneNotificationLevel()
+    {
+        var store = new AgentPreferencesStore(PreferencesPath);
+
+        string? problem = store.Save(new AgentPreferences
+        {
+            PhoneNotificationLevel = (NotificationLevel)255,
+        });
+
+        Assert.NotNull(problem);
+        Assert.False(File.Exists(PreferencesPath));
     }
 
     [Fact]
@@ -65,6 +96,7 @@ public sealed class AgentPreferencesTests : IDisposable
 
         Assert.True(preferences.HideArchivedSessions);
         Assert.True(preferences.AutomaticUpdates);
+        Assert.Equal(NotificationLevel.AllAttentionEvents, preferences.PhoneNotificationLevel);
         Assert.Single(messages);
         Assert.Contains("ignoring", messages[0], StringComparison.Ordinal);
     }

@@ -219,6 +219,36 @@ public sealed class SettingsPresenterTests
     public void AutomaticUpdatePreferenceHasTheRequestedLabel() =>
         Assert.Equal("Automatically update 1RemoteCLI", SettingsPresenter.AutomaticUpdatesLabel);
 
+    [Fact]
+    public void PhoneNotificationPreferencesHaveExplicitLabels()
+    {
+        Assert.Equal(
+            "Phone notifications from this machine",
+            SettingsPresenter.PhoneNotificationsLabel);
+        Assert.Equal("Off", SettingsPresenter.NotificationsOffLabel);
+        Assert.Equal("Action required", SettingsPresenter.NotificationsActionRequiredLabel);
+        Assert.Equal(
+            "All attention events",
+            SettingsPresenter.NotificationsAllAttentionEventsLabel);
+    }
+
+    [Theory]
+    [InlineData(NotificationLevel.Off, true, false, false)]
+    [InlineData(NotificationLevel.ActionRequired, false, true, false)]
+    [InlineData(NotificationLevel.AllAttentionEvents, false, false, true)]
+    public void PhoneNotificationLevelSelectsExactlyOneRadioButton(
+        NotificationLevel level,
+        bool off,
+        bool actionRequired,
+        bool allAttentionEvents)
+    {
+        PhoneNotificationView view = SettingsPresenter.PhoneNotifications(level);
+
+        Assert.Equal(off, view.Off);
+        Assert.Equal(actionRequired, view.ActionRequired);
+        Assert.Equal(allAttentionEvents, view.AllAttentionEvents);
+    }
+
     private static SettingsView WithUpdate(UpdateStatus update) =>
         SettingsPresenter.Present(AgentState.Connected, "ada@example.com", [], Now, update);
 

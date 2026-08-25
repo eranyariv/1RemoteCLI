@@ -145,6 +145,124 @@ public sealed class PushRoutingTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ActionRequiredSuppressesCompletionButKeepsPrompts()
+    {
+        HubConnection agent = await ConnectAgentAsync(
+            AliceTenant,
+            AliceObject,
+            "machine-a",
+            notificationLevel: NotificationLevel.ActionRequired);
+        await OpenSessionAsync(agent, "session-1", "build");
+
+        await agent.InvokeAsync(
+            HubMethods.Server.SessionClosed,
+            new AgentSessionClosedNotification { SessionId = "session-1", ExitCode = 0 });
+        await AssertNoPush();
+
+        await OpenSessionAsync(agent, "session-2", "claude");
+        await agent.InvokeAsync(
+            HubMethods.Server.SessionAwaitingInput,
+            new SessionAwaitingInputNotification { SessionId = "session-2", Hint = "Approve?" });
+
+        Assert.Equal("Approve?", (await Next()).Payload.Body);
+    }
+
+    [Fact]
+    public async Task OffSuppressesPushWithoutHidingLiveAttention()
+    {
+        HubConnection agent = await ConnectAgentAsync(
+            AliceTenant,
+            AliceObject,
+            "machine-a",
+            notificationLevel: NotificationLevel.Off);
+        await OpenSessionAsync(agent, "session-1", "claude");
+
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        var attention = Channel.CreateUnbounded<ClientSessionAwaitingInputNotification>();
+        client.On<ClientSessionAwaitingInputNotification>(
+            HubMethods.Client.SessionAwaitingInput,
+            notification => attention.Writer.TryWrite(notification));
+
+        await agent.InvokeAsync(
+            HubMethods.Server.SessionAwaitingInput,
+            new SessionAwaitingInputNotification { SessionId = "session-1", Hint = "Approve?" });
+
+        using var timeout = new CancellationTokenSource(Patience);
+        ClientSessionAwaitingInputNotification live =
+            await attention.Reader.ReadAsync(timeout.Token);
+        Assert.Equal("machine-a", live.MachineId);
+        Assert.Equal("Approve?", live.Hint);
+        await AssertNoPush();
+    }
+
+    [Fact]
+    public async Task ANotificationLevelChangeTakesEffectImmediately()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        await OpenSessionAsync(agent, "session-1", "claude");
+
+        Assert.Null(await agent.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SetMachineNotificationLevel,
+            new SetMachineNotificationLevelRequest { NotificationLevel = NotificationLevel.Off }));
+
+        await agent.InvokeAsync(
+            HubMethods.Server.SessionAwaitingInput,
+            new SessionAwaitingInputNotification { SessionId = "session-1", Hint = "Muted" });
+        await AssertNoPush();
+
+        Assert.Null(await agent.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SetMachineNotificationLevel,
+            new SetMachineNotificationLevelRequest
+            {
+                NotificationLevel = NotificationLevel.AllAttentionEvents,
+            }));
+        await agent.InvokeAsync(
+            HubMethods.Server.SessionAwaitingInput,
+            new SessionAwaitingInputNotification { SessionId = "session-1", Hint = "Audible" });
+
+        Assert.Equal("Audible", (await Next()).Payload.Body);
+    }
+
+    [Fact]
+    public async Task NotificationLevelsAreScopedPerMachine()
+    {
+        HubConnection quiet = await ConnectAgentAsync(
+            AliceTenant,
+            AliceObject,
+            "quiet-machine",
+            notificationLevel: NotificationLevel.Off);
+        await OpenSessionAsync(quiet, "quiet-session", "claude");
+
+        HubConnection loud = await ConnectAgentAsync(
+            AliceTenant,
+            AliceObject,
+            "loud-machine",
+            notificationLevel: NotificationLevel.AllAttentionEvents);
+        await OpenSessionAsync(loud, "loud-session", "claude");
+
+        await quiet.InvokeAsync(
+            HubMethods.Server.SessionAwaitingInput,
+            new SessionAwaitingInputNotification
+            {
+                SessionId = "quiet-session",
+                Hint = "Muted",
+            });
+        await AssertNoPush();
+
+        await loud.InvokeAsync(
+            HubMethods.Server.SessionAwaitingInput,
+            new SessionAwaitingInputNotification
+            {
+                SessionId = "loud-session",
+                Hint = "Audible",
+            });
+
+        PushJob job = await Next();
+        Assert.Equal("Audible", job.Payload.Body);
+        Assert.Contains("loud-machine", job.Payload.Url, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AWaitingSessionWakesItsOwnerAndNobodyElse()
     {
         // The user key on the job is what decides whose phone rings. A bug here is
@@ -267,7 +385,8 @@ public sealed class PushRoutingTests : IAsyncLifetime
         string tenantId,
         string objectId,
         string machineId,
-        string displayName = "Machine")
+        string displayName = "Machine",
+        NotificationLevel notificationLevel = NotificationLevel.AllAttentionEvents)
     {
         HubConnection connection = await ConnectAsync(tenantId, objectId);
 
@@ -280,6 +399,7 @@ public sealed class PushRoutingTests : IAsyncLifetime
                 Os = "Windows",
                 AgentVersion = "1.0.0",
                 ProtocolVersion = ProtocolVersion.Current,
+                NotificationLevel = notificationLevel,
             }));
 
         return connection;
@@ -352,4 +472,3 @@ public sealed class PushRoutingTests : IAsyncLifetime
             Jobs.Writer.TryWrite(new PushJob(userKey, payload));
     }
 }
-

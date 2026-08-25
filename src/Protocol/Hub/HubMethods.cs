@@ -11,6 +11,7 @@ public static class HubMethods
     {
         // Agent.
         public const string RegisterMachine = "RegisterMachine";
+        public const string SetMachineNotificationLevel = "SetMachineNotificationLevel";
         public const string SessionOpened = "SessionOpened";
         public const string SessionClosed = "SessionClosed";
 

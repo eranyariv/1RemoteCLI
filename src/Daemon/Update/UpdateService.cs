@@ -67,12 +67,11 @@ public readonly record struct UpdateStatus(
 /// the fix was for (issue #111).
 /// </para>
 /// <para>
-/// Checking is automatic and installing is not. The click matters for one specific
-/// reason: <b>wrappers do not reconnect</b>. A session whose agent goes away keeps
-/// running at the desk — see <c>WrapperSession</c> — but is never shareable again, and
-/// nothing tells the person holding the phone. So the agent will not restart itself
-/// under live sessions at a moment of its own choosing, and when an update is installed
-/// with sessions open it says so and waits rather than taking them out.
+/// Checking and, by default, installing are automatic. The user can turn automatic
+/// installation off without losing discovery or the manual action. In either mode the
+/// agent will not restart under live work because <b>wrappers do not reconnect</b>. A
+/// session whose agent goes away keeps running at the desk — see <c>WrapperSession</c> —
+/// but is never shareable again, and nothing tells the person holding the phone.
 /// </para>
 /// </summary>
 public sealed class UpdateService
@@ -91,10 +90,13 @@ public sealed class UpdateService
     /// overwriting one another and prevents two installers racing over the executable.
     /// </summary>
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly SemaphoreSlim _wake = new(0, 1);
 
     private readonly object _statusLock = new();
 
     private UpdateStatus _status;
+    private int _automaticUpdatesEnabled;
+    private int _restartRequested;
 
     public UpdateService(
         Func<CancellationToken, Task<string?>> latestTag,
@@ -103,6 +105,7 @@ public sealed class UpdateService
         Action restart,
         UpdateOptions? options = null,
         string? currentVersion = null,
+        bool automaticUpdatesEnabled = true,
         Action<string>? log = null)
     {
         _latestTag = latestTag ?? throw new ArgumentNullException(nameof(latestTag));
@@ -111,6 +114,7 @@ public sealed class UpdateService
         _restart = restart ?? throw new ArgumentNullException(nameof(restart));
         _options = options ?? UpdateOptions.Default;
         _currentVersion = currentVersion ?? ProductVersion.Current;
+        _automaticUpdatesEnabled = automaticUpdatesEnabled ? 1 : 0;
         _log = log;
     }
 
@@ -128,6 +132,28 @@ public sealed class UpdateService
         }
     }
 
+    public bool AutomaticUpdatesEnabled => Volatile.Read(ref _automaticUpdatesEnabled) != 0;
+
+    /// <summary>
+    /// Applies the user's automatic-update preference without restarting the agent.
+    /// Enabling it wakes the periodic loop so a machine does not wait until tomorrow.
+    /// </summary>
+    public void SetAutomaticUpdatesEnabled(bool enabled)
+    {
+        int previous = Interlocked.Exchange(ref _automaticUpdatesEnabled, enabled ? 1 : 0);
+
+        if (enabled && previous == 0)
+        {
+            Wake();
+        }
+    }
+
+    /// <summary>
+    /// Called whenever terminal or ACP activity changes. An installed update waiting on
+    /// work restarts exactly once when the final activity ends.
+    /// </summary>
+    public void ActivityChanged() => TryRestartWhenIdle();
+
     /// <summary>
     /// Checks now, and then every <see cref="UpdateOptions.Interval"/>, until cancelled.
     /// <para>
@@ -144,14 +170,27 @@ public sealed class UpdateService
             return;
         }
 
+        TimeSpan delay = _options.StartupDelay;
+        int consecutiveFailures = 0;
+
         try
         {
-            await Task.Delay(_options.StartupDelay, cancellationToken).ConfigureAwait(false);
-
-            while (!cancellationToken.IsCancellationRequested)
+            while (true)
             {
-                await CheckAsync(cancellationToken).ConfigureAwait(false);
-                await Task.Delay(_options.Interval, cancellationToken).ConfigureAwait(false);
+                await WaitForWakeOrDelayAsync(delay, cancellationToken).ConfigureAwait(false);
+                UpdateStatus result = await CheckAndInstallAutomaticallyAsync(cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (result.Stage == UpdateStage.Failed)
+                {
+                    consecutiveFailures++;
+                    delay = RetryDelay(consecutiveFailures);
+                }
+                else
+                {
+                    consecutiveFailures = 0;
+                    delay = _options.Interval;
+                }
             }
         }
         catch (OperationCanceledException)
@@ -294,17 +333,22 @@ public sealed class UpdateService
                 // Deliberately not restarting. The message names the sessions because
                 // otherwise this reads as the update having half-worked, and the user's
                 // next move would be to go looking for the fault.
-                return Publish(new UpdateStatus(
+                Publish(new UpdateStatus(
                     UpdateStage.Restart,
                     version,
                     sessions == 1
                         ? "Installed. It starts running when the session on this machine has finished."
                         : $"Installed. It starts running when the {sessions} sessions on this machine have finished."));
             }
+            else
+            {
+                Publish(new UpdateStatus(UpdateStage.Restart, version, "Installed. Restarting the agent\u2026"));
+            }
 
-            Publish(new UpdateStatus(UpdateStage.Restart, version));
-            _restart();
-
+            // Read activity again after publishing Restart. If the final session ended
+            // between the first count and Publish, its event may already have observed
+            // Installing and there will be no later event to wake us.
+            TryRestartWhenIdle();
             return Status;
         }
         finally
@@ -336,6 +380,9 @@ public sealed class UpdateService
     {
         try
         {
+            // An interactive check is diagnostic. In particular, opening Settings asks
+            // for one, and must not restart the idle agent out from under the window the
+            // user just opened. The background loop owns unattended installation.
             await CheckAsync().ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -345,6 +392,68 @@ public sealed class UpdateService
                 UpdateStage.Failed,
                 Message: $"Could not check for updates: {ex.Message}"));
         }
+    }
+
+    private async Task<UpdateStatus> CheckAndInstallAutomaticallyAsync(
+        CancellationToken cancellationToken = default)
+    {
+        UpdateStatus result = await CheckAsync(cancellationToken).ConfigureAwait(false);
+
+        return AutomaticUpdatesEnabled && result.CanInstall
+            ? await InstallAsync(cancellationToken).ConfigureAwait(false)
+            : result;
+    }
+
+    private async Task WaitForWakeOrDelayAsync(TimeSpan delay, CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(delay > TimeSpan.Zero ? delay : TimeSpan.Zero);
+
+        try
+        {
+            await _wake.WaitAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // The scheduled delay elapsed.
+        }
+    }
+
+    private TimeSpan RetryDelay(int consecutiveFailures)
+    {
+        long first = Math.Max(1, _options.RetryDelay.Ticks);
+        long maximum = Math.Max(first, _options.MaximumRetryDelay.Ticks);
+        double multiplier = Math.Pow(2, Math.Min(consecutiveFailures - 1, 30));
+        long ticks = (long)Math.Min(maximum, first * multiplier);
+        return TimeSpan.FromTicks(ticks);
+    }
+
+    private void Wake()
+    {
+        try
+        {
+            _wake.Release();
+        }
+        catch (SemaphoreFullException)
+        {
+            // One pending wake is enough.
+        }
+    }
+
+    private void TryRestartWhenIdle()
+    {
+        if (Status.Stage != UpdateStage.Restart || _liveSessions() != 0)
+        {
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _restartRequested, 1, 0) != 0)
+        {
+            return;
+        }
+
+        _log?.Invoke($"update: {Status.Version} installed; restarting.");
+        _restart();
     }
 
     private UpdateStatus Publish(UpdateStatus status)

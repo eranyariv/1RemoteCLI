@@ -215,6 +215,10 @@ public sealed class SettingsPresenterTests
             "Show only sessions visible in GitHub Copilot",
             SettingsPresenter.HideArchivedSessionsLabel);
 
+    [Fact]
+    public void AutomaticUpdatePreferenceHasTheRequestedLabel() =>
+        Assert.Equal("Automatically update 1RemoteCLI", SettingsPresenter.AutomaticUpdatesLabel);
+
     private static SettingsView WithUpdate(UpdateStatus update) =>
         SettingsPresenter.Present(AgentState.Connected, "ada@example.com", [], Now, update);
 

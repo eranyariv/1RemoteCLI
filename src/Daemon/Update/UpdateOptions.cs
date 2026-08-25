@@ -6,11 +6,9 @@ namespace OneRemoteCli.Daemon.Update;
 /// <summary>
 /// Whether the agent looks for new releases, and how often.
 /// <para>
-/// Checking is on by default and installing is never automatic. The two are worth
-/// separating: a machine that quietly replaces its own program file while somebody is
-/// working on it is a machine its owner has stopped being able to reason about, and
-/// the thing that actually goes stale is not the binary, it is the user's knowledge
-/// that a newer one exists. So the agent finds out and says so, and a person decides.
+/// This is the deployment-level switch for checking, separate from the user's
+/// automatic-install preference. Turning automatic installation off still leaves
+/// update discovery and the manual update action available.
 /// </para>
 /// <para>
 /// Read from the same <c>settings.json</c> as everything else the user can tune, and
@@ -43,6 +41,12 @@ public sealed partial record UpdateOptions
     /// </para>
     /// </summary>
     public TimeSpan StartupDelay { get; init; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>The first delay after a failed automatic check or installation.</summary>
+    public TimeSpan RetryDelay { get; init; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>The upper bound for exponential automatic-update retry delays.</summary>
+    public TimeSpan MaximumRetryDelay { get; init; } = TimeSpan.FromHours(4);
 
     public static UpdateOptions Default { get; } = new();
 

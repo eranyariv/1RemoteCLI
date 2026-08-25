@@ -60,7 +60,9 @@ public sealed record SettingsActions(
     Func<SettingsWindowLayout>? ReadLayout = null,
     Action<SettingsWindowLayout>? WriteLayout = null,
     Func<bool>? ReadHideArchivedSessions = null,
-    Func<bool, string?>? WriteHideArchivedSessions = null);
+    Func<bool, string?>? WriteHideArchivedSessions = null,
+    Func<bool>? ReadAutomaticUpdates = null,
+    Func<bool, string?>? WriteAutomaticUpdates = null);
 
 /// <summary>
 /// The agent's settings window.
@@ -95,6 +97,7 @@ internal sealed class SettingsWindow
     private const int IdHideArchivedSessions = 109;
     private const int IdSessionsTab = 110;
     private const int IdSettingsTab = 111;
+    private const int IdAutomaticUpdates = 112;
 
     private const int Style =
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX |
@@ -176,6 +179,7 @@ internal sealed class SettingsWindow
     private IntPtr _wrapShortcut;
     private IntPtr _startAtLogon;
     private IntPtr _hideArchivedSessions;
+    private IntPtr _automaticUpdates;
     private IntPtr _versionLabel;
     private IntPtr _changeHistory;
     private IntPtr _updateLabel;
@@ -644,6 +648,22 @@ internal sealed class SettingsWindow
             _hideArchivedSessions,
             _actions.ReadHideArchivedSessions is not null &&
             _actions.WriteHideArchivedSessions is not null);
+        _automaticUpdates = PageControl(
+            _settingsControls,
+            Create(
+                instance,
+                "BUTTON",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+                0,
+                0,
+                100,
+                RowHeight + 4,
+                IdAutomaticUpdates,
+                SettingsPresenter.AutomaticUpdatesLabel));
+        EnableWindow(
+            _automaticUpdates,
+            _actions.ReadAutomaticUpdates is not null &&
+            _actions.WriteAutomaticUpdates is not null);
 
         _close = Button(
             instance,
@@ -800,6 +820,12 @@ internal sealed class SettingsWindow
             _hideArchivedSessions,
             pageX,
             pageY + RowHeight + Tight,
+            pageWidth,
+            RowHeight + 4);
+        Move(
+            _automaticUpdates,
+            pageX,
+            pageY + ((RowHeight + Tight) * 2),
             pageWidth,
             RowHeight + 4);
     }
@@ -1072,6 +1098,11 @@ internal sealed class SettingsWindow
         if (_actions.ReadHideArchivedSessions is not null)
         {
             Check(_hideArchivedSessions, Ask(_actions.ReadHideArchivedSessions));
+        }
+
+        if (_actions.ReadAutomaticUpdates is not null)
+        {
+            Check(_automaticUpdates, Ask(_actions.ReadAutomaticUpdates));
         }
     }
 
@@ -1398,6 +1429,10 @@ internal sealed class SettingsWindow
                 OnHideArchivedSessionsToggled();
                 break;
 
+            case IdAutomaticUpdates:
+                OnAutomaticUpdatesToggled();
+                break;
+
             case IdStatusTab:
                 ShowPage(SettingsPage.Status);
                 break;
@@ -1497,6 +1532,35 @@ internal sealed class SettingsWindow
         }
 
         Check(_hideArchivedSessions, Ask(_actions.ReadHideArchivedSessions));
+
+        if (problem is not null)
+        {
+            Say(new SettingsNotice(problem, NoticeKind.Problem));
+        }
+    }
+
+    private void OnAutomaticUpdatesToggled()
+    {
+        if (_actions.ReadAutomaticUpdates is null ||
+            _actions.WriteAutomaticUpdates is null)
+        {
+            return;
+        }
+
+        bool wanted =
+            SendMessage(_automaticUpdates, BM_GETCHECK, IntPtr.Zero, IntPtr.Zero) == BST_CHECKED;
+        string? problem;
+
+        try
+        {
+            problem = _actions.WriteAutomaticUpdates(wanted);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            problem = ex.Message;
+        }
+
+        Check(_automaticUpdates, Ask(_actions.ReadAutomaticUpdates));
 
         if (problem is not null)
         {

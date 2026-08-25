@@ -670,7 +670,11 @@ public static class Program
                 stopping.Cancel();
             },
             UpdateOptions.Load(log: updateLogger.Update),
+            automaticUpdatesEnabled: preferences.AutomaticUpdates,
             log: updateLogger.Update);
+
+        host.Sessions.Changed += updates.ActivityChanged;
+        chats.ActivityChanged += updates.ActivityChanged;
 
         var windowLayout = new SettingsWindowLayoutStore(
             log: settingsLogger.Update);
@@ -684,6 +688,7 @@ public static class Program
             updates,
             windowLayout,
             preferenceStore,
+            preferences,
             settingsLogger,
             stopping);
 
@@ -730,6 +735,7 @@ public static class Program
         UpdateService updates,
         SettingsWindowLayoutStore windowLayout,
         AgentPreferencesStore preferenceStore,
+        AgentPreferences preferences,
         ILogger settingsLogger,
         CancellationTokenSource stopping)
     {
@@ -764,6 +770,19 @@ public static class Program
                 session.Program,
                 session.Cwd)),
         ];
+
+        AgentPreferences currentPreferences = preferences;
+
+        string? SavePreferences(AgentPreferences wanted)
+        {
+            string? problem = preferenceStore.Save(wanted);
+            if (problem is null)
+            {
+                currentPreferences = wanted;
+            }
+
+            return problem;
+        }
 
         var settings = new SettingsActions(
             Read: () => SettingsPresenter.Present(
@@ -817,11 +836,23 @@ public static class Program
             ReadHideArchivedSessions: () => chats.HideArchivedSessions,
             WriteHideArchivedSessions: wanted =>
             {
-                string? problem = preferenceStore.Save(
-                    new AgentPreferences { HideArchivedSessions = wanted });
+                string? problem = SavePreferences(
+                    currentPreferences with { HideArchivedSessions = wanted });
                 if (problem is null)
                 {
                     chats.SetHideArchivedSessions(wanted);
+                }
+
+                return problem;
+            },
+            ReadAutomaticUpdates: () => updates.AutomaticUpdatesEnabled,
+            WriteAutomaticUpdates: wanted =>
+            {
+                string? problem = SavePreferences(
+                    currentPreferences with { AutomaticUpdates = wanted });
+                if (problem is null)
+                {
+                    updates.SetAutomaticUpdatesEnabled(wanted);
                 }
 
                 return problem;

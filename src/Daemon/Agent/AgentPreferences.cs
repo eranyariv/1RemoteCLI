@@ -7,6 +7,8 @@ internal sealed record AgentPreferences
 {
     public bool HideArchivedSessions { get; init; } = true;
 
+    public bool AutomaticUpdates { get; init; } = true;
+
     public static AgentPreferences Default => new();
 }
 
@@ -32,15 +34,55 @@ internal sealed partial class AgentPreferencesStore(
                 return AgentPreferences.Default;
             }
 
-            return JsonSerializer.Deserialize(
+            using JsonDocument document = JsonDocument.Parse(
                 File.ReadAllText(_path),
-                PreferencesJson.Default.AgentPreferences) ?? AgentPreferences.Default;
+                new JsonDocumentOptions
+                {
+                    AllowTrailingCommas = true,
+                    CommentHandling = JsonCommentHandling.Skip,
+                });
+
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                throw new JsonException("Agent preferences must be a JSON object.");
+            }
+
+            AgentPreferences defaults = AgentPreferences.Default;
+            return defaults with
+            {
+                HideArchivedSessions =
+                    ReadBoolean(document.RootElement, "hideArchivedSessions")
+                    ?? defaults.HideArchivedSessions,
+                AutomaticUpdates =
+                    ReadBoolean(document.RootElement, "automaticUpdates")
+                    ?? defaults.AutomaticUpdates,
+            };
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
             _log?.Invoke($"settings: ignoring {_path} ({ex.Message}).");
             return AgentPreferences.Default;
         }
+    }
+
+    private static bool? ReadBoolean(JsonElement root, string name)
+    {
+        foreach (JsonProperty property in root.EnumerateObject())
+        {
+            if (!string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            return property.Value.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                _ => throw new JsonException($"Agent preference '{name}' must be true or false."),
+            };
+        }
+
+        return null;
     }
 
     public string? Save(AgentPreferences preferences)
@@ -63,7 +105,7 @@ internal sealed partial class AgentPreferencesStore(
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             _log?.Invoke($"settings: could not save {_path} ({ex.Message}).");
-            return "The archived-session preference could not be saved.";
+            return "The agent settings could not be saved.";
         }
     }
 

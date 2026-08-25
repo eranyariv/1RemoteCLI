@@ -110,6 +110,8 @@ public static class SettingsPresenter
 
     public const string HideArchivedSessionsLabel = "Show only sessions visible in GitHub Copilot";
 
+    public const string AutomaticUpdatesLabel = "Automatically update 1RemoteCLI";
+
     public const string WrapShortcutLabel = "Wrap a desktop shortcut\u2026";
 
     public const string OpenLogsLabel = "Open logs";

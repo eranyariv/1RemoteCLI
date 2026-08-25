@@ -59,6 +59,9 @@ public sealed class AcpProvider : IAsyncDisposable
     /// <summary>Raised when the discovered chat count changes.</summary>
     public event Action? Changed;
 
+    /// <summary>Raised when an ACP turn starts or finishes.</summary>
+    public event Action? ActivityChanged;
+
     public int Count => _sessions.Count;
 
     public int ActiveTurns => Volatile.Read(ref _activeTurns);
@@ -264,6 +267,7 @@ public sealed class AcpProvider : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         Interlocked.Increment(ref _activeTurns);
+        ActivityChanged?.Invoke();
 
         try
         {
@@ -299,6 +303,7 @@ public sealed class AcpProvider : IAsyncDisposable
         finally
         {
             Interlocked.Decrement(ref _activeTurns);
+            ActivityChanged?.Invoke();
         }
     }
 

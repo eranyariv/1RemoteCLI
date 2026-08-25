@@ -360,6 +360,54 @@ public sealed class AcpProviderTests
         Assert.Equal("Continue from the phone", Assert.Single(session.Snapshot()).Text);
     }
 
+    [Fact]
+    public async Task ReportsWhenAPromptStartsAndFinishes()
+    {
+        var promptStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishPrompt = new TaskCompletionSource<JsonElement>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Task<JsonElement> Call(
+            string method,
+            JsonObject parameters,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            return method switch
+            {
+                "session/new" => Task.FromResult(
+                    JsonSerializer.SerializeToElement(new { sessionId = "active" })),
+                "session/prompt" => Prompt(),
+                _ => throw new InvalidOperationException(method),
+            };
+        }
+
+        Task<JsonElement> Prompt()
+        {
+            promptStarted.TrySetResult();
+            return finishPrompt.Task;
+        }
+
+        await using var provider = new AcpProvider(Call);
+        AcpSession session = await provider.CreateAsync(@"C:\repo", "Active");
+        session.Loaded = true;
+        var activity = new List<int>();
+        provider.ActivityChanged += () => activity.Add(provider.ActiveTurns);
+
+        Task prompting = provider.PromptAsync("active", "Keep going");
+        await promptStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(1, provider.ActiveTurns);
+
+        finishPrompt.SetResult(JsonSerializer.SerializeToElement(new { }));
+        await prompting;
+
+        Assert.Equal(0, provider.ActiveTurns);
+        Assert.Equal([1, 0], activity);
+    }
+
     private static JsonElement Page(int start, int count, string? nextCursor)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;

@@ -19,6 +19,7 @@ public sealed class AgentPreferencesTests : IDisposable
         AgentPreferences preferences = store.Load();
 
         Assert.True(preferences.HideArchivedSessions);
+        Assert.True(preferences.AutomaticUpdates);
         Assert.False(File.Exists(PreferencesPath));
     }
 
@@ -27,10 +28,29 @@ public sealed class AgentPreferencesTests : IDisposable
     {
         var store = new AgentPreferencesStore(PreferencesPath);
 
-        string? problem = store.Save(new AgentPreferences { HideArchivedSessions = false });
+        string? problem = store.Save(new AgentPreferences
+        {
+            HideArchivedSessions = false,
+            AutomaticUpdates = false,
+        });
 
         Assert.Null(problem);
-        Assert.False(store.Load().HideArchivedSessions);
+        AgentPreferences saved = store.Load();
+        Assert.False(saved.HideArchivedSessions);
+        Assert.False(saved.AutomaticUpdates);
+    }
+
+    [Fact]
+    public void ExistingPreferencesEnableAutomaticUpdatesByDefault()
+    {
+        Directory.CreateDirectory(_directory);
+        File.WriteAllText(PreferencesPath, """{ "hideArchivedSessions": false }""");
+        var store = new AgentPreferencesStore(PreferencesPath);
+
+        AgentPreferences preferences = store.Load();
+
+        Assert.False(preferences.HideArchivedSessions);
+        Assert.True(preferences.AutomaticUpdates);
     }
 
     [Fact]
@@ -44,6 +64,7 @@ public sealed class AgentPreferencesTests : IDisposable
         AgentPreferences preferences = store.Load();
 
         Assert.True(preferences.HideArchivedSessions);
+        Assert.True(preferences.AutomaticUpdates);
         Assert.Single(messages);
         Assert.Contains("ignoring", messages[0], StringComparison.Ordinal);
     }

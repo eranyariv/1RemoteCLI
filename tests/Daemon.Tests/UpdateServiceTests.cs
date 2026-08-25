@@ -17,6 +17,8 @@ public sealed class UpdateServiceTests
     {
         StartupDelay = TimeSpan.Zero,
         Interval = TimeSpan.FromMilliseconds(10),
+        RetryDelay = TimeSpan.FromMilliseconds(10),
+        MaximumRetryDelay = TimeSpan.FromMilliseconds(20),
     };
 
     private static UpdateService Service(
@@ -25,14 +27,16 @@ public sealed class UpdateServiceTests
         Func<int>? liveSessions = null,
         Action? restart = null,
         UpdateOptions? options = null,
-        string current = "0.12") =>
+        string current = "0.12",
+        bool automaticUpdates = false) =>
         new(
             latestTag ?? (_ => Task.FromResult<string?>("v0.13")),
             install ?? ((_, _) => Task.FromResult(new UpdateResult(true, "Updated.", Replaced: true))),
             liveSessions ?? (() => 0),
             restart ?? (() => { }),
-            options ?? Immediate,
-            current);
+            options: options ?? Immediate,
+            currentVersion: current,
+            automaticUpdatesEnabled: automaticUpdates);
 
     [Fact]
     public async Task SaysNothingBeforeItHasLookedAsync()
@@ -298,6 +302,25 @@ public sealed class UpdateServiceTests
         Assert.Contains("3 sessions", status.Message!, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task RestartsAfterTheFinalSessionEndsAsync()
+    {
+        int sessions = 1;
+        int restarts = 0;
+        UpdateService updates = Service(
+            liveSessions: () => sessions,
+            restart: () => Interlocked.Increment(ref restarts));
+
+        await updates.CheckAsync();
+        await updates.InstallAsync();
+
+        sessions = 0;
+        updates.ActivityChanged();
+        updates.ActivityChanged();
+
+        Assert.Equal(1, restarts);
+    }
+
     /// <summary>
     /// Counted after the install, not before: downloading and verifying takes long
     /// enough for somebody to have started one in the meantime, and the point is not to
@@ -432,6 +455,169 @@ public sealed class UpdateServiceTests
         Assert.True(checks >= 3, $"expected repeated checks, got {checks}");
     }
 
+    [Fact]
+    public async Task AutomaticallyInstallsAndRestartsAnIdleAgentAsync()
+    {
+        int installs = 0;
+        using var stopping = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        UpdateService updates = Service(
+            install: (_, _) =>
+            {
+                Interlocked.Increment(ref installs);
+                return Task.FromResult(new UpdateResult(true, "Updated.", Replaced: true));
+            },
+            restart: stopping.Cancel,
+            automaticUpdates: true);
+
+        await updates.RunAsync(stopping.Token);
+
+        Assert.Equal(1, installs);
+        Assert.Equal(UpdateStage.Restart, updates.Status.Stage);
+    }
+
+    [Fact]
+    public async Task AutomaticInstallWaitsForTheFinalSessionAsync()
+    {
+        int sessions = 1;
+        int restarts = 0;
+        using var stopping = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var waiting = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        UpdateService updates = Service(
+            liveSessions: () => sessions,
+            restart: () =>
+            {
+                Interlocked.Increment(ref restarts);
+                stopping.Cancel();
+            },
+            options: Immediate with { Interval = TimeSpan.FromHours(1) },
+            automaticUpdates: true);
+        updates.Changed += () =>
+        {
+            if (updates.Status.Stage == UpdateStage.Restart)
+            {
+                waiting.TrySetResult();
+            }
+        };
+
+        Task running = updates.RunAsync(stopping.Token);
+        await waiting.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(0, restarts);
+
+        sessions = 0;
+        updates.ActivityChanged();
+        await running;
+
+        Assert.Equal(1, restarts);
+    }
+
+    [Fact]
+    public async Task TurningAutomaticUpdatesOffKeepsDiscoveryAndManualInstallAsync()
+    {
+        int installs = 0;
+        using var stopping = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        UpdateService updates = Service(
+            latestTag: _ =>
+            {
+                stopping.Cancel();
+                return Task.FromResult<string?>("v0.13");
+            },
+            install: (_, _) =>
+            {
+                Interlocked.Increment(ref installs);
+                return Task.FromResult(new UpdateResult(true, "Updated.", Replaced: true));
+            },
+            automaticUpdates: false);
+
+        await updates.RunAsync(stopping.Token);
+
+        Assert.Equal(0, installs);
+        Assert.Equal(UpdateStage.Available, updates.Status.Stage);
+
+        await updates.InstallAsync();
+        Assert.Equal(1, installs);
+    }
+
+    [Fact]
+    public async Task TurningAutomaticUpdatesOffStopsAnInFlightBackgroundCheckFromInstallingAsync()
+    {
+        int installs = 0;
+        using var stopping = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var checkStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var response = new TaskCompletionSource<string?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        UpdateService updates = Service(
+            latestTag: _ =>
+            {
+                checkStarted.TrySetResult();
+                return response.Task;
+            },
+            install: (_, _) =>
+            {
+                Interlocked.Increment(ref installs);
+                return Task.FromResult(new UpdateResult(true, "Updated.", Replaced: true));
+            },
+            options: Immediate with { Interval = TimeSpan.FromHours(1) },
+            automaticUpdates: true);
+        updates.Changed += () =>
+        {
+            if (updates.Status.Stage == UpdateStage.Available)
+            {
+                stopping.Cancel();
+            }
+        };
+
+        Task running = updates.RunAsync(stopping.Token);
+        await checkStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        updates.SetAutomaticUpdatesEnabled(false);
+        response.SetResult("v0.13");
+        await running;
+
+        Assert.Equal(0, installs);
+        Assert.Equal(UpdateStage.Available, updates.Status.Stage);
+    }
+
+    [Fact]
+    public async Task EnablingAutomaticUpdatesWakesTheLoopAsync()
+    {
+        using var stopping = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        UpdateService updates = Service(
+            restart: stopping.Cancel,
+            options: Immediate with { StartupDelay = TimeSpan.FromHours(1) },
+            automaticUpdates: false);
+
+        Task running = updates.RunAsync(stopping.Token);
+        updates.SetAutomaticUpdatesEnabled(true);
+        await running;
+
+        Assert.Equal(UpdateStage.Restart, updates.Status.Stage);
+    }
+
+    [Fact]
+    public async Task AutomaticFailuresRetryWithBackoffAsync()
+    {
+        int checks = 0;
+        using var stopping = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        UpdateService updates = Service(
+            latestTag: _ =>
+            {
+                int attempt = Interlocked.Increment(ref checks);
+                return attempt < 3
+                    ? throw new HttpRequestException("temporarily offline")
+                    : Task.FromResult<string?>("v0.13");
+            },
+            restart: stopping.Cancel,
+            automaticUpdates: true);
+
+        await updates.RunAsync(stopping.Token);
+
+        Assert.Equal(3, checks);
+        Assert.Equal(UpdateStage.Restart, updates.Status.Stage);
+    }
+
     /// <summary>
     /// An agent that stopped relaying because a version check threw would be a far worse
     /// bug than the one this feature exists to fix.
@@ -493,5 +679,33 @@ public sealed class UpdateServiceTests
 
         response.SetResult("v0.13");
         await completed.Task.WaitAsync(TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
+    public async Task ARequestedCheckDoesNotAutomaticallyInstallAsync()
+    {
+        int installs = 0;
+        var available = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        UpdateService updates = Service(
+            install: (_, _) =>
+            {
+                Interlocked.Increment(ref installs);
+                return Task.FromResult(new UpdateResult(true, "Updated.", Replaced: true));
+            },
+            automaticUpdates: true);
+        updates.Changed += () =>
+        {
+            if (updates.Status.Stage == UpdateStage.Available)
+            {
+                available.TrySetResult();
+            }
+        };
+
+        updates.CheckSoon();
+        await available.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(0, installs);
+        Assert.Equal(UpdateStage.Available, updates.Status.Stage);
     }
 }

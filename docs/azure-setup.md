@@ -234,6 +234,41 @@ Invoke-WebRequest https://1remotecli-hub.azurewebsites.net/health -UseBasicParsi
 # {"status":"ok","version":"0.01","utcNow":"..."}
 ```
 
+## Azure AI Speech (voice mode)
+
+Voice mode uses a Speech resource outside the hub's region because Azure AI
+Speech is not available in Israel Central.
+
+| | |
+| --- | --- |
+| Speech account | `1remotecli-speech` |
+| Kind / tier | `SpeechServices` / `S0` |
+| Region | `uaenorth` |
+| Key Vault | `oneremotecli-kv` (`israelcentral`, Azure RBAC enabled) |
+| Vault secret | `speech-subscription-key` |
+| Monthly budget | `1remotecli-speech-monthly`, USD 5, filtered to the Speech resource |
+| Budget alerts | 80% and 100%, sent to the project account |
+
+The hub has a system-assigned managed identity with the `Key Vault Secrets
+User` role on the vault. App Service holds a **versionless Key Vault
+reference**, not the Speech key:
+
+```text
+AzureSpeech__Region=uaenorth
+AzureSpeech__SubscriptionKey=@Microsoft.KeyVault(SecretUri=https://oneremotecli-kv.vault.azure.net/secrets/speech-subscription-key/)
+AzureSpeech__RecognitionLanguage=en-US
+AzureSpeech__VoiceName=en-US-AvaMultilingualNeural
+```
+
+The versionless reference means rotating the vault secret does not require
+changing App Service configuration. Restart the app (or refresh Key Vault
+references) after rotation. Never print the resolved app setting or commit the
+Speech key.
+
+The full architecture, limits, cost assumptions, browser constraints, and
+verification flow are in
+[Voice mode deployment](../specs/voice-mode-deployment.md).
+
 ## Notifications (VAPID)
 
 Web Push identifies the sender with a VAPID keypair — a P-256 key, base64url, with no padding. It is not an Azure resource and not an Entra credential; it is generated once and lives in app settings. Without it the hub starts, logs a warning, and serves 404 from `/push/vapid`, which the PWA reads as "notifications are off". Everything else keeps working.

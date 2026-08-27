@@ -583,8 +583,12 @@ public static class Program
             identity,
             sessions,
             hub,
-            log: Console.Error.WriteLine,
-            awaitingInput: AwaitingInputOptions.Load(log: Console.Error.WriteLine),
+            // The rolling log, not stderr. A tray app has no console attached, so
+            // everything the agent decided about a session -- the awaiting-input
+            // verdicts above all -- went nowhere, and why a notification fired is
+            // the first question anybody asks about one.
+            log: logger.Update,
+            awaitingInput: AwaitingInputOptions.Load(log: settingsLogger.Update),
             createChat: async (request, cancellationToken) =>
             {
                 if (request.CliType != CliType.CopilotCli)

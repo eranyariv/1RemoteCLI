@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using OneRemoteCli.Daemon.Agent;
+using OneRemoteCli.Protocol.Hub;
 
 namespace OneRemoteCli.Daemon.Tests;
 
@@ -27,6 +28,45 @@ public sealed class AwaitingInputHeuristicTests
             new ScreenPosture(true, true, "Do you want to allow this edit? (y/n)"));
 
         Assert.Equal(AwaitingInputVerdict.Quiet, AwaitingInputHeuristic.Evaluate(signals, Options));
+    }
+
+    [Fact]
+    public void An_agent_pausing_to_think_is_not_waiting()
+    {
+        // A coding agent stops printing for as long as the model takes to answer, and
+        // leaves a visible cursor in its input box the whole time -- by the rules
+        // above, indistinguishable from a screen waiting for a person. Twenty seconds
+        // of that is thinking, not a question, and notifying about it produced one
+        // push per pause that the user could do nothing with.
+        var signals = new IdleSignals(
+            Old,
+            TimeSpan.FromSeconds(20),
+            new ScreenPosture(true, true, "▶▶ auto mode on (shift+tab to cycle)"));
+
+        AwaitingInputOptions agent = Options.ForCliType(CliType.ClaudeCode);
+
+        Assert.Equal(AwaitingInputVerdict.No, AwaitingInputHeuristic.Evaluate(signals, agent));
+
+        // The same screen in a shell still is a prompt: eight seconds of silence there
+        // means the command finished. Only the agent gets the longer benefit of doubt.
+        Assert.Equal(
+            AwaitingInputVerdict.Quiet,
+            AwaitingInputHeuristic.Evaluate(signals, Options.ForCliType(CliType.PowerShell)));
+    }
+
+    [Fact]
+    public void An_agent_quiet_for_long_enough_is_still_reported()
+    {
+        // The other half: erring quiet must not mean going silent. A prompt nobody has
+        // answered for a minute is a prompt, whatever is running.
+        var signals = new IdleSignals(
+            Old,
+            TimeSpan.FromMinutes(1),
+            new ScreenPosture(true, true, "Do you want to proceed? (y/n)"));
+
+        Assert.Equal(
+            AwaitingInputVerdict.Quiet,
+            AwaitingInputHeuristic.Evaluate(signals, Options.ForCliType(CliType.ClaudeCode)));
     }
 
     [Fact]

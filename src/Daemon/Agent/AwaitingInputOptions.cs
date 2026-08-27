@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using OneRemoteCli.Protocol.Hub;
 
 namespace OneRemoteCli.Daemon.Agent;
 
@@ -20,6 +21,25 @@ public sealed partial record AwaitingInputOptions
 {
     /// <summary>Silence this long, with the screen in the right shape, means waiting.</summary>
     public TimeSpan QuietPeriod { get; init; } = TimeSpan.FromSeconds(8);
+
+    /// <summary>
+    /// The quiet period for a coding agent, which is much longer.
+    /// <para>
+    /// Eight seconds is a good reading of a shell, where silence means the command
+    /// finished and the prompt is back. It is a bad reading of an agent, which stops
+    /// printing for as long as the model takes to answer and leaves a cursor sitting
+    /// in its input box the whole time — a screen indistinguishable, by the rules
+    /// above, from one waiting for a person. The result was a notification per
+    /// thinking pause, none of which the user could act on.
+    /// </para>
+    /// <para>
+    /// Long enough that an agent still working is very unlikely to be this silent,
+    /// short enough that one genuinely waiting is reported while the user still
+    /// cares. It errs quiet: a late notification is a delay, an untrue one costs the
+    /// feature.
+    /// </para>
+    /// </summary>
+    public TimeSpan AgentQuietPeriod { get; init; } = TimeSpan.FromSeconds(45);
 
     /// <summary>
     /// A session younger than this is never flagged.
@@ -44,6 +64,18 @@ public sealed partial record AwaitingInputOptions
     /// </para>
     /// </summary>
     public IReadOnlyList<string> PromptPatterns { get; init; } = [];
+
+    /// <summary>
+    /// These options as they apply to one session.
+    /// <para>
+    /// The only thing that varies is how long silence has to last, and it varies by
+    /// what is running: see <see cref="AgentQuietPeriod"/>.
+    /// </para>
+    /// </summary>
+    public AwaitingInputOptions ForCliType(CliType cliType) =>
+        cliType is CliType.ClaudeCode or CliType.CopilotCli
+            ? this with { QuietPeriod = AgentQuietPeriod }
+            : this;
 
     public static AwaitingInputOptions Default { get; } = new();
 
@@ -92,6 +124,7 @@ public sealed partial record AwaitingInputOptions
             return Default with
             {
                 QuietPeriod = Seconds(settings.QuietPeriodSeconds) ?? Default.QuietPeriod,
+                AgentQuietPeriod = Seconds(settings.AgentQuietPeriodSeconds) ?? Default.AgentQuietPeriod,
                 MinimumUptime = Seconds(settings.MinimumUptimeSeconds) ?? Default.MinimumUptime,
                 PollInterval = Seconds(settings.PollIntervalSeconds) ?? Default.PollInterval,
                 PromptPatterns = settings.PromptPatterns ?? Default.PromptPatterns,
@@ -136,6 +169,7 @@ public sealed partial record AwaitingInputOptions
         return options with
         {
             QuietPeriod = Override("ONEREMOTE_QUIET_PERIOD_SECONDS", options.QuietPeriod)!.Value,
+            AgentQuietPeriod = Override("ONEREMOTE_AGENT_QUIET_PERIOD_SECONDS", options.AgentQuietPeriod)!.Value,
             MinimumUptime = Override("ONEREMOTE_MINIMUM_UPTIME_SECONDS", options.MinimumUptime)!.Value,
         };
     }
@@ -195,6 +229,8 @@ public sealed partial record AwaitingInputOptions
     private sealed class AwaitingInputSettings
     {
         public double? QuietPeriodSeconds { get; set; }
+
+        public double? AgentQuietPeriodSeconds { get; set; }
 
         public double? MinimumUptimeSeconds { get; set; }
 

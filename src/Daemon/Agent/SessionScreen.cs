@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 using OneRemoteCli.Terminal.Screen;
 using OneRemoteCli.Terminal.Vt;
 
@@ -144,26 +145,44 @@ public sealed class SessionScreen
     }
 
     /// <summary>
-    /// The prompt posture and a stable identity for the whole visible screen.
+    /// The prompt posture and an identity for the prompt itself.
     /// <para>
     /// Full-screen CLIs periodically repaint an unchanged view. The output counter
     /// advances for those bytes, but the repaint must not re-arm a notification.
     /// Reading both values under one lock ensures the posture and identity describe
     /// the same rendered frame.
     /// </para>
+    /// <para>
+    /// The identity is the cursor's own row, not the whole screen. Hashing every cell
+    /// meant a status bar carrying a spinner, an elapsed time or a token count — which
+    /// every coding agent draws — produced a new identity every time it ticked, so the
+    /// same unanswered prompt re-armed and re-announced itself for as long as the user
+    /// ignored it. A prompt lives on the cursor's row; that row changing is what makes
+    /// this a different question from the one already asked.
+    /// </para>
+    /// <para>
+    /// The cost is that two identical prompts in a row read as one, and only the first
+    /// is announced. That is the safe direction: the alternative is the nagging this
+    /// replaced.
+    /// </para>
     /// </summary>
     public AwaitingInputScreen AwaitingInputScreen()
     {
-        byte[] snapshot;
+        string row;
+        int column;
         ScreenPosture posture;
 
         lock (_gate)
         {
-            snapshot = VtSnapshotWriter.Serialize(_screen);
+            row = _screen.GetLine(_screen.CursorRow);
+            column = _screen.CursorColumn;
             posture = PostureCore();
         }
 
-        string fingerprint = Convert.ToHexString(SHA256.HashData(snapshot));
+        // The column is part of the identity: a prompt the user has begun typing an
+        // answer into is not the prompt that was announced.
+        byte[] identity = Encoding.UTF8.GetBytes($"{column}:{row}");
+        string fingerprint = Convert.ToHexString(SHA256.HashData(identity));
         return new AwaitingInputScreen(posture, fingerprint);
     }
 

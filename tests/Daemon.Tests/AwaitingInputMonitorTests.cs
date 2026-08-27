@@ -10,6 +10,17 @@ namespace OneRemoteCli.Daemon.Tests;
 /// </summary>
 public sealed class AwaitingInputMonitorTests
 {
+    /// <summary>
+    /// Long enough to be quiet by any of the thresholds.
+    /// <para>
+    /// Every session here runs <c>claude</c>, so it is judged by the agent quiet
+    /// period rather than the shorter one a shell gets. These tests are about what
+    /// the sweep decides once a screen has gone quiet, not about how long that
+    /// takes, so they say so in one place.
+    /// </para>
+    /// </summary>
+    private static readonly TimeSpan PastTheQuietPeriod = TimeSpan.FromSeconds(60);
+
     [Fact]
     public async Task A_permission_prompt_is_reported_once_the_screen_goes_quiet()
     {
@@ -17,13 +28,42 @@ public sealed class AwaitingInputMonitorTests
         TerminalSession session = world.Session();
 
         world.Write(session, "Reading src/Daemon/Agent/AgentHost.cs\r\n? Allow Copilot to edit this file? (y/n) ");
-        world.Advance(TimeSpan.FromSeconds(10));
+        world.Advance(PastTheQuietPeriod);
 
         await world.Monitor.SweepAsync();
 
         Assert.Single(world.Sink.Awaiting);
         Assert.Equal(session.SessionId, world.Sink.Awaiting[0].SessionId);
         Assert.Contains("(y/n)", world.Sink.Awaiting[0].Hint, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_ticking_status_bar_does_not_re_announce_the_same_prompt()
+    {
+        // The bug this exists for. A coding agent redraws a footer carrying a spinner,
+        // an elapsed time and a token count, so the screen is never byte-identical two
+        // sweeps running. Hashing the whole screen made every tick a new episode, and
+        // one unanswered prompt notified the user over and over -- which is precisely
+        // the training-to-ignore that the heuristic is written to avoid.
+        var world = new World();
+        TerminalSession session = world.Session();
+
+        const string prompt = "[2J[HAllow this edit? (y/n) ";
+        world.Write(session, prompt);
+        world.Advance(PastTheQuietPeriod);
+        await world.Monitor.SweepAsync();
+
+        Assert.Single(world.Sink.Awaiting);
+
+        // Same prompt, same cursor, only the footer moved on.
+        for (int seconds = 40; seconds < 44; seconds++)
+        {
+            world.Write(session, $"7[24;1HElucidating... ({seconds}s · {seconds * 30} tokens)8");
+            world.Advance(PastTheQuietPeriod);
+            await world.Monitor.SweepAsync();
+        }
+
+        Assert.Single(world.Sink.Awaiting);
     }
 
     [Fact]
@@ -50,7 +90,7 @@ public sealed class AwaitingInputMonitorTests
         TerminalSession session = world.Session();
 
         world.Write(session, "Continue? ");
-        world.Advance(TimeSpan.FromSeconds(10));
+        world.Advance(PastTheQuietPeriod);
 
         await world.Monitor.SweepAsync();
         world.Advance(TimeSpan.FromMinutes(30));
@@ -70,11 +110,11 @@ public sealed class AwaitingInputMonitorTests
         TerminalSession session = world.Session();
 
         world.Write(session, "Continue? ");
-        world.Advance(TimeSpan.FromSeconds(10));
+        world.Advance(PastTheQuietPeriod);
         await world.Monitor.SweepAsync();
 
         world.Write(session, "y\r\nDone. Next? ");
-        world.Advance(TimeSpan.FromSeconds(10));
+        world.Advance(PastTheQuietPeriod);
         await world.Monitor.SweepAsync();
 
         Assert.Equal(2, world.Sink.Awaiting.Count);
@@ -89,11 +129,11 @@ public sealed class AwaitingInputMonitorTests
 
         const string screen = "\u001b[2J\u001b[HClaude Code\r\n\u25b6\u25b6 auto mode on (shift+tab to cycle)\r\n  \u00b7 \u2190 for agents";
         world.Write(session, screen);
-        world.Advance(TimeSpan.FromSeconds(10));
+        world.Advance(PastTheQuietPeriod);
         await world.Monitor.SweepAsync();
 
         world.Write(session, screen);
-        world.Advance(TimeSpan.FromSeconds(10));
+        world.Advance(PastTheQuietPeriod);
         await world.Monitor.SweepAsync();
 
         Assert.Single(world.Sink.Awaiting);
@@ -151,7 +191,7 @@ public sealed class AwaitingInputMonitorTests
         TerminalSession session = world.Session();
 
         world.Write(session, "Continue? ");
-        world.Advance(TimeSpan.FromSeconds(10));
+        world.Advance(PastTheQuietPeriod);
 
         await world.Monitor.SweepAsync();
 
@@ -165,7 +205,7 @@ public sealed class AwaitingInputMonitorTests
         TerminalSession session = world.Session();
 
         world.Write(session, "Continue? ");
-        world.Advance(TimeSpan.FromSeconds(10));
+        world.Advance(PastTheQuietPeriod);
         await world.Monitor.SweepAsync();
 
         world.Sessions.Remove(session.SessionId);

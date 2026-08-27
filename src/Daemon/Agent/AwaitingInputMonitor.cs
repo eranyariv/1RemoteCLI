@@ -129,7 +129,11 @@ public sealed class AwaitingInputMonitor
                 now - session.LastOutputUtc,
                 posture);
 
-            AwaitingInputVerdict verdict = AwaitingInputHeuristic.Evaluate(signals, _options, _patterns);
+            // What is running decides how long silence has to last before it means
+            // anything. An agent pausing to think is not a shell sitting at a prompt.
+            AwaitingInputOptions options = _options.ForCliType(session.CliType);
+
+            AwaitingInputVerdict verdict = AwaitingInputHeuristic.Evaluate(signals, options, _patterns);
             if (verdict == AwaitingInputVerdict.No)
             {
                 continue;
@@ -147,7 +151,7 @@ public sealed class AwaitingInputMonitor
                     now - session.StartedUtc,
                     now - session.LastOutputUtc,
                     posture);
-                verdict = AwaitingInputHeuristic.Evaluate(signals, _options, _patterns);
+                verdict = AwaitingInputHeuristic.Evaluate(signals, options, _patterns);
 
                 if (verdict == AwaitingInputVerdict.No)
                 {

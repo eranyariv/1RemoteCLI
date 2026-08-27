@@ -17,6 +17,7 @@ import type { RelayClient } from '../relay/client'
 import { sessionLabel } from '../relay/machines'
 import { AcpContentBlocks, AcpEventView, type AcpDetailLevel } from './AcpEventView'
 import { MarkdownText } from './MarkdownText'
+import { useLockHorizontalPan } from './useLockHorizontalPan'
 
 type DetailLevel = AcpDetailLevel
 
@@ -67,6 +68,7 @@ export function ChatView({
   const [attachments, setAttachments] = useState<ChatAttachmentDraft[]>([])
   const [composerError, setComposerError] = useState<string | null>(null)
   const bottom = useRef<HTMLDivElement>(null)
+  const screenRef = useRef<HTMLElement | null>(null)
   const fileInput = useRef<HTMLInputElement | null>(null)
   const imageInput = useRef<HTMLInputElement | null>(null)
   const cameraInput = useRef<HTMLInputElement | null>(null)
@@ -332,8 +334,13 @@ export function ChatView({
     setSending(false)
   }
 
+  useLockHorizontalPan(screenRef)
+
   return (
-    <section className="fixed inset-0 z-20 flex min-w-0 max-w-full flex-col overflow-x-hidden bg-slate-950 text-slate-100">
+    <section
+      ref={screenRef}
+      className="fixed inset-0 z-20 flex min-w-0 max-w-full flex-col overflow-x-hidden bg-slate-950 text-slate-100"
+    >
       <header className="flex min-w-0 max-w-full items-center gap-3 border-b border-slate-800 px-3 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
         <button
           type="button"

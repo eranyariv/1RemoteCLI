@@ -1,6 +1,8 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
+import { PAN_X } from './useLockHorizontalPan'
+
 export function MarkdownText({ children }: { children: string }) {
   return (
     <ReactMarkdown
@@ -70,13 +72,14 @@ export function MarkdownText({ children }: { children: string }) {
         pre: ({ children: content, ...props }) => (
           <pre
             {...props}
+            {...PAN_X}
             className="my-3 max-w-full overflow-x-auto rounded-lg bg-slate-950/80 p-3 font-mono text-xs leading-5 text-slate-200"
           >
             {content}
           </pre>
         ),
         table: ({ children: content, ...props }) => (
-          <div className="my-3 max-w-full overflow-x-auto rounded-lg border border-slate-700">
+          <div {...PAN_X} className="my-3 max-w-full overflow-x-auto rounded-lg border border-slate-700">
             <table {...props} className="w-full min-w-max border-collapse text-left text-xs">
               {content}
             </table>

@@ -31,6 +31,7 @@ import { downloadTrace } from '../terminal/trace'
 import { pasteClipboardText, quoteTerminalPath } from '../terminal/attachment'
 import { useAttachedSession } from '../terminal/useAttachedSession'
 import { Banner } from './Chrome'
+import { PAN_X, useLockHorizontalPan } from './useLockHorizontalPan'
 
 export interface TerminalViewProps {
   client: RelayClient
@@ -67,6 +68,7 @@ const THEME = {
 
 export function TerminalView({ client, connected, machine, session, onClose }: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
+  const screenRef = useRef<HTMLDivElement | null>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -433,10 +435,13 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
     )
   }, [attached, session.program, machine.displayName, geometry.cols, geometry.rows])
 
+  useLockHorizontalPan(screenRef)
+
   const tone = verdict(attached.latency.p50)
 
   return (
     <div
+      ref={screenRef}
       className="fixed inset-x-0 top-0 z-20 flex flex-col bg-slate-950"
       style={{ height: '100dvh', ...viewportStyle(box) }}
     >
@@ -534,7 +539,19 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
 
       {attached.missedOutput ? (
         <div className="px-3 pt-3">
-          <Banner tone="warning" title="Some output was missed">
+          <Banner
+            tone="warning"
+            title="Some output was missed"
+            action={
+              <button
+                type="button"
+                onClick={attached.dismissMissedOutput}
+                className="min-h-10 rounded-lg border border-amber-400/40 px-4 text-sm"
+              >
+                Dismiss
+              </button>
+            }
+          >
             The connection dropped and the gap could not be recovered. What is on screen
             may not be the whole story.
           </Banner>
@@ -619,7 +636,7 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
         {showActions ? (
           <div className="border-b border-slate-800 px-2 py-2">
             {showOnScreenKeys && catalog.shortcuts.length > 0 ? (
-              <div className="flex items-center gap-1 overflow-x-auto pb-2">
+              <div {...PAN_X} className="flex items-center gap-1 overflow-x-auto pb-2">
                 {catalog.shortcuts.map((key) => (
                   <KeyButton key={key.name} definition={key} onPress={press} />
                 ))}
@@ -678,7 +695,7 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
           </div>
         ) : null}
 
-        <div className="flex items-center gap-1 overflow-x-auto px-2 py-2">
+        <div {...PAN_X} className="flex items-center gap-1 overflow-x-auto px-2 py-2">
           {showOnScreenKeys ? (
             <>
               <ModifierButton

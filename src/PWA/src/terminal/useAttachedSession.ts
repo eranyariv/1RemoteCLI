@@ -23,6 +23,12 @@ export interface AttachedSession {
   lastSeq: number | null
   /** True when a re-attach found a gap the hub could not fill. */
   missedOutput: boolean
+  /**
+   * Acknowledges the gap notice. Clearing the flag rather than hiding the banner
+   * locally is deliberate: a later gap sets it again, so dismissing this one does
+   * not silence the next.
+   */
+  dismissMissedOutput(): void
   latency: LatencyStats
   recorder: TraceRecorder
   recording: boolean
@@ -267,6 +273,8 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
     setRecording(false)
   }, [recorder])
 
+  const dismissMissedOutput = useCallback(() => setMissedOutput(false), [])
+
   const retry = useCallback(() => {
     finished.current = false
     setEndedWhileAway(false)
@@ -280,6 +288,7 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
     endedWhileAway,
     lastSeq: position.current.applied,
     missedOutput,
+    dismissMissedOutput,
     latency,
     recorder,
     recording,

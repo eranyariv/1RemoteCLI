@@ -109,6 +109,39 @@ describe('useAttachedSession', () => {
     await waitFor(() => expect(relay.attach).toHaveBeenLastCalledWith('machine-1', 'session-1', 80, 25, 41))
   })
 
+  it('re-arms the gap notice after it is dismissed, so a second gap is not swallowed', async () => {
+    const { result } = renderHook((connected: boolean) => useAttachedSession(options(relay, connected)), {
+      initialProps: true,
+    })
+
+    await waitFor(() => expect(result.current.state).toBe('attached'))
+
+    const gap = (seq: number) =>
+      act(() => {
+        relay.emit('terminalOutput', {
+          sessionId: 'session-1',
+          seq,
+          kind: 0,
+          data: new Uint8Array([104, 105]),
+        })
+      })
+
+    // Sequence 1 arrives, then 9: everything between them is output we will never
+    // see, and the user is told so.
+    gap(1)
+    gap(9)
+    expect(result.current.missedOutput).toBe(true)
+
+    act(() => result.current.dismissMissedOutput())
+    expect(result.current.missedOutput).toBe(false)
+
+    // The point of the dismissal is to reclaim the space, not to opt out of being
+    // told again. A later gap is a new fact about a new stretch of the session, and
+    // acknowledging the first must not hide it.
+    gap(20)
+    expect(result.current.missedOutput).toBe(true)
+  })
+
   it('says the session ended when it is gone on the way back', async () => {
     const { result, rerender } = renderHook((connected: boolean) => useAttachedSession(options(relay, connected)), {
       initialProps: true,

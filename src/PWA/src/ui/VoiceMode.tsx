@@ -766,9 +766,22 @@ export function VoiceMode({
         type="button"
         onClick={startVoice}
         aria-label="Start voice mode"
-        className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-[max(1rem,env(safe-area-inset-right))] z-40 min-h-12 rounded-full border border-sky-400/50 bg-sky-500 px-5 text-sm font-semibold text-slate-950 shadow-lg shadow-sky-950/50 transition active:bg-sky-300"
+        title="Start voice mode"
+        className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-[max(1rem,env(safe-area-inset-right))] z-40 flex size-12 items-center justify-center rounded-full border border-sky-400/50 bg-sky-500 text-slate-950 shadow-lg shadow-sky-950/50 transition active:bg-sky-300"
       >
-        Voice mode
+        <svg
+          viewBox="0 0 24 24"
+          className="size-6"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden
+        >
+          <rect x="9" y="2" width="6" height="12" rx="3" />
+          <path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8" />
+        </svg>
       </button>
     )
   }

@@ -214,6 +214,29 @@ describe('VoiceMode', () => {
 
   afterEach(cleanup)
 
+  it('shows an icon-only microphone button with an accessible name', () => {
+    const provider = new FakeSpeechProvider()
+    const relay = new FakeRelay()
+
+    render(
+      <VoiceMode
+        client={relay.client}
+        relayStatus="connected"
+        projects={[general]}
+        machines={[machine]}
+        selectedProjectId={null}
+        onSelectProject={() => {}}
+        onOpenSession={() => {}}
+        onCloseSession={() => {}}
+        createProvider={() => provider}
+      />,
+    )
+
+    const button = screen.getByRole('button', { name: 'Start voice mode' })
+    expect(button.textContent).toBe('')
+    expect(button.querySelector('svg[aria-hidden="true"]')).not.toBeNull()
+  })
+
   it('selects an ACP session and exchanges three turns without touch input', async () => {
     const view = setup()
 

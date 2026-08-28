@@ -577,7 +577,7 @@ export function ChatView({
           <button
             type="submit"
             disabled={!canSend}
-            className="min-h-12 self-end rounded-xl bg-sky-600 px-4 text-sm font-semibold disabled:opacity-40"
+            className="mr-16 min-h-12 self-end rounded-xl bg-sky-600 px-4 text-sm font-semibold disabled:opacity-40"
           >
             {sending ? 'Sending…' : uploading ? 'Attaching…' : 'Send'}
           </button>

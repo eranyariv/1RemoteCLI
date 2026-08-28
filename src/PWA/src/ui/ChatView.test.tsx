@@ -138,6 +138,20 @@ describe('ChatView', () => {
 
   afterEach(cleanup)
 
+  it('keeps the Send button clear of the floating voice microphone', () => {
+    render(
+      <ChatView
+        client={relay.client}
+        connected
+        machine={machine}
+        session={session}
+        onClose={() => {}}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'Send' }).className).toContain('mr-16')
+  })
+
   it('attaches, renders a snapshot, and replaces delta events by id', async () => {
     render(
       <ChatView

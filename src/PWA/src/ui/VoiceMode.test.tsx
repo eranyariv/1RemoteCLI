@@ -169,7 +169,6 @@ function setup(selectedSession?: SessionInfo, initialRelayStatus: RelayStatus = 
     projects: [general],
     machines: [machine],
     selectedProjectId: null,
-    sessionOpen: selectedSession !== undefined,
     onSelectProject,
     onOpenSession,
     onCloseSession,
@@ -183,7 +182,6 @@ function setup(selectedSession?: SessionInfo, initialRelayStatus: RelayStatus = 
       projects={[general]}
       machines={[machine]}
       selectedProjectId={null}
-      sessionOpen={false}
       onSelectProject={onSelectProject}
       onOpenSession={onOpenSession}
       onCloseSession={onCloseSession}
@@ -227,7 +225,6 @@ describe('VoiceMode', () => {
         projects={[general]}
         machines={[machine]}
         selectedProjectId={null}
-        sessionOpen={false}
         onSelectProject={() => {}}
         onOpenSession={() => {}}
         onCloseSession={() => {}}
@@ -239,31 +236,6 @@ describe('VoiceMode', () => {
     expect(button.textContent).toBe('')
     expect(button.querySelector('svg[aria-hidden="true"]')).not.toBeNull()
     expect(button.className).toContain('bottom-[max(1rem,env(safe-area-inset-bottom))]')
-  })
-
-  it('moves the microphone clear of an open session composer', () => {
-    const provider = new FakeSpeechProvider()
-    const relay = new FakeRelay()
-
-    render(
-      <VoiceMode
-        client={relay.client}
-        relayStatus="connected"
-        projects={[general]}
-        machines={[machine]}
-        selectedProjectId={general.projectId}
-        sessionOpen
-        onSelectProject={() => {}}
-        onOpenSession={() => {}}
-        onCloseSession={() => {}}
-        createProvider={() => provider}
-      />,
-    )
-
-    const button = screen.getByRole('button', { name: 'Start voice mode' })
-    expect(button.className).toContain(
-      'bottom-[calc(max(1rem,env(safe-area-inset-bottom))+6rem)]',
-    )
   })
 
   it('selects an ACP session and exchanges three turns without touch input', async () => {

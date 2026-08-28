@@ -334,7 +334,6 @@ export default function App() {
         projects={relay.projects}
         machines={relay.machines}
         selectedProjectId={selectedProjectId}
-        sessionOpen={showing !== null}
         onSelectProject={setSelectedProjectId}
         onOpenSession={openSession}
         onCloseSession={closeSession}

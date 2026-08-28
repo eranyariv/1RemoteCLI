@@ -46,7 +46,6 @@ export interface VoiceModeProps {
   projects: readonly ProjectInfo[]
   machines: readonly MachineInfo[]
   selectedProjectId: string | null
-  sessionOpen: boolean
   onSelectProject(projectId: string | null): void
   onOpenSession(machine: MachineInfo, session: SessionInfo): void
   onCloseSession(): void
@@ -119,7 +118,6 @@ export function VoiceMode({
   projects,
   machines,
   selectedProjectId,
-  sessionOpen,
   onSelectProject,
   onOpenSession,
   onCloseSession,
@@ -769,11 +767,7 @@ export function VoiceMode({
         onClick={startVoice}
         aria-label="Start voice mode"
         title="Start voice mode"
-        className={`fixed right-[max(1rem,env(safe-area-inset-right))] z-40 flex size-12 items-center justify-center rounded-full border border-sky-400/50 bg-sky-500 text-slate-950 shadow-lg shadow-sky-950/50 transition active:bg-sky-300 ${
-          sessionOpen
-            ? 'bottom-[calc(max(1rem,env(safe-area-inset-bottom))+6rem)]'
-            : 'bottom-[max(1rem,env(safe-area-inset-bottom))]'
-        }`}
+        className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-[max(1rem,env(safe-area-inset-right))] z-40 flex size-12 items-center justify-center rounded-full border border-sky-400/50 bg-sky-500 text-slate-950 shadow-lg shadow-sky-950/50 transition active:bg-sky-300"
       >
         <svg
           viewBox="0 0 24 24"

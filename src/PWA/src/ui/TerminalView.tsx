@@ -29,6 +29,7 @@ import { applyOutput } from '../terminal/apply'
 import { verdict } from '../terminal/latency'
 import { downloadTrace } from '../terminal/trace'
 import { pasteClipboardText, quoteTerminalPath } from '../terminal/attachment'
+import { refocusTerminalIfActive } from '../terminal/focus'
 import { useAttachedSession } from '../terminal/useAttachedSession'
 import { Banner } from './Chrome'
 import { PAN_X, useLockHorizontalPan } from './useLockHorizontalPan'
@@ -281,9 +282,7 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
         attached.send(encodeKey(key, consumeModifiers()))
       }
 
-      // Keep focus on the terminal so the software keyboard does not dismiss after
-      // every tap on the key row.
-      termRef.current?.focus()
+      refocusTerminalIfActive(hostRef.current, termRef.current)
     },
     [attached, consumeModifiers],
   )
@@ -302,7 +301,7 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
       return next
     })
 
-    termRef.current?.focus()
+    refocusTerminalIfActive(hostRef.current, termRef.current)
   }, [])
 
   /**
@@ -315,7 +314,7 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
   const type = useCallback(
     (command: CommandDefinition) => {
       attached.send(encodeText(command.text))
-      termRef.current?.focus()
+      refocusTerminalIfActive(hostRef.current, termRef.current)
     },
     [attached],
   )
@@ -332,7 +331,7 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
     (next: CliType) => {
       setShowPicker(false)
       void client.setSessionType(session.sessionId, next)
-      termRef.current?.focus()
+      refocusTerminalIfActive(hostRef.current, termRef.current)
     },
     [client, session.sessionId],
   )
@@ -359,7 +358,7 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
 
       const text = await navigator.clipboard.readText()
       if (text.length > 0 && termRef.current) pasteClipboardText(termRef.current, text)
-      termRef.current?.focus()
+      refocusTerminalIfActive(hostRef.current, termRef.current)
     } catch (error) {
       setTransferError(error instanceof Error ? error.message : 'The clipboard could not be read.')
     }
@@ -407,7 +406,7 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
             quoteTerminalPath(outcome.remotePath, session.cliType),
           )
         }
-        termRef.current?.focus()
+        refocusTerminalIfActive(hostRef.current, termRef.current)
       }
     },
     [client, session.cliType, session.sessionId],

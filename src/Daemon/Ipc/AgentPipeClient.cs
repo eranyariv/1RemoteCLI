@@ -81,6 +81,7 @@ public sealed class AgentPipeClient : IAgentConnection
     private readonly object _ioGate = new();
     private readonly List<byte> _unsafeScreenTail = [];
     private bool _discardingOversizedUnsafeTail;
+    private bool _snapshotPending;
 
     private readonly CancellationTokenSource _stopping = new();
     private readonly Task _pump;
@@ -232,6 +233,11 @@ public sealed class AgentPipeClient : IAgentConnection
     {
         lock (_ioGate)
         {
+            if (_fault is Exception fault)
+            {
+                throw new IOException("The agent connection was lost.", fault);
+            }
+
             // Fed to the mirror before it is queued for the wire: whatever this call
             // enqueues, successfully delivered or later discarded by a reconnect, is
             // by then already part of the picture a reconnect would replay instead.
@@ -266,7 +272,22 @@ public sealed class AgentPipeClient : IAgentConnection
                 return ValueTask.CompletedTask;
             }
 
-            EnqueueOrThrow(PipeMessageKind.Output, new OutputMessage { Bytes = bytes.ToArray() });
+            if (_snapshotPending)
+            {
+                return ValueTask.CompletedTask;
+            }
+
+            PipeEnvelope output = PipeFraming.Encode(
+                PipeMessageKind.Output,
+                new OutputMessage { Bytes = bytes.ToArray() });
+            if (!_outbound.Writer.TryWrite(output))
+            {
+                // The mirror already contains every queued byte, including this one.
+                // Once the writer catches up it replaces the redundant queue with one
+                // current-screen repaint, without blocking the desk terminal or
+                // tearing down an otherwise healthy session.
+                _snapshotPending = true;
+            }
         }
 
         return ValueTask.CompletedTask;
@@ -287,7 +308,27 @@ public sealed class AgentPipeClient : IAgentConnection
                 return ValueTask.CompletedTask;
             }
 
-            EnqueueOrThrow(PipeMessageKind.SessionClosed, new SessionClosedMessage { ExitCode = exitCode });
+            PipeEnvelope closed = PipeFraming.Encode(
+                PipeMessageKind.SessionClosed,
+                new SessionClosedMessage { ExitCode = exitCode });
+            if (!_outbound.Writer.TryWrite(closed))
+            {
+                // Output can be replaced by the current-screen snapshot; the close
+                // cannot. Make room for it and let the writer send repaint, then the
+                // real exit code, in that order.
+                while (_outbound.Reader.TryPeek(out PipeEnvelope? queued) &&
+                       queued.Kind == PipeMessageKind.Output)
+                {
+                    _outbound.Reader.TryRead(out _);
+                }
+
+                _snapshotPending = true;
+                if (!_outbound.Writer.TryWrite(closed))
+                {
+                    Fault(new IOException("The agent command queue could not accept the session close."));
+                    throw new IOException("The agent connection was lost.", _fault);
+                }
+            }
         }
 
         return ValueTask.CompletedTask;
@@ -435,6 +476,7 @@ public sealed class AgentPipeClient : IAgentConnection
                         PipeMessageKind.Output,
                         new OutputMessage { Bytes = [.. _unsafeScreenTail] });
                 }
+                _snapshotPending = false;
                 _reconnecting = false;
             }
 
@@ -602,6 +644,52 @@ public sealed class AgentPipeClient : IAgentConnection
                 catch (Exception ex) when (ex is IOException or ObjectDisposedException)
                 {
                     return true;
+                }
+
+                byte[]? snapshot = null;
+                byte[]? unsafeTail = null;
+
+                lock (_ioGate)
+                {
+                    if (_snapshotPending)
+                    {
+                        while (_outbound.Reader.TryPeek(out PipeEnvelope? queued) &&
+                               queued.Kind == PipeMessageKind.Output)
+                        {
+                            _outbound.Reader.TryRead(out _);
+                        }
+
+                        snapshot = _screen.Snapshot();
+                        unsafeTail = _unsafeScreenTail.Count > 0 ? [.. _unsafeScreenTail] : null;
+                        _snapshotPending = false;
+                    }
+                }
+
+                if (snapshot is not null)
+                {
+                    try
+                    {
+                        await connection.SendAsync(
+                            PipeMessageKind.Output,
+                            new OutputMessage { Bytes = snapshot },
+                            cancellationToken).ConfigureAwait(false);
+
+                        if (unsafeTail is not null)
+                        {
+                            await connection.SendAsync(
+                                PipeMessageKind.Output,
+                                new OutputMessage { Bytes = unsafeTail },
+                                cancellationToken).ConfigureAwait(false);
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return false;
+                    }
+                    catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+                    {
+                        return true;
+                    }
                 }
             }
         }

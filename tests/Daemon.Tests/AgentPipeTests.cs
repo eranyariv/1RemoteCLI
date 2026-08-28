@@ -500,12 +500,12 @@ public class AgentPipeTests
     }
 
     /// <summary>
-    /// The reconnect work must not weaken the existing backpressure rule: a link that
-    /// cannot keep up is still a real problem the user must be told about, loudly and
-    /// permanently, not something retried past silently.
+    /// A slow agent must not block the desk terminal or permanently end sharing. The
+    /// current-screen mirror makes the accumulated raw frames redundant, so pressure
+    /// is recovered by replacing the backlog with one current repaint.
     /// </summary>
     [Fact]
-    public async Task StillTreatsAFullOutboundQueueAsALoudPermanentFailure()
+    public async Task RecoversAFullOutboundQueueWithAScreenSnapshot()
     {
         string name = UniquePipeName();
 
@@ -535,15 +535,52 @@ public class AgentPipeTests
         // shape as a redraw arriving faster than a slow phone connection can carry
         // it, not a dropped pipe, so this is the ordinary overflow rule rather than
         // reconnect.
-        byte[] chunk = new byte[64];
-
-        await Assert.ThrowsAsync<IOException>(async () =>
+        for (int i = 0; i < 2000; i++)
         {
-            for (int i = 0; i < 2000; i++)
-            {
-                await client.SendOutputAsync(chunk, CancellationToken.None);
-            }
-        });
+            await client.SendOutputAsync(
+                Encoding.UTF8.GetBytes($"line {i}\r\n"),
+                CancellationToken.None);
+        }
+        await client.SendOutputAsync("final-marker"u8.ToArray(), CancellationToken.None);
+
+        PipeEnvelope repaint;
+        do
+        {
+            repaint = await Receive(agentSide);
+        }
+        while (!Encoding.UTF8.GetString(
+            PipeFraming.DecodePayload<OutputMessage>(repaint).Bytes).Contains(
+                "final-marker",
+                StringComparison.Ordinal));
+
+        await client.SendOutputAsync("steady again"u8.ToArray(), CancellationToken.None);
+        PipeEnvelope steady = await Receive(agentSide);
+        Assert.Equal(
+            "steady again",
+            Encoding.UTF8.GetString(PipeFraming.DecodePayload<OutputMessage>(steady).Bytes));
+
+        for (int i = 0; i < 2000; i++)
+        {
+            await client.SendOutputAsync(
+                Encoding.UTF8.GetBytes($"closing line {i}\r\n"),
+                CancellationToken.None);
+        }
+        await client.SendOutputAsync("final-close-marker"u8.ToArray(), CancellationToken.None);
+        await client.CloseSessionAsync(7, CancellationToken.None);
+
+        PipeEnvelope finalRepaint;
+        do
+        {
+            finalRepaint = await Receive(agentSide);
+        }
+        while (!Encoding.UTF8.GetString(
+            PipeFraming.DecodePayload<OutputMessage>(finalRepaint).Bytes).Contains(
+                "final-close-marker",
+                StringComparison.Ordinal));
+
+        PipeEnvelope closed = await Receive(agentSide);
+        Assert.Equal(PipeMessageKind.SessionClosed, closed.Kind);
+        Assert.Equal(7, PipeFraming.DecodePayload<SessionClosedMessage>(closed).ExitCode);
     }
 
     /// <summary>

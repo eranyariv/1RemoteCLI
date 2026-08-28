@@ -225,6 +225,7 @@ describe('VoiceMode', () => {
         projects={[general]}
         machines={[machine]}
         selectedProjectId={null}
+        agentChatOpen
         onSelectProject={() => {}}
         onOpenSession={() => {}}
         onCloseSession={() => {}}
@@ -235,7 +236,9 @@ describe('VoiceMode', () => {
     const button = screen.getByRole('button', { name: 'Start voice mode' })
     expect(button.textContent).toBe('')
     expect(button.querySelector('svg[aria-hidden="true"]')).not.toBeNull()
-    expect(button.className).toContain('bottom-[max(1rem,env(safe-area-inset-bottom))]')
+    expect(button.className).toContain(
+      'bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+4rem)]',
+    )
   })
 
   it('selects an ACP session and exchanges three turns without touch input', async () => {

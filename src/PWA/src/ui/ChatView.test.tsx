@@ -138,7 +138,7 @@ describe('ChatView', () => {
 
   afterEach(cleanup)
 
-  it('keeps the Send button clear of the floating voice microphone', () => {
+  it('reserves space between the composer divider and Send button for voice mode', () => {
     render(
       <ChatView
         client={relay.client}
@@ -149,7 +149,9 @@ describe('ChatView', () => {
       />,
     )
 
-    expect(screen.getByRole('button', { name: 'Send' }).className).toContain('mr-16')
+    const form = screen.getByRole('button', { name: 'Send' }).closest('form')
+    expect(form?.className).toContain('pt-[4.5rem]')
+    expect(screen.getByRole('button', { name: 'Send' }).className).not.toContain('mr-16')
   })
 
   it('attaches, renders a snapshot, and replaces delta events by id', async () => {
@@ -396,6 +398,59 @@ describe('ChatView', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Compact' }))
     expect(screen.queryByText('Inspect files')).toBeNull()
+  })
+
+  it('keeps active operations collapsed in Compact until explicitly opened', () => {
+    render(
+      <ChatView
+        client={relay.client}
+        connected
+        machine={machine}
+        session={session}
+        onClose={() => {}}
+      />,
+    )
+
+    act(() => {
+      relay.emit({
+        sessionId: 'chat-1',
+        seq: 6,
+        kind: 'Snapshot',
+        events: [
+          chatEvent({
+            eventId: 'tool-active',
+            kind: 'ToolCall',
+            text: 'Verbose deployment output',
+            title: 'Deploy corrected version',
+            status: 'pending',
+            toolKind: 'terminal',
+          }),
+          chatEvent({
+            eventId: 'plan-active',
+            kind: 'Plan',
+            text: '',
+            planEntries: [
+              { content: 'Wait for deployment', priority: 'medium', status: 'in_progress' },
+            ],
+          }),
+        ],
+      })
+    })
+
+    expect(screen.getByText('Verbose deployment output')).toBeTruthy()
+    expect(screen.getByText('Wait for deployment')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Compact' }))
+
+    const tool = screen.getByRole('button', { name: /Deploy corrected version.*pending/ })
+    const plan = screen.getByRole('button', { name: /Plan.*0\/1/ })
+    expect(tool.getAttribute('aria-expanded')).toBe('false')
+    expect(plan.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('Verbose deployment output')).toBeNull()
+    expect(screen.queryByText('Wait for deployment')).toBeNull()
+
+    fireEvent.click(tool)
+    expect(screen.getByText('Verbose deployment output')).toBeTruthy()
   })
 
   it('renders AionUi-style thoughts, plans, locations, and diffs', () => {

@@ -334,6 +334,7 @@ export default function App() {
         projects={relay.projects}
         machines={relay.machines}
         selectedProjectId={selectedProjectId}
+        agentChatOpen={showing?.session.kind === 'AgentChat'}
         onSelectProject={setSelectedProjectId}
         onOpenSession={openSession}
         onCloseSession={closeSession}

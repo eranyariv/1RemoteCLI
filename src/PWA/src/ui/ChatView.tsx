@@ -418,7 +418,7 @@ export function ChatView({
 
       <form
         onSubmit={(event) => void send(event)}
-        className="border-t border-slate-800 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3"
+        className="border-t border-slate-800 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-[4.5rem]"
       >
         {canAttach ? (
           <>
@@ -577,7 +577,7 @@ export function ChatView({
           <button
             type="submit"
             disabled={!canSend}
-            className="mr-16 min-h-12 self-end rounded-xl bg-sky-600 px-4 text-sm font-semibold disabled:opacity-40"
+            className="min-h-12 self-end rounded-xl bg-sky-600 px-4 text-sm font-semibold disabled:opacity-40"
           >
             {sending ? 'Sending…' : uploading ? 'Attaching…' : 'Send'}
           </button>

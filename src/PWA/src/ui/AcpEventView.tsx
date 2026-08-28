@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 import type { ChatContentBlock, ChatEvent } from '../protocol/wire'
 
@@ -83,11 +83,19 @@ function PlanView({
   detailLevel: AcpDetailLevel
 }) {
   const [expanded, setExpanded] = useState(detailLevel !== 'compact')
+  const previousDetailLevel = useRef(detailLevel)
   const completed = item.planEntries.filter((entry) => entry.status === 'completed').length
   const running = item.planEntries.some((entry) => entry.status === 'in_progress')
 
   useEffect(() => {
-    if (running || detailLevel === 'full') setExpanded(true)
+    const levelChanged = previousDetailLevel.current !== detailLevel
+    previousDetailLevel.current = detailLevel
+
+    if (levelChanged) {
+      setExpanded(detailLevel !== 'compact')
+    } else if (running && detailLevel !== 'compact') {
+      setExpanded(true)
+    }
   }, [detailLevel, running])
 
   if (item.planEntries.length === 0) return null
@@ -154,10 +162,20 @@ function ToolCallView({
     item.rawInputJson !== null ||
     item.rawOutputJson !== null ||
     item.text.length > 0
-  const [expanded, setExpanded] = useState(active || detailLevel === 'full')
+  const [expanded, setExpanded] = useState(
+    detailLevel === 'full' || (active && detailLevel !== 'compact'),
+  )
+  const previousDetailLevel = useRef(detailLevel)
 
   useEffect(() => {
-    if (active || detailLevel === 'full') setExpanded(true)
+    const levelChanged = previousDetailLevel.current !== detailLevel
+    previousDetailLevel.current = detailLevel
+
+    if (levelChanged) {
+      setExpanded(detailLevel === 'full' || (active && detailLevel !== 'compact'))
+    } else if ((active || detailLevel === 'full') && detailLevel !== 'compact') {
+      setExpanded(true)
+    }
   }, [active, detailLevel])
 
   return (

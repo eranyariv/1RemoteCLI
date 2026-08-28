@@ -21,8 +21,10 @@ public enum UpdateStage
     Installing,
 
     /// <summary>
-    /// Installed, but the agent is still running the old build because sessions are
-    /// open. See <see cref="UpdateService"/> on why it will not restart under them.
+    /// Installed, but the agent is still running the old build because something a
+    /// restart would strand is still going — an ACP turn, or a terminal wrapper that
+    /// predates reconnect support. See <see cref="UpdateService"/> on why it will not
+    /// restart under them.
     /// </summary>
     Restart,
 
@@ -69,15 +71,25 @@ public readonly record struct UpdateStatus(
 /// <para>
 /// Checking and, by default, installing are automatic. The user can turn automatic
 /// installation off without losing discovery or the manual action. In either mode the
-/// agent will not restart under live work because <b>wrappers do not reconnect</b>. A
-/// session whose agent goes away keeps running at the desk — see <c>WrapperSession</c> —
-/// but is never shareable again, and nothing tells the person holding the phone.
+/// agent will not restart under work a restart would strand: an ACP turn has no
+/// wrapper underneath it, and a terminal wrapper built before it could reconnect keeps
+/// running at the desk — see <c>WrapperSession</c> — but is never shareable again, and
+/// nothing tells the person holding the phone. A wrapper that can reconnect rides out
+/// the restart on its own and is not counted here at all; see issue #174 and
+/// <c>Program.UpdateBlockerCount</c>.
 /// </para>
 /// </summary>
 public sealed class UpdateService
 {
     private readonly Func<CancellationToken, Task<string?>> _latestTag;
     private readonly Func<string, CancellationToken, Task<UpdateResult>> _install;
+
+    /// <summary>
+    /// How many things right now would be stranded, not merely interrupted, by
+    /// restarting. Not simply "how many sessions are open" — see the caller in
+    /// <c>Program</c> — because a session whose wrapper can reconnect survives a
+    /// restart on its own and must not hold one up forever.
+    /// </summary>
     private readonly Func<int> _liveSessions;
     private readonly Action _restart;
     private readonly UpdateOptions _options;
@@ -330,15 +342,18 @@ public sealed class UpdateService
 
             if (sessions > 0)
             {
-                // Deliberately not restarting. The message names the sessions because
-                // otherwise this reads as the update having half-worked, and the user's
-                // next move would be to go looking for the fault.
+                // Deliberately not restarting. The message names what is holding it up
+                // because otherwise this reads as the update having half-worked, and
+                // the user's next move would be to go looking for a fault that is not
+                // there. It is not every open terminal — a reconnect-capable wrapper is
+                // never counted — so this only ever names work that would genuinely be
+                // stranded: an ACP turn, or a terminal session too old to reconnect.
                 Publish(new UpdateStatus(
                     UpdateStage.Restart,
                     version,
                     sessions == 1
-                        ? "Installed. It starts running when the session on this machine has finished."
-                        : $"Installed. It starts running when the {sessions} sessions on this machine have finished."));
+                        ? "Installed. It starts running when the session or task that cannot yet reconnect has finished."
+                        : $"Installed. It starts running when the {sessions} sessions or tasks that cannot yet reconnect have finished."));
             }
             else
             {

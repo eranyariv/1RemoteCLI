@@ -78,6 +78,28 @@ public sealed class SessionOpenedMessage
     /// <summary>User-confirmed type, or null when the agent should detect it.</summary>
     [Key(6)]
     public CliType? CliType { get; set; }
+
+    /// <summary>
+    /// The id this session had before, when this is a reconnect rather than a first
+    /// open. Null for a brand-new session. Additive: an older agent that does not
+    /// know this field simply assigns a fresh id, as it always has.
+    /// </summary>
+    [Key(7)]
+    public string? PriorSessionId { get; set; }
+
+    /// <summary>
+    /// Whether the wrapper sending this can survive its agent connection dropping and
+    /// reconnect with <see cref="PriorSessionId"/>, instead of the session ending the
+    /// moment the pipe does.
+    /// <para>
+    /// Only a wrapper built after this field exists can set it, so an older wrapper
+    /// always reports <see langword="false"/> by omission (the default). That is what
+    /// lets the update restart blocker tell the two apart: it must not restart through
+    /// a wrapper that cannot come back.
+    /// </para>
+    /// </summary>
+    [Key(8)]
+    public bool SupportsReconnect { get; set; }
 }
 
 /// <summary>Agent to wrapper. Confirms registration and assigns the session id.</summary>

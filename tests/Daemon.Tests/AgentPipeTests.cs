@@ -265,11 +265,13 @@ public class AgentPipeTests
     }
 
     /// <summary>
-    /// When the agent restarts, the wrapper must notice and stop sharing cleanly
-    /// rather than blocking forever on a pipe nobody is reading.
+    /// Before any session exists, a lost pipe is exactly as fatal as it always was:
+    /// there is nothing yet worth reconnecting for. This covers both the shared
+    /// connection code before <c>OpenSessionAsync</c> completes and the dedicated
+    /// <c>CreateChatAsync</c> channel, which never opens a session at all.
     /// </summary>
     [Fact]
-    public async Task EndsTheCommandStreamWhenTheAgentGoesAway()
+    public async Task EndsTheCommandStreamWhenNoSessionWasEverEstablished()
     {
         await using var server = new AgentPipeServer(UniquePipeName());
         Task<AgentPipeConnection> accepting = server.AcceptAsync();
@@ -285,6 +287,293 @@ public class AgentPipeTests
             {
             }
         });
+    }
+
+    /// <summary>
+    /// The one-shot channel a shortcut launcher uses to create a chat never opens a
+    /// terminal session, so it must keep the old, bounded, loud behaviour too — a
+    /// launcher waiting on <c>CreateChatAsync</c> must hear about a lost agent rather
+    /// than have the call silently retry forever.
+    /// </summary>
+    [Fact]
+    public async Task ChatCreationFailsLoudlyRatherThanReconnectingWhenTheAgentGoesAway()
+    {
+        await using var server = new AgentPipeServer(UniquePipeName());
+        Task<AgentPipeConnection> accepting = server.AcceptAsync();
+
+        await using AgentPipeClient client = await AgentPipeClient.ConnectAsync(
+            server.PipeName,
+            reconnectDelay: TimeSpan.FromMilliseconds(10));
+        AgentPipeConnection agentSide = await accepting.WaitAsync(Timeout);
+
+        Task<ChatCreatedMessage> creating = client.CreateChatAsync(@"C:\repo", "My repo", CliType.CopilotCli);
+
+        await Receive(agentSide); // the ChatCreate request itself
+        await agentSide.DisposeAsync();
+
+        await Assert.ThrowsAnyAsync<Exception>(() => creating.WaitAsync(Timeout));
+    }
+
+    /// <summary>
+    /// The headline behaviour: once a session exists, the agent going away — an
+    /// update restarting it — is not the end of sharing. The wrapper dials the same
+    /// pipe again, asks for its old id back, and gets it, because a fresh agent's
+    /// registry is empty and has no reason to refuse.
+    /// </summary>
+    [Fact]
+    public async Task ReconnectsAfterTheAgentGoesAwayAndKeepsTheSameSessionId()
+    {
+        string name = UniquePipeName();
+        await using var server = new AgentPipeServer(name);
+        Task<AgentPipeConnection> accepting = server.AcceptAsync();
+
+        await using AgentPipeClient client = await AgentPipeClient.ConnectAsync(
+            name,
+            reconnectDelay: TimeSpan.FromMilliseconds(20));
+        AgentPipeConnection firstAgentSide = await accepting.WaitAsync(Timeout);
+
+        Task<string> opening = client.OpenSessionAsync(
+            new SessionStartInfo("pwsh", ["-NoLogo"], @"C:\work", 80, 24, "nightly build"),
+            CancellationToken.None);
+
+        PipeEnvelope opened = await Receive(firstAgentSide);
+        var firstOpen = PipeFraming.DecodePayload<SessionOpenedMessage>(opened);
+        Assert.Null(firstOpen.PriorSessionId);
+        Assert.True(firstOpen.SupportsReconnect);
+
+        await firstAgentSide.SendAsync(PipeMessageKind.SessionAccepted, new SessionAcceptedMessage { SessionId = "s-1" });
+        Assert.Equal("s-1", await opening.WaitAsync(Timeout));
+
+        // The agent restarts: its end of the pipe goes away, and a fresh instance
+        // starts listening on the same name.
+        Task<AgentPipeConnection> acceptingAgain = server.AcceptAsync();
+        await firstAgentSide.DisposeAsync();
+
+        // Nothing about the public surface breaks while that is happening.
+        await using AgentPipeConnection secondAgentSide = await acceptingAgain.WaitAsync(Timeout);
+
+        PipeEnvelope reopened = await Receive(secondAgentSide);
+        Assert.Equal(PipeMessageKind.SessionOpened, reopened.Kind);
+        var reopen = PipeFraming.DecodePayload<SessionOpenedMessage>(reopened);
+        Assert.Equal("pwsh", reopen.Program);
+        Assert.Equal("s-1", reopen.PriorSessionId);
+        Assert.True(reopen.SupportsReconnect);
+
+        await secondAgentSide.SendAsync(PipeMessageKind.SessionAccepted, new SessionAcceptedMessage { SessionId = "s-1" });
+
+        // A snapshot always follows a successful reopen, so the fresh agent is not
+        // left rendering a blank screen for a session that already has output.
+        PipeEnvelope snapshot = await Receive(secondAgentSide);
+        Assert.Equal(PipeMessageKind.Output, snapshot.Kind);
+
+        // And commands keep flowing on the new connection.
+        await secondAgentSide.SendAsync(PipeMessageKind.Input, new InputMessage { Bytes = Encoding.UTF8.GetBytes("dir\r") });
+        var input = Assert.IsType<AgentCommand.Input>(await Next(client));
+        Assert.Equal("dir\r", Encoding.UTF8.GetString(input.Bytes));
+    }
+
+    /// <summary>
+    /// Output produced while the agent is away must not vanish, and must not be
+    /// replayed twice once it comes back: the reconnect snapshot already reflects it,
+    /// so only output produced <em>after</em> the snapshot may arrive as its own
+    /// frame, and it must arrive after the snapshot rather than before or mixed in.
+    /// </summary>
+    [Fact]
+    public async Task SendsAScreenSnapshotBeforeAnyOutputQueuedDuringTheGap()
+    {
+        string name = UniquePipeName();
+        await using var server = new AgentPipeServer(name);
+        Task<AgentPipeConnection> accepting = server.AcceptAsync();
+
+        await using AgentPipeClient client = await AgentPipeClient.ConnectAsync(
+            name,
+            reconnectDelay: TimeSpan.FromMilliseconds(20));
+        AgentPipeConnection firstAgentSide = await accepting.WaitAsync(Timeout);
+
+        Task<string> opening = client.OpenSessionAsync(StartInfo("pwsh"), CancellationToken.None);
+        await Receive(firstAgentSide);
+        await firstAgentSide.SendAsync(PipeMessageKind.SessionAccepted, new SessionAcceptedMessage { SessionId = "s-1" });
+        await opening.WaitAsync(Timeout);
+
+        // Output before the gap: this is what the snapshot must carry.
+        await client.SendOutputAsync(Encoding.UTF8.GetBytes("before the gap"), CancellationToken.None);
+
+        Task<AgentPipeConnection> acceptingAgain = server.AcceptAsync();
+        await firstAgentSide.DisposeAsync();
+        await using AgentPipeConnection secondAgentSide = await acceptingAgain.WaitAsync(Timeout);
+
+        await Receive(secondAgentSide); // the reopened SessionOpened
+        await secondAgentSide.SendAsync(PipeMessageKind.SessionAccepted, new SessionAcceptedMessage { SessionId = "s-1" });
+
+        PipeEnvelope snapshot = await Receive(secondAgentSide);
+        Assert.Equal(PipeMessageKind.Output, snapshot.Kind);
+        string snapshotText = Encoding.UTF8.GetString(PipeFraming.DecodePayload<OutputMessage>(snapshot).Bytes);
+        Assert.Contains("before the gap", snapshotText, StringComparison.Ordinal);
+
+        await client.SendOutputAsync(Encoding.UTF8.GetBytes("after the gap"), CancellationToken.None);
+
+        PipeEnvelope after = await Receive(secondAgentSide);
+        Assert.Equal(PipeMessageKind.Output, after.Kind);
+        Assert.Equal(
+            "after the gap",
+            Encoding.UTF8.GetString(PipeFraming.DecodePayload<OutputMessage>(after).Bytes));
+    }
+
+    [Fact]
+    public async Task BusyOutputDuringReconnectIsFoldedIntoTheSnapshotWithoutOverflowing()
+    {
+        string name = UniquePipeName();
+        await using var server = new AgentPipeServer(name);
+        Task<AgentPipeConnection> accepting = server.AcceptAsync();
+
+        await using AgentPipeClient client = await AgentPipeClient.ConnectAsync(
+            name,
+            reconnectDelay: TimeSpan.FromMilliseconds(20));
+        AgentPipeConnection firstAgentSide = await accepting.WaitAsync(Timeout);
+
+        Task<string> opening = client.OpenSessionAsync(StartInfo("pwsh"), CancellationToken.None);
+        await Receive(firstAgentSide);
+        await firstAgentSide.SendAsync(
+            PipeMessageKind.SessionAccepted,
+            new SessionAcceptedMessage { SessionId = "s-1" });
+        await opening.WaitAsync(Timeout);
+
+        await firstAgentSide.DisposeAsync();
+        await Task.Delay(100);
+
+        for (int i = 0; i < 2_000; i++)
+        {
+            await client.SendOutputAsync(Encoding.UTF8.GetBytes($"line {i}\r\n"), CancellationToken.None);
+        }
+
+        Task<AgentPipeConnection> acceptingAgain = server.AcceptAsync();
+        await using AgentPipeConnection secondAgentSide = await acceptingAgain.WaitAsync(Timeout);
+        await Receive(secondAgentSide);
+        await secondAgentSide.SendAsync(
+            PipeMessageKind.SessionAccepted,
+            new SessionAcceptedMessage { SessionId = "s-1" });
+
+        PipeEnvelope snapshot = await Receive(secondAgentSide);
+        string text = Encoding.UTF8.GetString(PipeFraming.DecodePayload<OutputMessage>(snapshot).Bytes);
+        Assert.Contains("line 1999", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PreservesAnIncompleteEscapeSequenceAfterTheReconnectSnapshot()
+    {
+        string name = UniquePipeName();
+        await using var server = new AgentPipeServer(name);
+        Task<AgentPipeConnection> accepting = server.AcceptAsync();
+
+        await using AgentPipeClient client = await AgentPipeClient.ConnectAsync(
+            name,
+            reconnectDelay: TimeSpan.FromMilliseconds(20));
+        AgentPipeConnection firstAgentSide = await accepting.WaitAsync(Timeout);
+
+        Task<string> opening = client.OpenSessionAsync(StartInfo("pwsh"), CancellationToken.None);
+        await Receive(firstAgentSide);
+        await firstAgentSide.SendAsync(
+            PipeMessageKind.SessionAccepted,
+            new SessionAcceptedMessage { SessionId = "s-1" });
+        await opening.WaitAsync(Timeout);
+
+        await client.SendOutputAsync("hello\u001b["u8.ToArray(), CancellationToken.None);
+        Task<AgentPipeConnection> acceptingAgain = server.AcceptAsync();
+        await firstAgentSide.DisposeAsync();
+
+        await using AgentPipeConnection secondAgentSide = await acceptingAgain.WaitAsync(Timeout);
+        await Receive(secondAgentSide);
+        await secondAgentSide.SendAsync(
+            PipeMessageKind.SessionAccepted,
+            new SessionAcceptedMessage { SessionId = "s-1" });
+
+        PipeEnvelope snapshot = await Receive(secondAgentSide);
+        Assert.Equal(PipeMessageKind.Output, snapshot.Kind);
+        Assert.Contains(
+            "hello",
+            Encoding.UTF8.GetString(PipeFraming.DecodePayload<OutputMessage>(snapshot).Bytes),
+            StringComparison.Ordinal);
+
+        PipeEnvelope unsafeTail = await Receive(secondAgentSide);
+        Assert.Equal("\u001b[", Encoding.UTF8.GetString(
+            PipeFraming.DecodePayload<OutputMessage>(unsafeTail).Bytes));
+    }
+
+    /// <summary>
+    /// The reconnect work must not weaken the existing backpressure rule: a link that
+    /// cannot keep up is still a real problem the user must be told about, loudly and
+    /// permanently, not something retried past silently.
+    /// </summary>
+    [Fact]
+    public async Task StillTreatsAFullOutboundQueueAsALoudPermanentFailure()
+    {
+        string name = UniquePipeName();
+
+        // Deliberately tiny buffers: the point is a link that is up but cannot carry
+        // any more, and a 64KB default buffer would need megabytes of filler before
+        // that became true. This makes the very first write block instead.
+        using var serverStream = new NamedPipeServerStream(
+            name,
+            PipeDirection.InOut,
+            1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous,
+            inBufferSize: 1,
+            outBufferSize: 1);
+        Task accepted = serverStream.WaitForConnectionAsync();
+
+        await using AgentPipeClient client = await AgentPipeClient.ConnectAsync(name);
+        await accepted.WaitAsync(Timeout);
+        await using var agentSide = new AgentPipeConnection(serverStream);
+
+        Task<string> opening = client.OpenSessionAsync(StartInfo("pwsh"), CancellationToken.None);
+        await Receive(agentSide);
+        await agentSide.SendAsync(PipeMessageKind.SessionAccepted, new SessionAcceptedMessage { SessionId = "s-1" });
+        await opening.WaitAsync(Timeout);
+
+        // The link stays up, but nothing ever reads it again from here on: the same
+        // shape as a redraw arriving faster than a slow phone connection can carry
+        // it, not a dropped pipe, so this is the ordinary overflow rule rather than
+        // reconnect.
+        byte[] chunk = new byte[64];
+
+        await Assert.ThrowsAsync<IOException>(async () =>
+        {
+            for (int i = 0; i < 2000; i++)
+            {
+                await client.SendOutputAsync(chunk, CancellationToken.None);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Disposal is the one thing that must always win over reconnecting, however long
+    /// the agent has been away: a wrapper whose child already exited must not keep a
+    /// background loop alive trying to find an agent that may never come back.
+    /// </summary>
+    [Fact]
+    public async Task DisposingWhileReconnectingStopsRetryingPromptly()
+    {
+        string name = UniquePipeName();
+        await using var server = new AgentPipeServer(name);
+        Task<AgentPipeConnection> accepting = server.AcceptAsync();
+
+        AgentPipeClient client = await AgentPipeClient.ConnectAsync(
+            name,
+            reconnectDelay: TimeSpan.FromMilliseconds(20));
+        AgentPipeConnection agentSide = await accepting.WaitAsync(Timeout);
+
+        Task<string> opening = client.OpenSessionAsync(StartInfo("pwsh"), CancellationToken.None);
+        await Receive(agentSide);
+        await agentSide.SendAsync(PipeMessageKind.SessionAccepted, new SessionAcceptedMessage { SessionId = "s-1" });
+        await opening.WaitAsync(Timeout);
+
+        // Nothing is listening on this name again, so every reconnect attempt fails
+        // and retries — exactly the state disposal has to cut through.
+        await agentSide.DisposeAsync();
+        await Task.Delay(100);
+
+        await client.DisposeAsync().AsTask().WaitAsync(Timeout);
     }
 
     /// <summary>
@@ -324,6 +613,9 @@ public class AgentPipeTests
     /// so each one gets its own name.
     /// </summary>
     private static string UniquePipeName() => $"1remotecli-test-{Guid.NewGuid():N}";
+
+    private static SessionStartInfo StartInfo(string program) =>
+        new(program, [], @"C:\work", 80, 24, null);
 
     private static Stream GetStream(AgentPipeConnection connection) =>
         (Stream)typeof(AgentPipeConnection)

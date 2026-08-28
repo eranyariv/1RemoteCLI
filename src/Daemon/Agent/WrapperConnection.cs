@@ -81,7 +81,10 @@ public sealed class WrapperConnection : ISessionChannel
         }
         finally
         {
-            await EndSessionAsync().ConfigureAwait(false);
+            bool resumingAfterAgentRestart =
+                cancellationToken.IsCancellationRequested &&
+                _session?.SupportsReconnect == true;
+            await EndSessionAsync(notifyClosed: !resumingAfterAgentRestart).ConfigureAwait(false);
             await _connection.DisposeAsync().ConfigureAwait(false);
         }
     }
@@ -193,7 +196,9 @@ public sealed class WrapperConnection : ISessionChannel
             message.Rows,
             message.DisplayName,
             this,
-            message.CliType);
+            message.CliType,
+            message.PriorSessionId,
+            message.SupportsReconnect);
 
         // Accept first: the wrapper blocks on this before it starts pumping output,
         // so anything the sink does slowly must not sit in front of it.
@@ -209,7 +214,7 @@ public sealed class WrapperConnection : ISessionChannel
         await _sink.OnOpenedAsync(_session, cancellationToken).ConfigureAwait(false);
     }
 
-    private async ValueTask EndSessionAsync(int exitCode = -1)
+    private async ValueTask EndSessionAsync(int exitCode = -1, bool notifyClosed = true)
     {
         if (_session is not TerminalSession session)
         {
@@ -227,19 +232,22 @@ public sealed class WrapperConnection : ISessionChannel
             _pumping = null;
         }
 
+        _session = null;
+        _registry.Remove(session.SessionId, preserveUploads: !notifyClosed);
+
         if (_pump is not null)
         {
             await _pump.FlushAsync().ConfigureAwait(false);
             _pump = null;
         }
 
-        _session = null;
-        _registry.Remove(session.SessionId);
-
         // Not cancellable: this is the last word about a session, and a cancelled
         // token during shutdown must not leave the phone showing a session that no
         // longer exists.
-        await _sink.OnClosedAsync(session, exitCode, CancellationToken.None).ConfigureAwait(false);
+        if (notifyClosed)
+        {
+            await _sink.OnClosedAsync(session, exitCode, CancellationToken.None).ConfigureAwait(false);
+        }
     }
 
     public ValueTask SendInputAsync(ReadOnlyMemory<byte> bytes, CancellationToken cancellationToken = default) =>

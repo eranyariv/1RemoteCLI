@@ -667,7 +667,7 @@ public static class Program
                 Path.Combine(Path.GetTempPath(), "1remotecli-update"),
                 AgentUpdate.StepsFor(downloads, tag),
                 cancellationToken),
-            () => host.Sessions.Count + chats.ActiveTurns,
+            () => UpdateBlockerCount(chats.ActiveTurns, host.Sessions.Snapshot()),
             () =>
             {
                 requestRestart();
@@ -720,6 +720,22 @@ public static class Program
             return ExitAlreadyRunning;
         }
     }
+
+    /// <summary>
+    /// How many live things would be stranded — not just interrupted — by restarting
+    /// right now. Passed to <see cref="UpdateService"/> so it restarts through
+    /// whatever it safely can instead of waiting on every open terminal forever.
+    /// <para>
+    /// An ACP turn always counts: there is no wrapper underneath it to reconnect, so
+    /// losing the agent mid-turn loses the turn. A terminal session only counts when
+    /// its wrapper predates reconnect support (<see cref="TerminalSession.SupportsReconnect"/>
+    /// false) — see issue #174. A reconnect-capable wrapper rides out the restart on
+    /// its own, so counting it here would leave a machine that never stops having one
+    /// open terminal never restarting into an update it already downloaded.
+    /// </para>
+    /// </summary>
+    internal static int UpdateBlockerCount(int activeAcpTurns, IReadOnlyList<TerminalSession> terminalSessions) =>
+        activeAcpTurns + terminalSessions.Count(session => !session.SupportsReconnect);
 
     /// <summary>
     /// Puts an icon in the tray, if there is a desktop to put it on.

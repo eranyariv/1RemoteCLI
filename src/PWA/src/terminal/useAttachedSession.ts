@@ -100,6 +100,7 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
   // "no such session" and the view would report it as having ended while we were
   // away, which is a different and less true story.
   const finished = useRef(false)
+  const agentOffline = useRef(false)
 
   const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState<AttachState>('attaching')
@@ -135,6 +136,21 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
   }, [client, sessionId])
 
   useEffect(() => {
+    const resumeAfterAgentRestart = () => {
+      if (!agentOffline.current) return
+
+      agentOffline.current = false
+      position.current = startOfStream
+      finished.current = false
+      sampler.discardPending()
+      setExitCode(null)
+      setEndedWhileAway(false)
+      setMissedOutput(false)
+      setError(null)
+      setState('reconnecting')
+      setAttempt((current) => current + 1)
+    }
+
     const off = [
       client.on('terminalOutput', (output) => {
         if (output.sessionId !== sessionId) return
@@ -165,6 +181,7 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
 
       client.on('machineOffline', (offlineMachine) => {
         if (offlineMachine !== machineId) return
+        agentOffline.current = true
         sampler.discardPending()
         setState('failed')
         setError({
@@ -172,6 +189,17 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
           message: 'The machine went offline.',
           sessionId,
         })
+      }),
+
+      client.on('machineOnline', (onlineMachine) => {
+        if (onlineMachine.machineId !== machineId) return
+        if (!onlineMachine.sessions.some((candidate) => candidate.sessionId === sessionId)) return
+        resumeAfterAgentRestart()
+      }),
+
+      client.on('sessionOpened', (openedMachine, openedSession) => {
+        if (openedMachine !== machineId || openedSession.sessionId !== sessionId) return
+        resumeAfterAgentRestart()
       }),
     ]
 

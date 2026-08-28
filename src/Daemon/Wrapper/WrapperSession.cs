@@ -73,6 +73,7 @@ public sealed class WrapperSession
     private async Task PumpOutputAsync(CancellationToken cancellationToken)
     {
         byte[] buffer = new byte[8192];
+        bool sharingFailed = false;
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -103,12 +104,18 @@ public sealed class WrapperSession
             await _terminal.Output.WriteAsync(chunk, cancellationToken).ConfigureAwait(false);
             await _terminal.Output.FlushAsync(cancellationToken).ConfigureAwait(false);
 
+            if (sharingFailed)
+            {
+                continue;
+            }
+
             try
             {
                 await _agent.SendOutputAsync(chunk, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                sharingFailed = true;
                 _warn($"1remote: lost the agent connection ({ex.Message}). This session is no longer shareable.");
             }
         }

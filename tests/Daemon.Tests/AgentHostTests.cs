@@ -1,3 +1,4 @@
+using System.IO.Pipes;
 using System.Runtime.Versioning;
 using System.Text;
 using OneRemoteCli.Daemon.Agent;
@@ -130,6 +131,73 @@ public class AgentHostTests
 
         await fixture.WaitForCountAsync(0);
         Assert.Equal(42, fixture.Sink.LastExitCode);
+    }
+
+    /// <summary>
+    /// The registry-reuse half of reconnect support (issue #174), exercised through
+    /// the real wire format rather than calling <see cref="SessionRegistry"/>
+    /// directly: a wrapper reconnecting with its prior id gets it back, and is marked
+    /// reconnect-capable, exactly as a real <c>AgentPipeClient</c> reconnect does.
+    /// </summary>
+    [Fact]
+    public async Task ReusesAWrappersRequestedIdWhenItReconnectsThroughTheRealWrapperConnection()
+    {
+        await using var fixture = await AgentFixture.StartAsync();
+
+        AgentPipeClient first = await fixture.ConnectAsync();
+        string original = await first.OpenSessionAsync(StartInfo("pwsh"), default).WaitAsync(Timeout);
+        await fixture.WaitForCountAsync(1);
+
+        // Ends the connection without telling the agent why — indistinguishable, from
+        // the agent's side, from the agent itself having just restarted.
+        await first.DisposeAsync();
+        await fixture.WaitForCountAsync(0);
+
+        // A second connection asks for that id back, the same way a reconnecting
+        // AgentPipeClient does, but crafted directly so the test controls exactly
+        // what the wire carries.
+        using var stream = new NamedPipeClientStream(
+            ".",
+            fixture.Host.PipeName,
+            PipeDirection.InOut,
+            PipeOptions.Asynchronous);
+        await stream.ConnectAsync((int)Timeout.TotalMilliseconds);
+        await using var connection = new AgentPipeConnection(stream);
+
+        await connection.SendAsync(
+            PipeMessageKind.SessionOpened,
+            new SessionOpenedMessage
+            {
+                Program = "pwsh",
+                Cwd = @"C:\work",
+                Cols = 120,
+                Rows = 30,
+                PriorSessionId = original,
+                SupportsReconnect = true,
+            });
+
+        PipeEnvelope accepted = await Receive(connection);
+        Assert.Equal(PipeMessageKind.SessionAccepted, accepted.Kind);
+        string reused = PipeFraming.DecodePayload<SessionAcceptedMessage>(accepted).SessionId;
+
+        Assert.Equal(original, reused);
+
+        TerminalSession session = await fixture.WaitForSessionAsync(reused);
+        Assert.True(session.SupportsReconnect);
+    }
+
+    [Fact]
+    public async Task DoesNotReportAReconnectableSessionClosedWhenTheAgentStops()
+    {
+        await using var fixture = await AgentFixture.StartAsync();
+
+        AgentPipeClient wrapper = await fixture.ConnectAsync();
+        await wrapper.OpenSessionAsync(StartInfo("pwsh"), default).WaitAsync(Timeout);
+        await fixture.WaitForCountAsync(1);
+
+        await fixture.StopHostAsync();
+
+        Assert.Null(fixture.Sink.LastExitCode);
     }
 
     [Fact]
@@ -310,6 +378,13 @@ public class AgentHostTests
     private static SessionStartInfo StartInfo(string program) =>
         new(program, [], @"C:\work", 120, 30, null);
 
+    private static async Task<PipeEnvelope> Receive(AgentPipeConnection connection)
+    {
+        PipeEnvelope? envelope = await connection.ReceiveAsync(new CancellationTokenSource(Timeout).Token);
+        Assert.NotNull(envelope);
+        return envelope;
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         DateTime deadline = DateTime.UtcNow + Timeout;
@@ -389,6 +464,12 @@ public class AgentHostTests
         }
 
         public Task WaitForCountAsync(int expected) => WaitUntilAsync(() => Host.Sessions.Count == expected);
+
+        public async Task StopHostAsync()
+        {
+            await _stopping.CancelAsync();
+            await _run.WaitAsync(Timeout);
+        }
 
         public async ValueTask DisposeAsync()
         {

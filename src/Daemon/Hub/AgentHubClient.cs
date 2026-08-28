@@ -855,7 +855,8 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
             notification.SessionId,
             () => session.RunExclusiveAsync(async () =>
             {
-                if (!reshaped
+                if (!session.ForceSnapshots
+                    && !reshaped
                     && notification.LastSeq is long lastSeq
                     && session.Tail.TryReplayFrom(lastSeq, out IReadOnlyList<TailFrame> missed))
                 {

@@ -42,13 +42,26 @@ public sealed class SessionRegistry : IDisposable
         int rows,
         string? displayName,
         ISessionChannel channel,
-        CliType? cliType = null)
+        CliType? cliType = null,
+        string? priorSessionId = null,
+        bool supportsReconnect = false)
     {
-        // A GUID, not a counter: ids leave this machine, and a counter would make
-        // one machine's session id collide with another's the moment the phone
-        // holds both.
+        // A reconnecting wrapper asks to keep its old id so the phone's open tab and
+        // this machine's own session list stay pointed at the same session across the
+        // agent restart that caused the gap. Reusing it is safe only when nothing
+        // already holds it — a fresh registry after a real restart never does, but a
+        // wrapper reconnecting within one agent's lifetime could race a second wrapper
+        // that was handed the same id some other way, so this still checks rather than
+        // assuming.
+        string sessionId = !string.IsNullOrEmpty(priorSessionId) && !_sessions.ContainsKey(priorSessionId)
+            ? priorSessionId
+            // A GUID, not a counter: ids leave this machine, and a counter would make
+            // one machine's session id collide with another's the moment the phone
+            // holds both.
+            : Guid.NewGuid().ToString("n");
+
         var session = new TerminalSession(
-            Guid.NewGuid().ToString("n"),
+            sessionId,
             program,
             args,
             cwd,
@@ -56,14 +69,37 @@ public sealed class SessionRegistry : IDisposable
             rows,
             displayName,
             channel,
-            cliType);
+            cliType,
+            supportsReconnect,
+            forceSnapshots: priorSessionId is not null);
 
-        _sessions[session.SessionId] = session;
+        // TryAdd rather than the indexer: if the id was raced after the check above,
+        // a second session silently overwriting the first would leave one wrapper's
+        // input routed nowhere. Falling back to a fresh id keeps this method total
+        // instead of ever failing a session open.
+        if (!_sessions.TryAdd(session.SessionId, session))
+        {
+            session = new TerminalSession(
+                Guid.NewGuid().ToString("n"),
+                program,
+                args,
+                cwd,
+                cols,
+                rows,
+                displayName,
+                channel,
+                cliType,
+                supportsReconnect,
+                forceSnapshots: false);
+
+            _sessions[session.SessionId] = session;
+        }
+
         Changed?.Invoke();
         return session;
     }
 
-    public bool Remove(string sessionId)
+    public bool Remove(string sessionId, bool preserveUploads = false)
     {
         lock (_lifecycleGate)
         {
@@ -72,7 +108,10 @@ public sealed class SessionRegistry : IDisposable
                 return false;
             }
 
-            _uploads.RemoveSession(sessionId);
+            if (!preserveUploads)
+            {
+                _uploads.RemoveSession(sessionId);
+            }
         }
 
         Changed?.Invoke();

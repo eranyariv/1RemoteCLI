@@ -55,7 +55,9 @@ public sealed class TerminalSession
         int rows,
         string? displayName,
         ISessionChannel channel,
-        CliType? cliType = null)
+        CliType? cliType = null,
+        bool supportsReconnect = false,
+        bool forceSnapshots = false)
     {
         SessionId = sessionId;
         Program = program;
@@ -69,9 +71,31 @@ public sealed class TerminalSession
         StartedUtc = DateTimeOffset.UtcNow;
         _lastOutputTicks = StartedUtc.UtcTicks;
         _cliType = (int)(cliType ?? CliTypes.Detect(program, args));
+        SupportsReconnect = supportsReconnect;
+        ForceSnapshots = forceSnapshots;
     }
 
     public string SessionId { get; }
+
+    /// <summary>
+    /// Whether the wrapper behind this session can survive its agent connection
+    /// dropping and come back with the same <see cref="SessionId"/>.
+    /// <para>
+    /// This is what lets the update restart blocker tell a session that will simply
+    /// reconnect apart from one that would be stranded, so that only the latter holds
+    /// up a restart. A session from a wrapper built before this existed always reports
+    /// <see langword="false"/>, so the first release with this feature does not
+    /// strand it.
+    /// </para>
+    /// </summary>
+    public bool SupportsReconnect { get; }
+
+    /// <summary>
+    /// Whether attach requests must receive a complete repaint instead of sequence
+    /// replay. A session reconstructed after an agent restart has a fresh sequence
+    /// space, so an old client's sequence number cannot safely be compared with it.
+    /// </summary>
+    public bool ForceSnapshots { get; }
 
     public string Program { get; }
 

@@ -181,6 +181,33 @@ describe('useAttachedSession', () => {
     expect(result.current.endedWhileAway).toBe(false)
   })
 
+  it('reattaches from a fresh snapshot when the agent restarts under the session', async () => {
+    const { result } = renderHook(() => useAttachedSession(options(relay, true)))
+
+    await waitFor(() => expect(result.current.state).toBe('attached'))
+
+    act(() => {
+      relay.emit('terminalOutput', {
+        sessionId: 'session-1',
+        seq: 41,
+        kind: 0,
+        data: new Uint8Array([104, 105]),
+      })
+      relay.emit('machineOffline', 'machine-1')
+    })
+
+    expect(result.current.state).toBe('failed')
+
+    act(() => {
+      relay.emit('sessionOpened', 'machine-1', { sessionId: 'session-1' })
+    })
+
+    await waitFor(() =>
+      expect(relay.attach).toHaveBeenLastCalledWith('machine-1', 'session-1', 80, 25, null),
+    )
+    await waitFor(() => expect(result.current.state).toBe('attached'))
+  })
+
   it('does not go looking for a session it watched exit', async () => {
     const { result, rerender } = renderHook((connected: boolean) => useAttachedSession(options(relay, connected)), {
       initialProps: true,

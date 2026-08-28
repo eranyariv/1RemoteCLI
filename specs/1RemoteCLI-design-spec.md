@@ -244,7 +244,11 @@ Input from the phone and input from the keyboard are written to the same PTY han
 
 **Shutdown.** When the child exits, the wrapper reports the exit code, closes the pseudoconsole, restores the console mode, sends `SessionClosed`, and exits with the child's exit code — so it composes correctly in scripts.
 
-The wrapper does **not** parse VT sequences, hold a screen model, or talk to the network. All remote-facing logic lives in the agent, in one place.
+**Reconnecting after the agent restarts** (issue #174). Once `SessionOpened` has been accepted, losing the pipe — the ordinary shape of an agent update replacing the running process — does not end the session. The wrapper's `AgentPipeClient` dials the same pipe name again, retrying indefinitely with a growing delay, because giving up would strand a session that is otherwise perfectly fine purely because the agent took a while to come back. It re-sends `SessionOpened` carrying the id it was given before, so the phone's open tab and this machine's own session list keep pointing at the same session; the fresh agent's registry is always empty right after a restart, so the id is free and it hands the same one straight back. Before re-opening, it also drops anything still queued for the dead connection and sends one `Output` frame carrying a VT reset plus the screen exactly as it stands, reconstructed from a local mirror fed by every byte the wrapper has sent — so the new agent, and the phone through it, see the current picture rather than a blank one. Local desk output and remote input from the phone are unaffected throughout: they never depend on whether the agent link happens to be up at that instant. This all requires a session to have existed in the first place; a pipe lost before the first `SessionOpened` is accepted, or on the one-shot connection a shortcut launcher uses to create an ACP chat, is still treated as fatal, exactly as before.
+
+**Migration safety.** The very first release with this feature has already-running wrappers on disk that predate it and cannot reconnect. `SessionOpened` carries a `supportsReconnect` flag that only a wrapper built with this feature sets; an older wrapper omits it, which decodes as `false`. §4.2 uses this to decide which live terminal sessions still make a restart unsafe.
+
+The wrapper does **not** parse VT sequences, hold a screen model beyond the mirror that exists solely to reseed a reconnect, or talk to the network otherwise. All remote-facing logic lives in the agent, in one place.
 
 ### 4.2 Tray agent (`1remote agent`)
 
@@ -374,7 +378,7 @@ A failed automatic check or install does not stop the agent or require acknowled
 
 **Replacing a running image.** Windows refuses to delete or overwrite a running executable but will happily *rename* one, and a process keeps running from the file it started from whatever that file is now called. So the installed executable is renamed to `1remote.exe.old` and the new one copied into its place; the retired copy is deleted afterwards on a best-effort basis and swept up by a later update. When `.old` is itself still held — an agent that updated while sessions were open goes on running from it — a numbered name is used instead, so a second update succeeds rather than failing on the leavings of the first. This rename is also the whole of the rollback, which is why it is a rename and not a delete.
 
-**The agent will not restart itself under live sessions or ACP turns.** This is the rule the design turns on. Wrappers do not reconnect: a session whose agent goes away keeps running at the desk but is never shareable again, and nothing tells the person holding the phone. So activity is read **after** the install rather than before — downloading and verifying takes long enough for somebody to have started work meanwhile — and when it is not zero the window says the update is installed and waiting. Terminal and ACP activity changes notify the updater; the final completion requests exactly one restart. A restart also happens only after the pipe server is disposed, because the replacement process would otherwise exit with "an agent is already running".
+**The agent will not restart itself under work a restart would strand.** This is the rule the design turns on, and issue #174 narrowed what counts: an ACP turn always blocks, because there is no wrapper underneath it to reconnect. A terminal wrapper built before it could reconnect (`TerminalSession.SupportsReconnect` false) also blocks, exactly as every wrapper once did — its session keeps running at the desk but is never shareable again, and nothing tells the person holding the phone, if the agent restarted under it. A wrapper that can reconnect does not block at all: it rides out the restart on its own (§4.1), so counting it here would leave a machine that always has one terminal open never reaching an update it already downloaded. `Program.UpdateBlockerCount` is `chats.ActiveTurns` plus the terminal sessions that do not advertise reconnect support. So activity is read **after** the install rather than before — downloading and verifying takes long enough for somebody to have started work meanwhile — and when the blocker count is not zero the window says the update is installed and waiting. Terminal and ACP activity changes notify the updater; the final completion requests exactly one restart. A restart also happens only after the pipe server is disposed, because the replacement process would otherwise exit with "an agent is already running".
 
 `1remote update` is the same sequence from a command line, for a machine with no interactive desktop. It never restarts anything.
 
@@ -620,13 +624,15 @@ Length-prefixed MessagePack frames over the named pipe.
 
 | Direction | Message | Payload |
 | :--- | :--- | :--- |
-| W → A | `SessionOpened` | `program`, `args[]`, `cwd`, `cols`, `rows`, `displayName?` |
+| W → A | `SessionOpened` | `program`, `args[]`, `cwd`, `cols`, `rows`, `displayName?`, `priorSessionId?`, `supportsReconnect` |
 | A → W | `SessionAccepted` | `sessionId` |
 | W → A | `Output` | `bytes` — raw PTY output |
 | W → A | `SessionClosed` | `exitCode` |
 | A → W | `Input` | `bytes` — to write to the PTY |
 | A → W | `Resize` | `cols`, `rows` |
 | A → W | `Interrupt` | — sends `0x03` |
+
+`priorSessionId` and `supportsReconnect` are additive (issue #174): a fresh session omits `priorSessionId`, and a reconnect after a lost pipe (§4.1) sends the id it held before so the registry can hand it straight back. `supportsReconnect` defaults to `false` so an older wrapper is never mistaken for one the update restart blocker can safely ignore (§4.2).
 
 ### 5.2 Agent ↔ hub
 

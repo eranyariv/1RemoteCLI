@@ -169,7 +169,9 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
     term.loadAddon(fit)
     term.loadAddon(new WebLinksAddon())
     term.open(host)
-    const disposeTouchScroll = installTouchScroll(host, term)
+    const disposeTouchScroll = installTouchScroll(host, term, (event, details) => {
+      attached.recorder.diagnostic('touch-scroll', event, details)
+    })
 
     term.onData((data) => sendRef.current(applyModifiers(data, consumeModifiers())))
     term.onBinary((data) => sendRef.current(encodeBinary(data)))
@@ -183,7 +185,7 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
       termRef.current = null
       fitRef.current = null
     }
-  }, [consumeModifiers])
+  }, [attached.recorder, consumeModifiers])
 
   // Fit to the container, and tell the far end when the shape changed.
   //
@@ -425,6 +427,34 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
 
   const catalog = catalogFor(session.cliType)
 
+  const startTrace = useCallback(() => {
+    attached.startRecording()
+
+    const host = hostRef.current
+    const term = termRef.current
+    const viewport = window.visualViewport
+    attached.recorder.diagnostic('touch-scroll', 'recording-started', {
+      appVersion: __APP_VERSION__,
+      userAgent: navigator.userAgent,
+      platform: navigator.platform,
+      maxTouchPoints: navigator.maxTouchPoints,
+      devicePixelRatio: window.devicePixelRatio,
+      screenWidth: window.screen.width,
+      screenHeight: window.screen.height,
+      innerWidth: window.innerWidth,
+      innerHeight: window.innerHeight,
+      visualViewportWidth: viewport?.width ?? null,
+      visualViewportHeight: viewport?.height ?? null,
+      visualViewportOffsetTop: viewport?.offsetTop ?? null,
+      hostClientWidth: host?.clientWidth ?? null,
+      hostClientHeight: host?.clientHeight ?? null,
+      terminalRows: term?.rows ?? null,
+      terminalCols: term?.cols ?? null,
+      viewportY: term?.buffer.active.viewportY ?? null,
+      baseY: term?.buffer.active.baseY ?? null,
+    })
+  }, [attached])
+
   const saveTrace = useCallback(() => {
     attached.stopRecording()
     downloadTrace(
@@ -490,13 +520,15 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
 
         <button
           type="button"
-          onClick={attached.recording ? saveTrace : attached.startRecording}
-          aria-label={attached.recording ? 'Stop recording and save' : 'Record a trace'}
+          onClick={attached.recording ? saveTrace : startTrace}
+          aria-label={
+            attached.recording ? 'Stop recording and save' : 'Record terminal diagnostics'
+          }
           className={`min-h-10 rounded-lg px-3 text-sm transition active:bg-slate-800 ${
             attached.recording ? 'text-rose-400' : 'text-slate-500'
           }`}
         >
-          {attached.recording ? `● ${attached.recorder.frameCount}` : '○'}
+          {attached.recording ? `● ${attached.recorder.entryCount}` : '○'}
         </button>
       </header>
 

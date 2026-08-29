@@ -29,6 +29,15 @@ export interface TraceFrame {
   data: string
 }
 
+export type TraceDiagnosticValue = string | number | boolean | null
+
+export interface TraceDiagnostic {
+  at: number
+  source: string
+  event: string
+  details: Record<string, TraceDiagnosticValue>
+}
+
 export interface Trace {
   version: 1
   /** What was running. The single most useful thing when reading a trace later. */
@@ -38,10 +47,12 @@ export interface Trace {
   rows: number
   recordedAt: string
   frames: TraceFrame[]
+  diagnostics: TraceDiagnostic[]
 }
 
 export class TraceRecorder {
   private readonly frames: TraceFrame[] = []
+  private readonly diagnostics: TraceDiagnostic[] = []
   private readonly now: () => number
   private startedAt: number | null = null
 
@@ -57,6 +68,10 @@ export class TraceRecorder {
     return this.frames.length
   }
 
+  get entryCount(): number {
+    return this.frames.length + this.diagnostics.length
+  }
+
   /** Total payload bytes captured, so the UI can warn before a trace gets silly. */
   get byteCount(): number {
     return this.frames.reduce((total, frame) => total + base64Bytes(frame.data), 0)
@@ -64,6 +79,7 @@ export class TraceRecorder {
 
   start(): void {
     this.frames.length = 0
+    this.diagnostics.length = 0
     this.startedAt = this.now()
   }
 
@@ -82,6 +98,21 @@ export class TraceRecorder {
     })
   }
 
+  diagnostic(
+    source: string,
+    event: string,
+    details: Record<string, TraceDiagnosticValue>,
+  ): void {
+    if (this.startedAt === null) return
+
+    this.diagnostics.push({
+      at: Math.round(this.now() - this.startedAt),
+      source,
+      event,
+      details,
+    })
+  }
+
   build(meta: { program: string; machine: string; cols: number; rows: number }): Trace {
     return {
       version: 1,
@@ -91,6 +122,7 @@ export class TraceRecorder {
       rows: meta.rows,
       recordedAt: new Date().toISOString(),
       frames: [...this.frames],
+      diagnostics: [...this.diagnostics],
     }
   }
 }

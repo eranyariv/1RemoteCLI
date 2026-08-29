@@ -53,6 +53,27 @@ describe('TraceRecorder', () => {
     ])
   })
 
+  it('captures timestamped diagnostics alongside terminal output', () => {
+    let t = 0
+    const recorder = new TraceRecorder(() => t)
+
+    recorder.start()
+    t = 25
+    recorder.diagnostic('touch-scroll', 'touchstart', { x: 10, cancelable: true })
+
+    expect(
+      recorder.build({ program: 'pwsh', machine: 'desk', cols: 80, rows: 24 }).diagnostics,
+    ).toEqual([
+      {
+        at: 25,
+        source: 'touch-scroll',
+        event: 'touchstart',
+        details: { x: 10, cancelable: true },
+      },
+    ])
+    expect(recorder.entryCount).toBe(1)
+  })
+
   it('preserves idle gaps, because burst structure is part of what is being tested', () => {
     // An emulator that only ever sees frames back to back never exercises the case
     // where a control sequence is split across two arrivals.
@@ -71,9 +92,11 @@ describe('TraceRecorder', () => {
 
     recorder.start()
     recorder.frame(1, 'Delta', bytes(0x61))
+    recorder.diagnostic('touch-scroll', 'touchstart', { x: 10 })
     recorder.start()
 
     expect(recorder.frameCount).toBe(0)
+    expect(recorder.entryCount).toBe(0)
   })
 
   it('stops capturing after stop', () => {

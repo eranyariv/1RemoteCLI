@@ -12,8 +12,15 @@ function setup() {
   const element = document.createElement('div')
   Object.defineProperty(element, 'clientHeight', { value: 200 })
   const scrollLines = vi.fn()
-  cleanups.push(installTouchScroll(element, { rows: 10, scrollLines }))
-  return { element, scrollLines }
+  const diagnose = vi.fn()
+  const terminal = {
+    rows: 10,
+    cols: 40,
+    scrollLines,
+    buffer: { active: { viewportY: 90, baseY: 100 } },
+  }
+  cleanups.push(installTouchScroll(element, terminal, diagnose))
+  return { element, scrollLines, diagnose }
 }
 
 function touch(
@@ -32,13 +39,17 @@ function touch(
 
 describe('installTouchScroll', () => {
   it('scrolls toward older output when the finger moves down', () => {
-    const { element, scrollLines } = setup()
+    const { element, scrollLines, diagnose } = setup()
 
     touch(element, 'touchstart', 20, 20)
     const move = touch(element, 'touchmove', 20, 80)
 
     expect(move.defaultPrevented).toBe(true)
     expect(scrollLines).toHaveBeenCalledWith(-3)
+    expect(diagnose).toHaveBeenCalledWith(
+      'scroll-request',
+      expect.objectContaining({ lines: -3, viewportY: 90, baseY: 100 }),
+    )
   })
 
   it('scrolls toward newer output when the finger moves up', () => {

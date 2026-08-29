@@ -30,6 +30,7 @@ import { verdict } from '../terminal/latency'
 import { downloadTrace } from '../terminal/trace'
 import { pasteClipboardText, quoteTerminalPath } from '../terminal/attachment'
 import { refocusTerminalIfActive } from '../terminal/focus'
+import { installTouchScroll } from '../terminal/touchScroll'
 import { useAttachedSession } from '../terminal/useAttachedSession'
 import { Banner } from './Chrome'
 import { PAN_X, useLockHorizontalPan } from './useLockHorizontalPan'
@@ -168,6 +169,7 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
     term.loadAddon(fit)
     term.loadAddon(new WebLinksAddon())
     term.open(host)
+    const disposeTouchScroll = installTouchScroll(host, term)
 
     term.onData((data) => sendRef.current(applyModifiers(data, consumeModifiers())))
     term.onBinary((data) => sendRef.current(encodeBinary(data)))
@@ -176,6 +178,7 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
     fitRef.current = fit
 
     return () => {
+      disposeTouchScroll()
       term.dispose()
       termRef.current = null
       fitRef.current = null

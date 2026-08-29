@@ -47,6 +47,7 @@ export interface VoiceModeProps {
   machines: readonly MachineInfo[]
   selectedProjectId: string | null
   agentChatOpen?: boolean
+  terminalOpen?: boolean
   onSelectProject(projectId: string | null): void
   onOpenSession(machine: MachineInfo, session: SessionInfo): void
   onCloseSession(): void
@@ -120,6 +121,7 @@ export function VoiceMode({
   machines,
   selectedProjectId,
   agentChatOpen = false,
+  terminalOpen = false,
   onSelectProject,
   onOpenSession,
   onCloseSession,
@@ -772,6 +774,8 @@ export function VoiceMode({
         className={`fixed right-[max(1rem,env(safe-area-inset-right))] z-40 flex size-12 items-center justify-center rounded-full border border-sky-400/50 bg-sky-500 text-slate-950 shadow-lg shadow-sky-950/50 transition active:bg-sky-300 ${
           agentChatOpen
             ? 'bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+4rem)]'
+            : terminalOpen
+              ? 'bottom-[max(0.25rem,calc(env(safe-area-inset-bottom)-0.75rem))]'
             : 'bottom-[max(1rem,env(safe-area-inset-bottom))]'
         }`}
       >

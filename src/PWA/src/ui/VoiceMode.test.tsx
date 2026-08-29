@@ -241,6 +241,27 @@ describe('VoiceMode', () => {
     )
   })
 
+  it('keeps the microphone below an open terminal key bar', () => {
+    render(
+      <VoiceMode
+        client={new FakeRelay().client}
+        relayStatus="connected"
+        projects={[general]}
+        machines={[machine]}
+        selectedProjectId={null}
+        terminalOpen
+        onSelectProject={() => {}}
+        onOpenSession={() => {}}
+        onCloseSession={() => {}}
+        createProvider={() => new FakeSpeechProvider()}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'Start voice mode' }).className).toContain(
+      'bottom-[max(0.25rem,calc(env(safe-area-inset-bottom)-0.75rem))]',
+    )
+  })
+
   it('selects an ACP session and exchanges three turns without touch input', async () => {
     const view = setup()
 

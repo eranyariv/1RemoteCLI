@@ -23,6 +23,7 @@ namespace OneRemoteCli.Daemon.Tests;
 /// </para>
 /// </summary>
 [SupportedOSPlatform("windows")]
+[Collection("End-to-end")]
 public sealed class EndToEndTests : IAsyncLifetime
 {
     private EndToEndHarness _harness = null!;
@@ -130,6 +131,15 @@ public sealed class EndToEndTests : IAsyncLifetime
             long step = sequences[i] - sequences[i - 1];
             Assert.True(step is 0 or 1, $"Sequence jumped from {sequences[i - 1]} to {sequences[i]}.");
         }
+    }
+
+    /// <summary>
+    /// Real sockets, named pipes, and pseudoconsoles need the runner to themselves.
+    /// Hosted runners otherwise starve repaint delivery while other test classes are busy.
+    /// </summary>
+    [CollectionDefinition("End-to-end", DisableParallelization = true)]
+    public sealed class EndToEndCollection
+    {
     }
 
     /// <summary>

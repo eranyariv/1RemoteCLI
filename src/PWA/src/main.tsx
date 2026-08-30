@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 import App from './App.tsx'
 import { auth } from './auth/impl.tsx'
 import { registerServiceWorker } from './install/serviceWorker.ts'
+import { PortraitGuard } from './ui/PortraitGuard.tsx'
 import './index.css'
 
 /*
@@ -17,9 +18,11 @@ await auth.initialise()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <auth.Provider>
-      <App />
-    </auth.Provider>
+    <PortraitGuard>
+      <auth.Provider>
+        <App />
+      </auth.Provider>
+    </PortraitGuard>
   </StrictMode>,
 )
 

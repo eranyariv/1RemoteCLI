@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { needsOnScreenKeys } from './device'
+import { needsOnScreenKeys, shouldBlockLandscape } from './device'
 
 function browser(options: {
   touchFirst?: boolean
+  landscapeTouch?: boolean
   userAgent?: string
   maxTouchPoints?: number
   withoutMatchMedia?: boolean
@@ -15,13 +16,27 @@ function browser(options: {
     },
     matchMedia: options.withoutMatchMedia
       ? undefined
-      : () => ({ matches: options.touchFirst ?? false }),
+      : (query: string) => ({
+          matches: query.includes('orientation')
+            ? (options.landscapeTouch ?? false)
+            : (options.touchFirst ?? false),
+        }),
   } as unknown as Window
 }
 
 describe('on-screen terminal keys', () => {
   it('shows them when the browser reports touch-first input without hover', () => {
     expect(needsOnScreenKeys(browser({ touchFirst: true }))).toBe(true)
+  })
+
+  describe('portrait-only phone layout', () => {
+    it('blocks a touch-first phone in landscape', () => {
+      expect(shouldBlockLandscape(browser({ landscapeTouch: true }))).toBe(true)
+    })
+
+    it('does not block portrait phones or desktop windows', () => {
+      expect(shouldBlockLandscape(browser({ landscapeTouch: false }))).toBe(false)
+    })
   })
 
   it('hides them when the browser reports desktop-style input', () => {

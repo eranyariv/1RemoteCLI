@@ -25,6 +25,14 @@ public enum TerminalOutputKind : byte
     Snapshot = 1,
 }
 
+/// <summary>How the user chose a session's destination project.</summary>
+public enum SessionProjectMoveKind : byte
+{
+    Manual = 0,
+    Suggested = 1,
+    Always = 2,
+}
+
 /// <summary>The representation and input semantics a session uses.</summary>
 public enum SessionKind : byte
 {
@@ -303,6 +311,14 @@ public sealed class SessionInfo
     /// </summary>
     [Key(14)]
     public ChatCapabilities? ChatCapabilities { get; set; }
+
+    /// <summary>A learned destination offered while this session remains in General.</summary>
+    [Key(15)]
+    public string? SuggestedProjectId { get; set; }
+
+    /// <summary>How many matching sessions accepted this exact suggestion.</summary>
+    [Key(16)]
+    public int SuggestedProjectMoves { get; set; }
 }
 
 /// <summary>

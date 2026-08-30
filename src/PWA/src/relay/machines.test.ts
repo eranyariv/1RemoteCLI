@@ -32,6 +32,8 @@ function session(id: string, overrides: Partial<SessionInfo> = {}): SessionInfo 
     kind: 'Terminal',
     projectId: null,
     chatCapabilities: null,
+    suggestedProjectId: null,
+    suggestedProjectMoves: 0,
     ...overrides,
   }
 }

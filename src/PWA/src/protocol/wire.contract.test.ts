@@ -112,6 +112,8 @@ describe('decoding what the hub sends', () => {
     expect(session.rows).toBe(want.rows)
     expect(session.displayName).toBe(want.displayName)
     expect(session.awaitingInput).toBe(want.awaitingInput)
+    expect(session.suggestedProjectId).toBe(want.suggestedProjectId)
+    expect(session.suggestedProjectMoves).toBe(want.suggestedProjectMoves)
   })
 
   /**
@@ -635,7 +637,12 @@ describe('encoding what we send the hub', () => {
     const want = shape('setSessionProjectRequest')
 
     expect(
-      encodeSetSessionProject(want[0] as string, want[1] as string, want[2] as string),
+      encodeSetSessionProject(
+        want[0] as string,
+        want[1] as string,
+        want[2] as string,
+        'Suggested',
+      ),
     ).toEqual(want)
   })
 

@@ -60,6 +60,7 @@ import {
   type ProjectInfo,
   type ProjectResult,
   type SessionInfo,
+  type SessionProjectMoveKind,
   type TerminalOutput,
   type TerminalUploadReply,
 } from '../protocol/wire'
@@ -834,10 +835,11 @@ export class RelayClient {
     machineId: string,
     sessionId: string,
     projectId: string | null,
+    kind: SessionProjectMoveKind = 'Manual',
   ): Promise<HubError | null> {
     return this.request(
       Server.SetSessionProject,
-      encodeSetSessionProject(machineId, sessionId, projectId),
+      encodeSetSessionProject(machineId, sessionId, projectId, kind),
     )
   }
 

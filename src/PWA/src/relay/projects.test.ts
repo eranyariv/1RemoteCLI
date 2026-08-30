@@ -45,6 +45,8 @@ function session(id: string, overrides: Partial<SessionInfo> = {}): SessionInfo 
     kind: 'Terminal',
     projectId: null,
     chatCapabilities: null,
+    suggestedProjectId: null,
+    suggestedProjectMoves: 0,
     ...overrides,
   }
 }
@@ -151,6 +153,21 @@ describe('suggestedProject', () => {
         [general, candidate],
       ),
     ).toBe(candidate)
+  })
+
+  it('prefers a learned destination over an inferred path match', () => {
+    const learned = project('learned', { name: 'Learned destination' })
+    const inferred = project('inferred', { name: 'my-project' })
+
+    expect(
+      suggestedProject(
+        session('shell', {
+          cwd: 'C:\\Work\\my-project',
+          suggestedProjectId: learned.projectId,
+        }),
+        [general, learned, inferred],
+      ),
+    ).toBe(learned)
   })
 
   it('does not suggest anything for an already mapped session', () => {

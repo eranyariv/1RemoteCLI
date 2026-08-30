@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
-import type { MachineInfo, SessionInfo } from '../protocol/wire'
+import type { MachineInfo, SessionInfo, SessionProjectMoveKind } from '../protocol/wire'
 import { pinnedSessions, sessionLabel, type Machines } from '../relay/machines'
 import { GENERAL_PROJECT_ID, suggestedProject, type Projects } from '../relay/projects'
 import { labelFor } from '../terminal/catalog'
@@ -14,7 +14,12 @@ import { SortableGrip, SortableList } from './sorting'
 export interface SessionActions {
   onRename(machineId: string, sessionId: string, name: string | null): void
   onPin(machineId: string, sessionId: string, pinned: boolean): void
-  onMove(machineId: string, sessionId: string, projectId: string | null): void
+  onMove(
+    machineId: string,
+    sessionId: string,
+    projectId: string | null,
+    kind: SessionProjectMoveKind,
+  ): void
 }
 
 /**
@@ -131,7 +136,12 @@ function SessionEditor({
             value={session.projectId ?? GENERAL_PROJECT_ID}
             onChange={(event) => {
               const next = event.target.value
-              actions.onMove(machineId, session.sessionId, next === GENERAL_PROJECT_ID ? null : next)
+              actions.onMove(
+                machineId,
+                session.sessionId,
+                next === GENERAL_PROJECT_ID ? null : next,
+                'Manual',
+              )
               onClose()
             }}
             aria-label="Move to project"
@@ -253,16 +263,29 @@ function SessionRow({
       </div>
 
       {suggestion ? (
-        <div className="px-3 pb-2 pl-8">
+        <div className="flex flex-wrap gap-2 px-3 pb-2 pl-8">
           <button
             type="button"
             onClick={() =>
-              actions.onMove(machineId, session.sessionId, suggestion.projectId)
+              actions.onMove(machineId, session.sessionId, suggestion.projectId, 'Suggested')
             }
             className="min-h-8 max-w-full truncate rounded-full border border-sky-500/30 bg-sky-500/10 px-3 text-xs font-medium text-sky-300 transition hover:bg-sky-500/15 active:bg-sky-500/20"
           >
             Move to project {suggestion.name}
           </button>
+
+          {session.suggestedProjectId === suggestion.projectId &&
+          session.suggestedProjectMoves > 3 ? (
+            <button
+              type="button"
+              onClick={() =>
+                actions.onMove(machineId, session.sessionId, suggestion.projectId, 'Always')
+              }
+              className="min-h-8 max-w-full truncate rounded-full border border-violet-500/30 bg-violet-500/10 px-3 text-xs font-medium text-violet-300 transition hover:bg-violet-500/15 active:bg-violet-500/20"
+            >
+              Always move to project {suggestion.name}
+            </button>
+          ) : null}
         </div>
       ) : null}
 

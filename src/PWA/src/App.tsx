@@ -2,7 +2,12 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 
 import { auth } from './auth/impl'
 import { describeError } from './protocol/errors'
-import type { MachineInfo, ProjectInfo, SessionInfo } from './protocol/wire'
+import type {
+  MachineInfo,
+  ProjectInfo,
+  SessionInfo,
+  SessionProjectMoveKind,
+} from './protocol/wire'
 import { readDeepLink, withoutDeepLink, type DeepLink } from './push/subscription'
 import { usePushRegistration } from './push/usePush'
 import { useRelay } from './relay/useRelay'
@@ -124,8 +129,13 @@ export default function App() {
       onPin: (machineId: string, sessionId: string, pinned: boolean) => {
         void relay.client.setSessionPinned(machineId, sessionId, pinned)
       },
-      onMove: (machineId: string, sessionId: string, projectId: string | null) => {
-        void relay.client.setSessionProject(machineId, sessionId, projectId)
+      onMove: (
+        machineId: string,
+        sessionId: string,
+        projectId: string | null,
+        kind: SessionProjectMoveKind,
+      ) => {
+        void relay.client.setSessionProject(machineId, sessionId, projectId, kind)
       },
     }),
     [relay.client],

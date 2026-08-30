@@ -21,6 +21,7 @@
 /** Matches `TerminalOutputKind`. Enums travel as their names, not their numbers. */
 export type TerminalOutputKind = 'Delta' | 'Snapshot'
 export type SessionKind = 'Terminal' | 'AgentChat'
+export type SessionProjectMoveKind = 'Manual' | 'Suggested' | 'Always'
 export type ChatTranscriptKind = 'Delta' | 'Snapshot'
 export type ChatEventKind =
   | 'UserMessage'
@@ -73,6 +74,10 @@ export interface SessionInfo {
    * would fail after the user had already chosen the photo.
    */
   chatCapabilities: ChatCapabilities | null
+  /** Learned destination supplied by the hub for a session still in General. */
+  suggestedProjectId: string | null
+  /** Number of matching sessions previously moved by accepting this suggestion. */
+  suggestedProjectMoves: number
 }
 
 export interface ChatCapabilities {
@@ -299,6 +304,8 @@ export function decodeSession(value: unknown): SessionInfo {
     // "undefined" reaching a project lookup that will never find it.
     projectId: typeof s[13] === 'string' && s[13].length > 0 ? s[13] : null,
     chatCapabilities: chatCapabilities(s[14]),
+    suggestedProjectId: typeof s[15] === 'string' && s[15].length > 0 ? s[15] : null,
+    suggestedProjectMoves: Math.max(0, num(s[16])),
   }
 }
 
@@ -789,6 +796,7 @@ export function encodeSetSessionProject(
   machineId: string,
   sessionId: string,
   projectId: string | null,
+  kind: SessionProjectMoveKind = 'Manual',
 ): unknown[] {
-  return [machineId, sessionId, projectId]
+  return [machineId, sessionId, projectId, kind]
 }

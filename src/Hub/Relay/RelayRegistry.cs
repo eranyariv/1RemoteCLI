@@ -575,13 +575,11 @@ public sealed class RelayRegistry
         string userKey,
         string machineId,
         string sessionId,
-        string projectId)
+        string? projectId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(userKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(machineId);
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
-
         lock (_gate)
         {
             if (!_partitions.TryGetValue(userKey, out UserPartition? partition) ||

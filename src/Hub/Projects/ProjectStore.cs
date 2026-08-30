@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Options;
@@ -65,17 +67,43 @@ public sealed class SessionProjectRecord
     public string ProjectId { get; set; } = string.Empty;
 }
 
+/// <summary>Aggregated choices for sessions with the same stable launch parameters.</summary>
+public sealed class ProjectMoveRecord
+{
+    /// <summary>SHA-256 of machine, name, program, arguments, path, kind, and CLI type.</summary>
+    public string SessionPattern { get; set; } = string.Empty;
+
+    public string ProjectId { get; set; } = string.Empty;
+
+    public int MoveCount { get; set; }
+
+    public int SuggestedMoveCount { get; set; }
+
+    public bool Always { get; set; }
+}
+
+/// <summary>A learned destination for a matching General session.</summary>
+public readonly record struct ProjectMoveMatch(
+    string ProjectId,
+    int MoveCount,
+    int SuggestedMoveCount,
+    bool Always);
+
 /// <summary>The whole store, on disk, in one JSON file. See <see cref="ProjectStore"/> for why.</summary>
 public sealed class ProjectState
 {
     /// <summary>Schema version, so a future shape change can be migrated rather than guessed at.</summary>
-    public int Schema { get; set; } = 2;
+    public int Schema { get; set; } = 3;
 
     /// <summary>User key to that user's projects, General included.</summary>
     public Dictionary<string, List<ProjectRecord>> Projects { get; set; } = new(StringComparer.Ordinal);
 
     /// <summary>User key to project assignments for sessions that may be re-announced after a restart.</summary>
     public Dictionary<string, List<SessionProjectRecord>> SessionProjects { get; set; } =
+        new(StringComparer.Ordinal);
+
+    /// <summary>User key to aggregated move history and automatic routing rules.</summary>
+    public Dictionary<string, List<ProjectMoveRecord>> ProjectMoves { get; set; } =
         new(StringComparer.Ordinal);
 }
 
@@ -218,6 +246,56 @@ public sealed class ProjectStore
     }
 
     /// <summary>
+    /// Returns the unambiguous learned destination for this session pattern.
+    /// Automatic rules win; otherwise an equal top count is treated as ambiguous.
+    /// </summary>
+    public ProjectMoveMatch? MatchSession(string userKey, string machineId, SessionInfo session)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(userKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(machineId);
+        ArgumentNullException.ThrowIfNull(session);
+
+        lock (_gate)
+        {
+            string pattern = SessionPattern(machineId, session);
+            HashSet<string> projectIds = PartitionOf(userKey)
+                .Where(project => !project.IsGeneral)
+                .Select(project => project.ProjectId)
+                .ToHashSet(StringComparer.Ordinal);
+            List<ProjectMoveRecord> matches = ProjectMovesOf(userKey)
+                .Where(record =>
+                    record.SessionPattern == pattern &&
+                    projectIds.Contains(record.ProjectId) &&
+                    record.MoveCount > 0)
+                .OrderByDescending(record => record.Always)
+                .ThenByDescending(record => record.MoveCount)
+                .ThenByDescending(record => record.SuggestedMoveCount)
+                .ToList();
+
+            if (matches.Count == 0)
+            {
+                return null;
+            }
+
+            ProjectMoveRecord best = matches[0];
+
+            if (!best.Always &&
+                matches.Count > 1 &&
+                matches[1].MoveCount == best.MoveCount &&
+                matches[1].SuggestedMoveCount == best.SuggestedMoveCount)
+            {
+                return null;
+            }
+
+            return new ProjectMoveMatch(
+                best.ProjectId,
+                best.MoveCount,
+                best.SuggestedMoveCount,
+                best.Always);
+        }
+    }
+
+    /// <summary>
     /// Persists a live session's project. Null means General and removes the durable
     /// override so a reused session id cannot inherit an old choice.
     /// </summary>
@@ -226,6 +304,41 @@ public sealed class ProjectStore
         string machineId,
         string sessionId,
         string? projectId,
+        out string? error) =>
+        TrySetSessionProjectCore(
+            userKey,
+            machineId,
+            sessionId,
+            projectId,
+            movedSession: null,
+            SessionProjectMoveKind.Manual,
+            out error);
+
+    /// <summary>Persists the assignment and learns from this user-initiated General move atomically.</summary>
+    public bool TrySetSessionProject(
+        string userKey,
+        string machineId,
+        string sessionId,
+        string projectId,
+        SessionInfo movedSession,
+        SessionProjectMoveKind kind,
+        out string? error) =>
+        TrySetSessionProjectCore(
+            userKey,
+            machineId,
+            sessionId,
+            projectId,
+            movedSession,
+            kind,
+            out error);
+
+    private bool TrySetSessionProjectCore(
+        string userKey,
+        string machineId,
+        string sessionId,
+        string? projectId,
+        SessionInfo? movedSession,
+        SessionProjectMoveKind kind,
         out string? error)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(userKey);
@@ -253,6 +366,7 @@ public sealed class ProjectStore
                 int index = assignments.FindIndex(
                     record => record.MachineId == machineId && record.SessionId == sessionId);
                 SessionProjectRecord? previous = index >= 0 ? assignments[index] : null;
+                bool assignmentChanged = true;
 
                 if (projectId is null)
                 {
@@ -275,8 +389,7 @@ public sealed class ProjectStore
                 }
                 else if (previous.ProjectId == projectId)
                 {
-                    error = null;
-                    return true;
+                    assignmentChanged = false;
                 }
                 else
                 {
@@ -286,6 +399,22 @@ public sealed class ProjectStore
                         SessionId = sessionId,
                         ProjectId = projectId,
                     };
+                }
+
+                List<ProjectMoveRecord>? moves = null;
+                List<ProjectMoveRecord>? previousMoves = null;
+
+                if (movedSession is not null && projectId is not null)
+                {
+                    moves = ProjectMovesOf(userKey);
+                    previousMoves = moves.Select(Clone).ToList();
+                    RecordMove(moves, machineId, movedSession, projectId, kind);
+                }
+
+                if (!assignmentChanged && previousMoves is null)
+                {
+                    error = null;
+                    return true;
                 }
 
                 _dirty = true;
@@ -304,6 +433,12 @@ public sealed class ProjectStore
                     else
                     {
                         assignments.Insert(Math.Min(index, assignments.Count), previous);
+                    }
+
+                    if (moves is not null && previousMoves is not null)
+                    {
+                        moves.Clear();
+                        moves.AddRange(previousMoves);
                     }
 
                     error = ErrorCodes.InternalError;
@@ -503,14 +638,19 @@ public sealed class ProjectStore
                 List<SessionProjectRecord> assignments = SessionProjectsOf(userKey);
                 List<SessionProjectRecord> removedAssignments =
                     assignments.Where(assignment => assignment.ProjectId == projectId).ToList();
+                List<ProjectMoveRecord> moves = ProjectMovesOf(userKey);
+                List<ProjectMoveRecord> removedMoves =
+                    moves.Where(move => move.ProjectId == projectId).ToList();
                 partition.RemoveAt(index);
                 assignments.RemoveAll(assignment => assignment.ProjectId == projectId);
+                moves.RemoveAll(move => move.ProjectId == projectId);
                 _dirty = true;
 
                 if (!Flush())
                 {
                     partition.Insert(index, removed);
                     assignments.AddRange(removedAssignments);
+                    moves.AddRange(removedMoves);
                     error = ErrorCodes.InternalError;
                     return false;
                 }
@@ -809,6 +949,99 @@ public sealed class ProjectStore
         return assignments;
     }
 
+    /// <summary>Caller must hold the gate.</summary>
+    private List<ProjectMoveRecord> ProjectMovesOf(string userKey)
+    {
+        if (!_state.ProjectMoves.TryGetValue(userKey, out List<ProjectMoveRecord>? moves))
+        {
+            moves = [];
+            _state.ProjectMoves[userKey] = moves;
+        }
+
+        return moves;
+    }
+
+    private static void RecordMove(
+        List<ProjectMoveRecord> moves,
+        string machineId,
+        SessionInfo session,
+        string projectId,
+        SessionProjectMoveKind kind)
+    {
+        string pattern = SessionPattern(machineId, session);
+        ProjectMoveRecord? record = moves.Find(
+            candidate => candidate.SessionPattern == pattern && candidate.ProjectId == projectId);
+
+        if (record is null)
+        {
+            record = new ProjectMoveRecord
+            {
+                SessionPattern = pattern,
+                ProjectId = projectId,
+            };
+            moves.Add(record);
+        }
+
+        record.MoveCount = Increment(record.MoveCount);
+
+        if (kind == SessionProjectMoveKind.Suggested)
+        {
+            record.SuggestedMoveCount = Increment(record.SuggestedMoveCount);
+        }
+
+        if (kind == SessionProjectMoveKind.Always)
+        {
+            foreach (ProjectMoveRecord candidate in moves.Where(
+                         candidate => candidate.SessionPattern == pattern))
+            {
+                candidate.Always = false;
+            }
+
+            record.Always = true;
+        }
+    }
+
+    private static int Increment(int value) => value == int.MaxValue ? value : value + 1;
+
+    private static ProjectMoveRecord Clone(ProjectMoveRecord record) => new()
+    {
+        SessionPattern = record.SessionPattern,
+        ProjectId = record.ProjectId,
+        MoveCount = record.MoveCount,
+        SuggestedMoveCount = record.SuggestedMoveCount,
+        Always = record.Always,
+    };
+
+    /// <summary>
+    /// Hashes the matching inputs so durable learning does not persist terminal names,
+    /// paths, or arguments in plaintext.
+    /// </summary>
+    private static string SessionPattern(string machineId, SessionInfo session)
+    {
+        var value = new StringBuilder();
+
+        Add(machineId);
+        Add(session.CustomName ?? session.DisplayName);
+        Add(session.Program);
+        Add(session.Cwd);
+        Add(session.Kind.ToString());
+        Add(session.CliType.ToString());
+
+        foreach (string argument in session.Args ?? [])
+        {
+            Add(argument);
+        }
+
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value.ToString())))
+            .ToLowerInvariant();
+
+        void Add(string? part)
+        {
+            string exact = part ?? string.Empty;
+            value.Append(exact.Length).Append(':').Append(exact).Append('|');
+        }
+    }
+
     /// <summary>
     /// Case-insensitive per-user uniqueness, General included - so nobody can create
     /// a second project that collides with the reserved one by name either.
@@ -962,10 +1195,12 @@ public sealed class ProjectStore
 
             ProjectState state =
                 JsonSerializer.Deserialize<ProjectState>(File.ReadAllText(StatePath), Json) ?? new ProjectState();
-            state.Schema = 2;
+            state.Schema = 3;
             state.Projects ??= new Dictionary<string, List<ProjectRecord>>(StringComparer.Ordinal);
             state.SessionProjects ??=
                 new Dictionary<string, List<SessionProjectRecord>>(StringComparer.Ordinal);
+            state.ProjectMoves ??=
+                new Dictionary<string, List<ProjectMoveRecord>>(StringComparer.Ordinal);
             return state;
         }
         catch (JsonException error)

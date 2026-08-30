@@ -77,6 +77,8 @@ const session: SessionInfo = {
   kind: 'AgentChat',
   projectId: null,
   chatCapabilities: null,
+  suggestedProjectId: null,
+  suggestedProjectMoves: 0,
 }
 
 function chatEvent(

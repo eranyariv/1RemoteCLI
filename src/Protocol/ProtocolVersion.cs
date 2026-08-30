@@ -32,9 +32,12 @@ public static class ProtocolVersion
     /// behind a chat session accepts. Additive again: <c>SendChatMessage</c> is
     /// untouched and remains the path for text-only prompts, and a peer that omits
     /// the appended field is read as advertising no attachment support at all.
+    /// Version 7 appends explicit terminal continuity state and learned project-move
+    /// suggestions, and adds the optional move kind used to distinguish manual,
+    /// suggested, and automatic choices. Every new field has a safe older-peer default.
     /// </para>
     /// </summary>
-    public const int Current = 6;
+    public const int Current = 7;
 
     /// <summary>Oldest version this build still accepts from a peer.</summary>
     public const int MinimumSupported = 1;

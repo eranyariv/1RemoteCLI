@@ -39,6 +39,8 @@ function session(id: string, overrides: Partial<SessionInfo> = {}): SessionInfo 
     kind: 'Terminal',
     projectId: project.projectId,
     chatCapabilities: null,
+    suggestedProjectId: null,
+    suggestedProjectMoves: 0,
     ...overrides,
   }
 }
@@ -132,7 +134,61 @@ describe('MachineList project layout', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Move to project 1RemoteCLI' }))
 
-    expect(actions.onMove).toHaveBeenCalledWith('Active', 'session-a', 'remote-cli')
+    expect(actions.onMove).toHaveBeenCalledWith('Active', 'session-a', 'remote-cli', 'Suggested')
+  })
+
+  it('offers a learned manual destination even when the path does not imply it', () => {
+    const learned = {
+      ...project,
+      projectId: 'learned',
+      name: 'Learned destination',
+    }
+    const unmapped = session('session-a', {
+      cwd: 'C:\\Unrelated',
+      projectId: null,
+      suggestedProjectId: learned.projectId,
+    })
+
+    render(
+      <MachineList
+        projectId={general.projectId}
+        machines={[machine('Active', [unmapped])]}
+        projects={[general, learned]}
+        actions={actions}
+        onOpenSession={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move to project Learned destination' }))
+    expect(actions.onMove).toHaveBeenCalledWith('Active', 'session-a', 'learned', 'Suggested')
+  })
+
+  it('offers an automatic rule after more than three accepted matching suggestions', () => {
+    const learned = {
+      ...project,
+      projectId: 'learned',
+      name: 'Learned destination',
+    }
+    const unmapped = session('session-a', {
+      projectId: null,
+      suggestedProjectId: learned.projectId,
+      suggestedProjectMoves: 4,
+    })
+
+    render(
+      <MachineList
+        projectId={general.projectId}
+        machines={[machine('Active', [unmapped])]}
+        projects={[general, learned]}
+        actions={actions}
+        onOpenSession={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Always move to project Learned destination' }),
+    )
+    expect(actions.onMove).toHaveBeenCalledWith('Active', 'session-a', 'learned', 'Always')
   })
 
   it('labels an agent chat with the same provider source as agent settings', () => {

@@ -412,6 +412,10 @@ public sealed class SetSessionProjectRequest
     /// <summary>Null moves the session back to General.</summary>
     [Key(2)]
     public string? ProjectId { get; set; }
+
+    /// <summary>Distinguishes a manual selection, an accepted suggestion, and a durable rule.</summary>
+    [Key(3)]
+    public SessionProjectMoveKind Kind { get; set; }
 }
 
 // Hub to client (spec section 5.3).

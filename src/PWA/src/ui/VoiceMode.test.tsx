@@ -106,6 +106,8 @@ function session(kind: SessionInfo['kind'], id: string, name: string): SessionIn
     kind,
     projectId: null,
     chatCapabilities: null,
+    suggestedProjectId: null,
+    suggestedProjectMoves: 0,
   }
 }
 

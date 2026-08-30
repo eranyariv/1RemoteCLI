@@ -140,6 +140,8 @@ public sealed class WireContractTests
                             DisplayName = "Claude Code",
                             AwaitingInput = true,
                             CliType = CliType.ClaudeCode,
+                            SuggestedProjectId = "8277e0910d750195b448797616e091ad",
+                            SuggestedProjectMoves = 4,
                         },
                         new SessionInfo
                         {
@@ -623,6 +625,7 @@ public sealed class WireContractTests
             MachineId = "5d41402abc4b2a76b9719d911017c592",
             SessionId = "ff00ff00",
             ProjectId = "8277e0910d750195b448797616e091ad",
+            Kind = SessionProjectMoveKind.Suggested,
         });
 
         Add(messages, "setSessionProjectClearRequest", new SetSessionProjectRequest

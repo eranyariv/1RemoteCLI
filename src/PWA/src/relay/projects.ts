@@ -89,6 +89,13 @@ export function suggestedProject(
 ): ProjectInfo | undefined {
   if (session.projectId !== null && session.projectId !== GENERAL_PROJECT_ID) return undefined
 
+  if (session.suggestedProjectId) {
+    const learned = projects.find(
+      (project) => !project.isGeneral && project.projectId === session.suggestedProjectId,
+    )
+    if (learned) return learned
+  }
+
   const paths = [session.cwd, session.program, ...session.args].join('\n')
   const matches = projects
     .filter((project) => !project.isGeneral)

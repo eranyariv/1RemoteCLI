@@ -1219,6 +1219,12 @@ public sealed class RelayHub(
 
         string userKey = RequireUserKey();
 
+        if (!Enum.IsDefined(request.Kind))
+        {
+            return Task.FromResult<ErrorNotification?>(
+                Error(ErrorCodes.InvalidRequest, "SetSessionProject has an invalid move kind.", request.SessionId));
+        }
+
         if (request.ProjectId is not null && !_projects.Exists(userKey, request.ProjectId))
         {
             return Task.FromResult<ErrorNotification?>(
@@ -1239,12 +1245,26 @@ public sealed class RelayHub(
             return Task.FromResult(error);
         }
 
-        if (!_projects.TrySetSessionProject(
+        bool fromGeneral = previousProjectId is null or ProjectStore.GeneralProjectId;
+        bool learn = fromGeneral && request.ProjectId is not null;
+        string? persistenceError;
+        bool persisted = learn
+            ? _projects.TrySetSessionProject(
                 userKey,
                 request.MachineId,
                 request.SessionId,
-                request.ProjectId,
-                out string? persistenceError))
+                request.ProjectId!,
+                labelled!.Session,
+                request.Kind,
+                out persistenceError)
+            : _projects.TrySetSessionProject(
+                userKey,
+                request.MachineId,
+                request.SessionId,
+                request.ProjectId ?? ProjectStore.GeneralProjectId,
+                out persistenceError);
+
+        if (!persisted)
         {
             _registry.TryMoveSession(
                 Context.ConnectionId,
@@ -1273,24 +1293,63 @@ public sealed class RelayHub(
     /// </summary>
     private void RestorePersistedProjectOrCorrectStale(SessionAddress address, SessionInfo session)
     {
+        session.SuggestedProjectId = null;
+        session.SuggestedProjectMoves = 0;
+
         if (_projects.ProjectOfSession(address.UserKey, address.MachineId, session.SessionId) is { } persisted)
+        {
+            string? restored = persisted == ProjectStore.GeneralProjectId ? null : persisted;
+            _registry.ApplyPersistedProject(
+                address.UserKey,
+                address.MachineId,
+                session.SessionId,
+                restored);
+            session.ProjectId = restored;
+            return;
+        }
+
+        if (session.ProjectId is { } projectId &&
+            projectId != ProjectStore.GeneralProjectId &&
+            !_projects.Exists(address.UserKey, projectId))
+        {
+            _registry.CorrectStaleProject(address.UserKey, address.MachineId, session.SessionId);
+            session.ProjectId = null;
+        }
+
+        if (session.ProjectId is not null && session.ProjectId != ProjectStore.GeneralProjectId)
+        {
+            return;
+        }
+
+        ProjectMoveMatch? learned = _projects.MatchSession(
+            address.UserKey,
+            address.MachineId,
+            session);
+
+        if (learned is not { } match)
+        {
+            return;
+        }
+
+        if (match.Always &&
+            _projects.TrySetSessionProject(
+                address.UserKey,
+                address.MachineId,
+                session.SessionId,
+                match.ProjectId,
+                out _))
         {
             _registry.ApplyPersistedProject(
                 address.UserKey,
                 address.MachineId,
                 session.SessionId,
-                persisted);
-            session.ProjectId = persisted;
+                match.ProjectId);
+            session.ProjectId = match.ProjectId;
             return;
         }
 
-        if (session.ProjectId is not { } projectId || _projects.Exists(address.UserKey, projectId))
-        {
-            return;
-        }
-
-        _registry.CorrectStaleProject(address.UserKey, address.MachineId, session.SessionId);
-        session.ProjectId = null;
+        session.SuggestedProjectId = match.ProjectId;
+        session.SuggestedProjectMoves = match.SuggestedMoveCount;
     }
 
     /// <summary>

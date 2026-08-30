@@ -18,6 +18,16 @@ public class ProjectStoreTests
     private static readonly byte[] Png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
     private static readonly byte[] Jpeg = [0xff, 0xd8, 0xff, 0xe0];
 
+    private static SessionInfo Session(string id, string cwd = @"C:\Work\repo") => new()
+    {
+        SessionId = id,
+        Program = "claude",
+        Args = ["--model", "sonnet"],
+        Cwd = cwd,
+        DisplayName = "Claude Code",
+        CliType = CliType.ClaudeCode,
+    };
+
     [Fact]
     public void EveryUserAlwaysHasAGeneralProject()
     {
@@ -260,6 +270,108 @@ public class ProjectStoreTests
     }
 
     [Fact]
+    public void OneManualMoveSuggestsThatProjectForTheNextMatchingSession()
+    {
+        Use((path, iconRoot) =>
+        {
+            ProjectStore store = Open(path);
+            store.TryCreate(UserA, "Website", null, null, null, out ProjectInfo? project, out _);
+
+            Assert.True(store.TrySetSessionProject(
+                UserA,
+                "machine-a",
+                "session-1",
+                project!.ProjectId,
+                Session("session-1"),
+                SessionProjectMoveKind.Manual,
+                out _));
+
+            ProjectMoveMatch match = Assert.IsType<ProjectMoveMatch>(
+                Open(path).MatchSession(UserA, "machine-a", Session("session-2")));
+
+            Assert.Equal(project.ProjectId, match.ProjectId);
+            Assert.Equal(1, match.MoveCount);
+            Assert.Equal(0, match.SuggestedMoveCount);
+            Assert.False(match.Always);
+            Assert.Null(store.MatchSession(
+                UserA,
+                "machine-a",
+                Session("different", @"C:\Work\other")));
+            Assert.Null(store.MatchSession(
+                UserA,
+                "different-machine",
+                Session("session-3")));
+            Assert.Null(store.MatchSession(
+                UserA,
+                "machine-a",
+                Session("case-sensitive", @"C:\Work\PROJECT")));
+        });
+    }
+
+    [Fact]
+    public void SuggestedMovesAreCountedAndCanBecomeAnAutomaticRule()
+    {
+        Use((path, iconRoot) =>
+        {
+            ProjectStore store = Open(path);
+            store.TryCreate(UserA, "Website", null, null, null, out ProjectInfo? project, out _);
+
+            for (int i = 1; i <= 4; i++)
+            {
+                Assert.True(store.TrySetSessionProject(
+                    UserA,
+                    "machine-a",
+                    $"session-{i}",
+                    project!.ProjectId,
+                    Session($"session-{i}"),
+                    SessionProjectMoveKind.Suggested,
+                    out _));
+            }
+
+            ProjectMoveMatch learned = Assert.IsType<ProjectMoveMatch>(
+                store.MatchSession(UserA, "machine-a", Session("session-5")));
+            Assert.Equal(4, learned.MoveCount);
+            Assert.Equal(4, learned.SuggestedMoveCount);
+            Assert.False(learned.Always);
+
+            Assert.True(store.TrySetSessionProject(
+                UserA,
+                "machine-a",
+                "session-5",
+                project!.ProjectId,
+                Session("session-5"),
+                SessionProjectMoveKind.Always,
+                out _));
+
+            ProjectMoveMatch automatic = Assert.IsType<ProjectMoveMatch>(
+                Open(path).MatchSession(UserA, "machine-a", Session("session-6")));
+            Assert.True(automatic.Always);
+            Assert.Equal(5, automatic.MoveCount);
+            Assert.Equal(4, automatic.SuggestedMoveCount);
+        });
+    }
+
+    [Fact]
+    public void EqualEvidenceForTwoProjectsDoesNotProduceAGuess()
+    {
+        Use((path, iconRoot) =>
+        {
+            ProjectStore store = Open(path);
+            store.TryCreate(UserA, "First", null, null, null, out ProjectInfo? first, out _);
+            store.TryCreate(UserA, "Second", null, null, null, out ProjectInfo? second, out _);
+
+            Assert.True(store.TrySetSessionProject(
+                UserA, "machine-a", "one", first!.ProjectId, Session("one"),
+                SessionProjectMoveKind.Manual, out _));
+            Assert.True(store.TrySetSessionProject(
+                UserA, "machine-a", "two", second!.ProjectId, Session("two"),
+                SessionProjectMoveKind.Manual, out _));
+
+            Assert.Null(store.MatchSession(UserA, "machine-a", Session("three")));
+        });
+    }
+
+    [Fact]
     public void DeletingAProjectDeletesItsDurableSessionAssignments()
     {
         Use((path, iconRoot) =>
@@ -268,11 +380,20 @@ public class ProjectStoreTests
             store.TryCreate(UserA, "Website", null, null, null, out ProjectInfo? project, out _);
             store.TrySetSessionProject(
                 UserA, "machine-a", "session-1", project!.ProjectId, out _);
+            store.TrySetSessionProject(
+                UserA,
+                "machine-a",
+                "learned-1",
+                project.ProjectId,
+                Session("learned-1"),
+                SessionProjectMoveKind.Manual,
+                out _);
 
             Assert.True(store.TryDelete(UserA, project.ProjectId, out string? error));
 
             Assert.Null(error);
             Assert.Null(Open(path).ProjectOfSession(UserA, "machine-a", "session-1"));
+            Assert.Null(Open(path).MatchSession(UserA, "machine-a", Session("learned-2")));
         });
     }
 

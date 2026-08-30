@@ -1237,6 +1237,123 @@ public sealed class RelayHubTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AManualMoveSuggestsTheSameProjectForTheNextMatchingSession()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        ProjectResult project = await client.InvokeAsync<ProjectResult>(
+            HubMethods.Server.CreateProject, new CreateProjectRequest { Name = "Website" });
+
+        await OpenSessionAsync(agent, "session-1", "pwsh");
+        Assert.Null(await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SetSessionProject,
+            new SetSessionProjectRequest
+            {
+                MachineId = "machine-a",
+                SessionId = "session-1",
+                ProjectId = project.Project!.ProjectId,
+                Kind = SessionProjectMoveKind.Manual,
+            }));
+        await agent.InvokeAsync(
+            HubMethods.Server.SessionClosed,
+            new AgentSessionClosedNotification { SessionId = "session-1" });
+
+        await OpenSessionAsync(agent, "session-2", "pwsh");
+        SessionInfo next = Assert.Single(Assert.Single(
+            (await client.InvokeAsync<MachineListNotification>(
+                HubMethods.Server.ListMachines)).Machines).Sessions);
+
+        Assert.Null(next.ProjectId);
+        Assert.Equal(project.Project.ProjectId, next.SuggestedProjectId);
+        Assert.Equal(0, next.SuggestedProjectMoves);
+    }
+
+    [Fact]
+    public async Task RepeatedSuggestedMovesCanBecomeAnAutomaticProjectRule()
+    {
+        HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+        ProjectResult project = await client.InvokeAsync<ProjectResult>(
+            HubMethods.Server.CreateProject, new CreateProjectRequest { Name = "Website" });
+
+        for (int i = 1; i <= 4; i++)
+        {
+            string sessionId = $"suggested-{i}";
+            await OpenSessionAsync(agent, sessionId, "pwsh");
+            Assert.Null(await client.InvokeAsync<ErrorNotification?>(
+                HubMethods.Server.SetSessionProject,
+                new SetSessionProjectRequest
+                {
+                    MachineId = "machine-a",
+                    SessionId = sessionId,
+                    ProjectId = project.Project!.ProjectId,
+                    Kind = SessionProjectMoveKind.Suggested,
+                }));
+            await agent.InvokeAsync(
+                HubMethods.Server.SessionClosed,
+                new AgentSessionClosedNotification { SessionId = sessionId });
+        }
+
+        await OpenSessionAsync(agent, "always-choice", "pwsh");
+        SessionInfo candidate = Assert.Single(Assert.Single(
+            (await client.InvokeAsync<MachineListNotification>(
+                HubMethods.Server.ListMachines)).Machines).Sessions);
+        Assert.Equal(project.Project!.ProjectId, candidate.SuggestedProjectId);
+        Assert.Equal(4, candidate.SuggestedProjectMoves);
+
+        Assert.Null(await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SetSessionProject,
+            new SetSessionProjectRequest
+            {
+                MachineId = "machine-a",
+                SessionId = candidate.SessionId,
+                ProjectId = project.Project.ProjectId,
+                Kind = SessionProjectMoveKind.Always,
+            }));
+        await agent.InvokeAsync(
+            HubMethods.Server.SessionClosed,
+            new AgentSessionClosedNotification { SessionId = candidate.SessionId });
+
+        await OpenSessionAsync(agent, "automatically-routed", "pwsh");
+        SessionInfo automatic = Assert.Single(Assert.Single(
+            (await client.InvokeAsync<MachineListNotification>(
+                HubMethods.Server.ListMachines)).Machines).Sessions);
+
+        Assert.Equal(project.Project.ProjectId, automatic.ProjectId);
+        Assert.Null(automatic.SuggestedProjectId);
+
+        Assert.Null(await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.SetSessionProject,
+            new SetSessionProjectRequest
+            {
+                MachineId = "machine-a",
+                SessionId = automatic.SessionId,
+                ProjectId = null,
+            }));
+        await agent.InvokeAsync(
+            HubMethods.Server.SessionUpdated,
+            new AgentSessionUpdatedNotification
+            {
+                Session = new SessionInfo
+                {
+                    SessionId = automatic.SessionId,
+                    Program = "pwsh",
+                    Args = [],
+                    Cwd = @"C:\Work",
+                    Cols = 120,
+                    Rows = 30,
+                    StartedAt = DateTimeOffset.UtcNow,
+                },
+            });
+
+        SessionInfo keptInGeneral = Assert.Single(Assert.Single(
+            (await client.InvokeAsync<MachineListNotification>(
+                HubMethods.Server.ListMachines)).Machines).Sessions);
+        Assert.Null(keptInGeneral.ProjectId);
+        Assert.Null(keptInGeneral.SuggestedProjectId);
+    }
+
+    [Fact]
     public async Task MovingASessionToAProjectThatDoesNotExistIsRefused()
     {
         HubConnection agent = await ConnectAgentAsync(AliceTenant, AliceObject, "machine-a");

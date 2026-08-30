@@ -34,7 +34,7 @@ async function settled(
 
 /**
  * Resizing, which on a phone is not a thing anybody does deliberately — it is what
- * happens when the device is rotated or the on-screen keyboard appears.
+ * happens when the available portrait viewport changes or the on-screen keyboard appears.
  *
  * The policy is that the phone wins: whatever is attached decides the geometry, and the
  * pseudoconsole is reshaped to match. That is only worth anything if it reaches the
@@ -58,42 +58,42 @@ test.describe('resizing', () => {
     await expectScreen(app, `E2E-WIDTH ${phone.cols}`)
   })
 
-  test('follows the screen when the device is rotated', async ({ app, desk, request }) => {
-    const session = await desk('rotate')
-    await attach(app, 'rotate')
+  test('blocks interaction until a landscape phone returns to portrait', async ({
+    app,
+    desk,
+    request,
+  }) => {
+    const session = await desk('portrait guard')
+    await attach(app, 'portrait guard')
     await expectScreen(app, 'E2E-READY')
 
-    const portrait = await settled(app, request, session.sessionId)
+    await settled(app, request, session.sessionId)
 
     await app.setViewportSize({ width: 915, height: 412 })
+    await expect(app.getByRole('dialog', { name: 'Rotate to portrait' })).toBeVisible()
+    await expect(app.getByRole('button', { name: '‹ Back' })).toBeHidden()
 
-    // The assertion is on the number changing rather than on a particular value: the
-    // exact column count is a consequence of the font metrics the browser chose, and
-    // pinning it would make this a test of Chromium's text rendering.
-    await expect
-      .poll(async () => (await geometry(app)).cols, { message: 'the terminal to widen' })
-      .toBeGreaterThan(portrait.cols)
-
-    const landscape = await settled(app, request, session.sessionId)
-
+    await app.setViewportSize({ width: 412, height: 915 })
+    await expect(app.getByRole('dialog', { name: 'Rotate to portrait' })).toBeHidden()
+    const portrait = await settled(app, request, session.sessionId)
     await type(app, 'w')
-
-    // The load-bearing assertion: the program at the desk agrees. A resize that
-    // reflowed the browser's copy of the screen without reaching the pseudoconsole
-    // would look identical up to this line.
-    await expectScreen(app, `E2E-WIDTH ${landscape.cols}`)
+    await expectScreen(app, `E2E-WIDTH ${portrait.cols}`)
   })
 
-  test('keeps what was on the screen through a resize', async ({ app, desk }) => {
-    await desk('reflow')
+  test('keeps what was on the screen through a portrait resize', async ({ app, desk, request }) => {
+    const session = await desk('reflow')
     await attach(app, 'reflow')
     await expectScreen(app, 'E2E-READY')
 
-    await app.setViewportSize({ width: 915, height: 412 })
+    const before = await settled(app, request, session.sessionId)
+    await app.setViewportSize({ width: 360, height: 800 })
 
     await expect
-      .poll(async () => await screen(app), { message: 'the banner to survive the reflow' })
-      .toContain('1RemoteCLI end-to-end script')
+      .poll(async () => (await geometry(app)).cols, { message: 'the terminal to narrow' })
+      .toBeLessThan(before.cols)
+    await settled(app, request, session.sessionId)
+
+    expect(await screen(app)).toContain('1RemoteCLI end-to-end script')
 
     // Still usable afterwards, which is the part a reflow bug tends to break: the
     // screen looks right and the cursor is somewhere else entirely.

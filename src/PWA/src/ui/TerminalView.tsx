@@ -885,14 +885,14 @@ function KeyButton({
 function StateDot({ state }: { state: string }) {
   const colour =
     state === 'attached'
-      ? 'bg-amber-400'
+      ? 'bg-emerald-400'
       : state === 'attaching' || state === 'reconnecting'
         ? 'bg-amber-400'
         : state === 'closed'
           ? 'bg-slate-600'
           : 'bg-rose-500'
 
-  const label = state === 'attached' ? 'CLI working' : state
+  const label = state === 'attached' ? 'CLI connected' : state
 
   return (
     <span className={`size-2 shrink-0 rounded-full ${colour}`} aria-label={label} title={label} />

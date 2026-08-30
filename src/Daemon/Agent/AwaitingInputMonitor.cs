@@ -233,7 +233,13 @@ public sealed class AwaitingInputMonitor
             instant - session.LastOutputUtc,
             session.Screen.Posture());
 
-        return AwaitingInputHeuristic.Evaluate(signals, _options, _patterns) != AwaitingInputVerdict.No;
+        // The same per-CLI threshold the sweep applies. Reading the shell's period
+        // for an agent is what let this window call a session waiting while the
+        // notifications stayed quiet about it (issue #184).
+        return AwaitingInputHeuristic.Evaluate(
+            signals,
+            _options.ForCliType(session.CliType),
+            _patterns) != AwaitingInputVerdict.No;
     }
 
     private void Forget(IReadOnlyList<TerminalSession> sessions)

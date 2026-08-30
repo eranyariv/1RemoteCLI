@@ -67,7 +67,7 @@ public sealed class PseudoConsoleResizeTests
         {
             int found = 0;
             int at = 0;
-            string snapshot = output.ToString();
+            string snapshot = Snapshot(output);
 
             while ((at = snapshot.IndexOf(text, at, StringComparison.Ordinal)) >= 0)
             {
@@ -83,7 +83,16 @@ public sealed class PseudoConsoleResizeTests
             await Task.Delay(50).ConfigureAwait(false);
         }
 
-        throw new TimeoutException($"Saw fewer than {occurrences} of '{text}'. Output was:\n{output}");
+        throw new TimeoutException(
+            $"Saw fewer than {occurrences} of '{text}'. Output was:\n{Snapshot(output)}");
+    }
+
+    private static string Snapshot(StringBuilder output)
+    {
+        lock (output)
+        {
+            return output.ToString();
+        }
     }
 
     private static async Task ReadInto(PseudoConsoleSession session, StringBuilder output)

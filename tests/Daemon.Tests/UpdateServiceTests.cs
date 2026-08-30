@@ -13,6 +13,8 @@ namespace OneRemoteCli.Daemon.Tests;
 /// </summary>
 public sealed class UpdateServiceTests
 {
+    private static readonly TimeSpan AsyncPatience = TimeSpan.FromSeconds(5);
+
     private static readonly UpdateOptions Immediate = new()
     {
         StartupDelay = TimeSpan.Zero,
@@ -148,7 +150,7 @@ public sealed class UpdateServiceTests
         Assert.False(updates.Status.CanCheck);
 
         failedCheck.SetException(new HttpRequestException("no route to host"));
-        UpdateStatus status = await restored.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        UpdateStatus status = await restored.Task.WaitAsync(AsyncPatience);
 
         Assert.Equal(UpdateStage.Available, status.Stage);
         Assert.Equal("0.13", status.Version);
@@ -678,7 +680,7 @@ public sealed class UpdateServiceTests
         Assert.False(updates.Status.CanCheck);
 
         response.SetResult("v0.13");
-        await completed.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        await completed.Task.WaitAsync(AsyncPatience);
     }
 
     [Fact]

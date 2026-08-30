@@ -93,7 +93,7 @@ test.describe('resizing', () => {
       .toBeLessThan(before.cols)
     await settled(app, request, session.sessionId)
 
-    expect(await screen(app)).toContain('1RemoteCLI end-to-end script')
+    expect(await screen(app)).toContain('E2E-READY')
 
     // Still usable afterwards, which is the part a reflow bug tends to break: the
     // screen looks right and the cursor is somewhere else entirely.

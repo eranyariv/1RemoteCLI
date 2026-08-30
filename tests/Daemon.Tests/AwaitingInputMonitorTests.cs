@@ -199,6 +199,48 @@ public sealed class AwaitingInputMonitorTests
     }
 
     [Fact]
+    public async Task A_session_restored_after_a_restart_does_not_announce_the_screen_it_came_back_with()
+    {
+        // Issue #183. An auto-update restarts the agent, every surviving wrapper
+        // reconnects, and the wrapper replays the screen the session already had. That
+        // replay is not a new quiet episode -- the idle input box on it has been idle
+        // all along -- but a fresh registry could not tell the difference, so a single
+        // update sent one push per open session on the machine.
+        var world = new World();
+        TerminalSession session = world.Restored();
+
+        world.Write(session, "auto mode on (shift+tab to cycle) ");
+        world.Advance(PastTheQuietPeriod);
+
+        await world.Monitor.SweepAsync();
+
+        Assert.Empty(world.Sink.Awaiting);
+    }
+
+    [Fact]
+    public async Task A_restored_session_still_reports_a_prompt_that_arrives_after_it_came_back()
+    {
+        // The other half of the rule above, and what keeps it from being a mute button:
+        // the screen a session returned with is old news exactly once. A prompt the
+        // agent asks afterwards is the thing the user is waiting to hear about.
+        var world = new World();
+        TerminalSession session = world.Restored();
+
+        world.Write(session, "auto mode on (shift+tab to cycle) ");
+        world.Advance(PastTheQuietPeriod);
+        await world.Monitor.SweepAsync();
+
+        Assert.Empty(world.Sink.Awaiting);
+
+        world.Write(session, "Allow this edit? (y/n) ");
+        world.Advance(PastTheQuietPeriod);
+        await world.Monitor.SweepAsync();
+
+        Assert.Single(world.Sink.Awaiting);
+        Assert.Contains("(y/n)", world.Sink.Awaiting[0].Hint, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_session_that_ends_is_forgotten()
     {
         var world = new World();
@@ -280,6 +322,22 @@ public sealed class AwaitingInputMonitorTests
 
         public TerminalSession Session() =>
             Sessions.Add("claude", [], @"C:\repo", 80, 24, "claude", new SilentChannel());
+
+        /// <summary>
+        /// A session as it exists after an agent restart: a wrapper reconnected and
+        /// reclaimed its prior id, which is what marks the screen it brings back as
+        /// something the user has already seen.
+        /// </summary>
+        public TerminalSession Restored() =>
+            Sessions.Add(
+                "claude",
+                [],
+                @"C:\repo",
+                80,
+                24,
+                "claude",
+                new SilentChannel(),
+                priorSessionId: Guid.NewGuid().ToString("n"));
 
         public void Write(TerminalSession session, string text)
         {

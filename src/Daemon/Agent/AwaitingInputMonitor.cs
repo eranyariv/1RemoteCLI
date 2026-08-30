@@ -39,6 +39,18 @@ public sealed class AwaitingInputMonitor
     /// </summary>
     private readonly Dictionary<string, AnnouncementState> _announced = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Sessions whose restored screen has already been absorbed.
+    /// <para>
+    /// A session reconstructed after an agent restart comes back with the screen it
+    /// already had, and its wrapper replays that screen as ordinary output. The first
+    /// quiet episode which follows is therefore about something the user has already
+    /// seen. Held per session rather than on a timer, because the replay runs for as
+    /// long as the terminal takes to repaint and no fixed window fits every one.
+    /// </para>
+    /// </summary>
+    private readonly HashSet<string> _restoredScreenAbsorbed = new(StringComparer.Ordinal);
+
     public AwaitingInputMonitor(
         SessionRegistry sessions,
         ISessionSink sink,
@@ -159,6 +171,18 @@ public sealed class AwaitingInputMonitor
                 }
             }
 
+            // The screen a restored session came back with is not news: it is the one
+            // the user was already looking at before the agent restarted. Absorbing it
+            // once, instead of announcing it, is what stops an auto-update from sending
+            // one push per open session on the machine (issue #183).
+            if (session.ForceSnapshots && _restoredScreenAbsorbed.Add(session.SessionId))
+            {
+                _announced[session.SessionId] =
+                    new AnnouncementState(lastOutput, fingerprint, Armed: false);
+                _log?.Invoke($"awaiting-input: {session.DisplayName} (restored, absorbed).");
+                continue;
+            }
+
             // Recorded before the send, not after. The sink talks to the network, so it
             // can be slow or fail; either way this session has had its one announcement
             // for this episode, and retrying is exactly the behaviour to avoid.
@@ -214,7 +238,7 @@ public sealed class AwaitingInputMonitor
 
     private void Forget(IReadOnlyList<TerminalSession> sessions)
     {
-        if (_announced.Count == 0)
+        if (_announced.Count == 0 && _restoredScreenAbsorbed.Count == 0)
         {
             return;
         }
@@ -224,6 +248,8 @@ public sealed class AwaitingInputMonitor
         {
             _announced.Remove(id);
         }
+
+        _restoredScreenAbsorbed.RemoveWhere(id => !live.Contains(id));
     }
 
     private readonly record struct AnnouncementState(long OutputCount, string Fingerprint, bool Armed);

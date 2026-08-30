@@ -1,32 +1,31 @@
 using OneRemoteCli.Daemon.Tray;
+using OneRemoteCli.Protocol.Hub;
 
 namespace OneRemoteCli.Daemon.Tests;
 
 public sealed class SettingsThemeRoutingTests
 {
     [Theory]
-    [InlineData(1)]
-    [InlineData(2)]
-    [InlineData(3)]
-    public void PhoneNotificationRadiosCustomDrawTheirText(int control)
+    [InlineData(113, NotificationLevel.Off)]
+    [InlineData(116, NotificationLevel.Off)]
+    [InlineData(114, NotificationLevel.ActionRequired)]
+    [InlineData(117, NotificationLevel.ActionRequired)]
+    [InlineData(115, NotificationLevel.AllAttentionEvents)]
+    [InlineData(118, NotificationLevel.AllAttentionEvents)]
+    public void NotificationGlyphsAndLabelsSelectTheSameLevel(
+        int control,
+        NotificationLevel expected)
     {
-        Assert.True(SettingsWindow.SettingsThemeRouting.CustomDrawsRadioText(
-            (IntPtr)control,
-            (IntPtr)1,
-            (IntPtr)2,
-            (IntPtr)3));
+        Assert.True(SettingsWindow.NotificationControlRouting.TryGetLevel(control, out var level));
+        Assert.Equal(expected, level);
     }
 
     [Theory]
     [InlineData(0)]
-    [InlineData(4)]
-    [InlineData(100)]
-    public void OtherControlsKeepTheirNativeTheme(int control)
+    [InlineData(1)]
+    [InlineData(119)]
+    public void OtherControlsDoNotSelectANotificationLevel(int control)
     {
-        Assert.False(SettingsWindow.SettingsThemeRouting.CustomDrawsRadioText(
-            (IntPtr)control,
-            (IntPtr)1,
-            (IntPtr)2,
-            (IntPtr)3));
+        Assert.False(SettingsWindow.NotificationControlRouting.TryGetLevel(control, out _));
     }
 }

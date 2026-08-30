@@ -104,6 +104,33 @@ internal sealed class SettingsWindow
     private const int IdNotificationsOff = 113;
     private const int IdNotificationsActionRequired = 114;
     private const int IdNotificationsAllAttentionEvents = 115;
+    private const int IdNotificationsOffLabel = 116;
+    private const int IdNotificationsActionRequiredLabel = 117;
+    private const int IdNotificationsAllAttentionEventsLabel = 118;
+
+    internal static class NotificationControlRouting
+    {
+        public static bool TryGetLevel(int id, out NotificationLevel level)
+        {
+            level = id switch
+            {
+                IdNotificationsOff or IdNotificationsOffLabel => NotificationLevel.Off,
+                IdNotificationsActionRequired or IdNotificationsActionRequiredLabel =>
+                    NotificationLevel.ActionRequired,
+                IdNotificationsAllAttentionEvents or IdNotificationsAllAttentionEventsLabel =>
+                    NotificationLevel.AllAttentionEvents,
+                _ => default,
+            };
+
+            return id is
+                IdNotificationsOff or
+                IdNotificationsOffLabel or
+                IdNotificationsActionRequired or
+                IdNotificationsActionRequiredLabel or
+                IdNotificationsAllAttentionEvents or
+                IdNotificationsAllAttentionEventsLabel;
+        }
+    }
 
     private const int Style =
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX |
@@ -188,8 +215,11 @@ internal sealed class SettingsWindow
     private IntPtr _automaticUpdates;
     private IntPtr _phoneNotificationsLabel;
     private IntPtr _notificationsOff;
+    private IntPtr _notificationsOffLabel;
     private IntPtr _notificationsActionRequired;
+    private IntPtr _notificationsActionRequiredLabel;
     private IntPtr _notificationsAllAttentionEvents;
+    private IntPtr _notificationsAllAttentionEventsLabel;
     private IntPtr _versionLabel;
     private IntPtr _changeHistory;
     private IntPtr _updateLabel;
@@ -298,19 +328,6 @@ internal sealed class SettingsWindow
             PersistLayout();
             DestroyWindow(_window);
         }
-    }
-
-    internal static class SettingsThemeRouting
-    {
-        public static bool CustomDrawsRadioText(
-            IntPtr control,
-            IntPtr notificationsOff,
-            IntPtr notificationsActionRequired,
-            IntPtr notificationsAllAttentionEvents) =>
-            control != IntPtr.Zero &&
-            (control == notificationsOff ||
-             control == notificationsActionRequired ||
-             control == notificationsAllAttentionEvents);
     }
 
     /// <summary>
@@ -702,6 +719,17 @@ internal sealed class SettingsWindow
                 RowHeight + 4,
                 IdNotificationsOff,
                 SettingsPresenter.NotificationsOffLabel));
+        _notificationsOffLabel = PageControl(
+            _settingsControls,
+            Static(
+                instance,
+                0,
+                0,
+                100,
+                RowHeight + 4,
+                SettingsPresenter.NotificationsOffLabel,
+                SS_LEFT | SS_NOTIFY,
+                id: IdNotificationsOffLabel));
         _notificationsActionRequired = PageControl(
             _settingsControls,
             Create(
@@ -714,6 +742,17 @@ internal sealed class SettingsWindow
                 RowHeight + 4,
                 IdNotificationsActionRequired,
                 SettingsPresenter.NotificationsActionRequiredLabel));
+        _notificationsActionRequiredLabel = PageControl(
+            _settingsControls,
+            Static(
+                instance,
+                0,
+                0,
+                100,
+                RowHeight + 4,
+                SettingsPresenter.NotificationsActionRequiredLabel,
+                SS_LEFT | SS_NOTIFY,
+                id: IdNotificationsActionRequiredLabel));
         _notificationsAllAttentionEvents = PageControl(
             _settingsControls,
             Create(
@@ -726,12 +765,26 @@ internal sealed class SettingsWindow
                 RowHeight + 4,
                 IdNotificationsAllAttentionEvents,
                 SettingsPresenter.NotificationsAllAttentionEventsLabel));
+        _notificationsAllAttentionEventsLabel = PageControl(
+            _settingsControls,
+            Static(
+                instance,
+                0,
+                0,
+                100,
+                RowHeight + 4,
+                SettingsPresenter.NotificationsAllAttentionEventsLabel,
+                SS_LEFT | SS_NOTIFY,
+                id: IdNotificationsAllAttentionEventsLabel));
         bool canSetNotifications =
             _actions.ReadNotificationLevel is not null &&
             _actions.WriteNotificationLevel is not null;
         EnableWindow(_notificationsOff, canSetNotifications);
+        EnableWindow(_notificationsOffLabel, canSetNotifications);
         EnableWindow(_notificationsActionRequired, canSetNotifications);
+        EnableWindow(_notificationsActionRequiredLabel, canSetNotifications);
         EnableWindow(_notificationsAllAttentionEvents, canSetNotifications);
+        EnableWindow(_notificationsAllAttentionEventsLabel, canSetNotifications);
 
         _close = Button(
             instance,
@@ -899,13 +952,26 @@ internal sealed class SettingsWindow
         int notificationsY = pageY + ((RowHeight + Tight) * 3) + Tight;
         Move(_phoneNotificationsLabel, pageX, notificationsY, pageWidth, RowHeight);
         notificationsY += RowHeight + Tight;
-        Move(_notificationsOff, pageX, notificationsY, 72, RowHeight + 4);
-        Move(_notificationsActionRequired, pageX + 88, notificationsY, 140, RowHeight + 4);
+        Move(_notificationsOff, pageX, notificationsY, 20, RowHeight + 4);
+        Move(_notificationsOffLabel, pageX + 20, notificationsY, 52, RowHeight + 4);
+        Move(_notificationsActionRequired, pageX + 88, notificationsY, 20, RowHeight + 4);
+        Move(
+            _notificationsActionRequiredLabel,
+            pageX + 108,
+            notificationsY,
+            120,
+            RowHeight + 4);
         Move(
             _notificationsAllAttentionEvents,
             pageX + 244,
             notificationsY,
-            pageWidth - 244,
+            20,
+            RowHeight + 4);
+        Move(
+            _notificationsAllAttentionEventsLabel,
+            pageX + 264,
+            notificationsY,
+            pageWidth - 264,
             RowHeight + 4);
     }
 
@@ -925,7 +991,8 @@ internal sealed class SettingsWindow
         int height,
         string text = "",
         int style = SS_LEFT | SS_ENDELLIPSIS,
-        IntPtr font = default) =>
+        IntPtr font = default,
+        int id = 0) =>
         Create(
             instance,
             "STATIC",
@@ -934,7 +1001,7 @@ internal sealed class SettingsWindow
             y,
             width,
             height,
-            IntPtr.Zero,
+            id,
             text,
             font);
 
@@ -1281,28 +1348,6 @@ internal sealed class SettingsWindow
 
             case WM_NOTIFY:
                 NMHDR notification = Marshal.PtrToStructure<NMHDR>(lParam);
-
-                // DarkMode_Explorer supplies the right radio glyph but keeps its label
-                // black. Themed buttons ignore WM_CTLCOLORBTN; custom draw is the point
-                // where the stock renderer still honours the colours already on its DC.
-                if (notification.code == NM_CUSTOMDRAW &&
-                    SettingsThemeRouting.CustomDrawsRadioText(
-                        notification.hwndFrom,
-                        _notificationsOff,
-                        _notificationsActionRequired,
-                        _notificationsAllAttentionEvents))
-                {
-                    NMCUSTOMDRAW draw = Marshal.PtrToStructure<NMCUSTOMDRAW>(lParam);
-                    if (draw.dwDrawStage == CDDS_PREPAINT)
-                    {
-                        SetBkMode(draw.hdc, TRANSPARENT);
-                        SetTextColor(draw.hdc, _theme.Text);
-                        SetBkColor(draw.hdc, _theme.Layer);
-                    }
-
-                    return CDRF_DODEFAULT;
-                }
-
                 if (notification.hwndFrom == _changeHistory &&
                     notification.code is NM_CLICK or NM_RETURN)
                 {
@@ -1505,6 +1550,12 @@ internal sealed class SettingsWindow
 
     private void OnCommand(int id)
     {
+        if (NotificationControlRouting.TryGetLevel(id, out NotificationLevel level))
+        {
+            OnNotificationLevelSelected(level);
+            return;
+        }
+
         switch (id)
         {
             // Enter and Escape, synthesised by IsDialogMessage. Both close: there is
@@ -1537,18 +1588,6 @@ internal sealed class SettingsWindow
 
             case IdAutomaticUpdates:
                 OnAutomaticUpdatesToggled();
-                break;
-
-            case IdNotificationsOff:
-                OnNotificationLevelSelected(NotificationLevel.Off);
-                break;
-
-            case IdNotificationsActionRequired:
-                OnNotificationLevelSelected(NotificationLevel.ActionRequired);
-                break;
-
-            case IdNotificationsAllAttentionEvents:
-                OnNotificationLevelSelected(NotificationLevel.AllAttentionEvents);
                 break;
 
             case IdStatusTab:

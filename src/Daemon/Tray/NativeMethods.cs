@@ -510,6 +510,7 @@ internal static partial class NativeMethods
     internal const int BS_DEFPUSHBUTTON = 0x00000001;
     internal const int BS_AUTOCHECKBOX = 0x00000003;
     internal const int BS_AUTORADIOBUTTON = 0x00000009;
+    internal const int SS_NOTIFY = 0x00000100;
     internal const int BS_PUSHLIKE = 0x00001000;
     internal const int SS_LEFT = 0x00000000;
     internal const int SS_CENTER = 0x00000001;

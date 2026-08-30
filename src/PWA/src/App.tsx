@@ -8,6 +8,7 @@ import { usePushRegistration } from './push/usePush'
 import { useRelay } from './relay/useRelay'
 import { sessionLabel } from './relay/machines'
 import { filterByProject, findProject } from './relay/projects'
+import { useUserSettings } from './settings/userSettings'
 import { Banner, StatusPill, VersionLine } from './ui/Chrome'
 import { MachineList } from './ui/MachineList'
 import { NotificationsCard } from './ui/NotificationsCard'
@@ -15,6 +16,7 @@ import { ProjectEditor } from './ui/ProjectEditor'
 import { ProjectDetails } from './ui/ProjectDetails'
 import { ProjectTiles } from './ui/ProjectTiles'
 import { SignInScreen } from './ui/SignInScreen'
+import { SettingsPage } from './ui/SettingsPage'
 import { VoiceMode } from './ui/VoiceMode'
 
 /**
@@ -56,6 +58,8 @@ export default function App() {
   // project's session list, scoped from the same machine list the home screen
   // already has — there is no separate fetch for this, just a narrower view of it.
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const userSettings = useUserSettings(username)
 
   // Undefined closes the sheet. An object with no `project` opens it for create;
   // one with `project` set opens it pre-filled for that project's edit/delete.
@@ -161,11 +165,14 @@ export default function App() {
         scroll through.
       */}
       <header className="sticky top-0 z-10 flex items-center gap-1 border-b border-slate-800 bg-slate-950/80 pb-3 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur">
-        {selectedProjectId ? (
+        {selectedProjectId || settingsOpen ? (
           <button
             type="button"
-            onClick={() => setSelectedProjectId(null)}
-            aria-label="Back to projects"
+            onClick={() => {
+              if (settingsOpen) setSettingsOpen(false)
+              else setSelectedProjectId(null)
+            }}
+            aria-label={settingsOpen ? 'Back from settings' : 'Back to projects'}
             className="min-h-10 shrink-0 rounded-lg px-2 text-lg text-slate-400 transition active:bg-slate-800"
           >
             ‹
@@ -174,10 +181,26 @@ export default function App() {
 
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-[15px] font-semibold text-slate-100">
-            {selectedProjectId ? (selectedProject?.name ?? 'Project') : 'Projects'}
+            {settingsOpen
+              ? 'Settings'
+              : selectedProjectId
+                ? (selectedProject?.name ?? 'Project')
+                : 'Projects'}
           </h1>
           <StatusPill status={relay.status} />
         </div>
+
+        {!settingsOpen ? (
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            aria-label="Settings"
+            title="Settings"
+            className="min-h-10 rounded-lg px-3 text-xl text-slate-400 transition active:bg-slate-800"
+          >
+            ⚙
+          </button>
+        ) : null}
 
         <button
           type="button"
@@ -238,7 +261,12 @@ export default function App() {
           />
         ) : null}
 
-        {selectedProjectId ? (
+        {settingsOpen ? (
+          <SettingsPage
+            settings={userSettings.settings}
+            onDensityChange={userSettings.setCliDensity}
+          />
+        ) : selectedProjectId ? (
           <>
             {selectedProject ? <ProjectDetails project={selectedProject} /> : null}
             <MachineList
@@ -260,7 +288,7 @@ export default function App() {
           />
         )}
 
-        <NotificationsCard onGranted={registerPush} />
+        {!settingsOpen ? <NotificationsCard onGranted={registerPush} /> : null}
 
         {/*
           A session that vanished while its terminal was open — the program exited
@@ -314,6 +342,7 @@ export default function App() {
               connected={relay.status === 'connected'}
               machine={showing.machine}
               session={showing.session}
+              density={userSettings.settings.cliDensity}
               onClose={closeSession}
             />
           )}

@@ -8,6 +8,7 @@ import { describeError } from '../protocol/errors'
 import { CLI_TYPES, type CliType, type MachineInfo, type SessionInfo, type TerminalOutputKind } from '../protocol/wire'
 import type { RelayClient } from '../relay/client'
 import { sessionLabel } from '../relay/machines'
+import { CliDensities, type CliDensity } from '../settings/userSettings'
 import { catalogFor, labelFor, type CommandDefinition } from '../terminal/catalog'
 import { needsOnScreenKeys } from '../terminal/device'
 import {
@@ -40,6 +41,7 @@ export interface TerminalViewProps {
   connected: boolean
   machine: MachineInfo
   session: SessionInfo
+  density: CliDensity
   onClose(): void
 }
 
@@ -68,7 +70,14 @@ const THEME = {
   brightWhite: '#f8fafc',
 }
 
-export function TerminalView({ client, connected, machine, session, onClose }: TerminalViewProps) {
+export function TerminalView({
+  client,
+  connected,
+  machine,
+  session,
+  density,
+  onClose,
+}: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const screenRef = useRef<HTMLDivElement | null>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -95,6 +104,7 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
 
   // The area the browser is actually showing, which on iOS is not what CSS thinks.
   const [box, setBox] = useState<ViewportBox | null>(() => measureViewport(window.visualViewport))
+  const densityDefinition = useRef(CliDensities[density])
 
   /**
    * Takes whatever is armed and disarms it.
@@ -152,9 +162,9 @@ export function TerminalView({ client, connected, machine, session, onClose }: T
       // Deliberately small: a phone is roughly 45 columns wide at a readable size,
       // and most agent output is written for 80. Shrinking the type is what keeps
       // lines from wrapping into unreadable ribbons.
-      fontSize: 12,
+      fontSize: densityDefinition.current.fontSize,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-      lineHeight: 1.2,
+      lineHeight: densityDefinition.current.lineHeight,
       theme: THEME,
       // Enough to scroll back through a build, not enough to exhaust a phone's
       // memory. This is scrollback for output seen *while attached* — a snapshot

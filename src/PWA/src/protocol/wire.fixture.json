@@ -144,13 +144,14 @@
     },
     "terminalOutput": {
       "type": "TerminalOutputNotification",
-      "base64": "lahmZjAwZmYwMM8AAAABAAAAAahTbmFwc2hvdMQIG1sySmhpDQrA",
+      "base64": "lqhmZjAwZmYwMM8AAAABAAAAAahTbmFwc2hvdMQIG1sySmhpDQrAww==",
       "decoded": {
         "sessionId": "ff00ff00",
         "seq": 4294967297,
         "kind": 1,
         "data": "G1sySmhpDQo=",
-        "targetConnectionId": null
+        "targetConnectionId": null,
+        "continuityLost": true
       }
     },
     "sessionAwaitingInput": {

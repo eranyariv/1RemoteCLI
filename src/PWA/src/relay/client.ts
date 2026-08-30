@@ -200,6 +200,18 @@ export class RelayClient {
     await connection?.stop()
   }
 
+  /** Replaces even an apparently connected transport with a newly handshaken one. */
+  async restart(): Promise<void> {
+    await this.stop()
+
+    // A stop can race token acquisition before `connect` has created its HubConnection.
+    // Let that cancelled attempt observe `stopped` and finish before opening its replacement.
+    const pending = this.starting
+    if (pending) await pending
+
+    await this.start()
+  }
+
   /**
    * Tries again later, forever.
    *
@@ -229,6 +241,8 @@ export class RelayClient {
 
   private async connect(): Promise<void> {
     const token = await auth.getAccessToken()
+
+    if (this.stopped) return
 
     if (!token) {
       this.emit('status', 'signed-out')
@@ -262,6 +276,11 @@ export class RelayClient {
       this.connection = null
       this.emit('status', 'offline', errorText(error))
       this.scheduleRetry()
+      return
+    }
+
+    if (this.stopped || this.connection !== connection) {
+      await connection.stop()
       return
     }
 

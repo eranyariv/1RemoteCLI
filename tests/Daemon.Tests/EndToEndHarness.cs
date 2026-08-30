@@ -638,14 +638,22 @@ internal sealed class PhoneClient : IAsyncDisposable
             lock (_gate)
             {
                 _sequences.Add(notification.Seq);
-                _frames.Add(new OutputFrame(notification.Seq, notification.Kind, notification.Data));
+                _frames.Add(new OutputFrame(
+                    notification.Seq,
+                    notification.Kind,
+                    notification.Data,
+                    notification.ContinuityLost));
                 _screen.Append(Encoding.UTF8.GetString(notification.Data));
             }
 
             // Raised outside the lock, and after the frame has been recorded, so a
             // handler is free to read the screen. Only the latency measurements use
             // this: everything else asserts on what arrived, not on when.
-            FrameArrived?.Invoke(new OutputFrame(notification.Seq, notification.Kind, notification.Data));
+            FrameArrived?.Invoke(new OutputFrame(
+                notification.Seq,
+                notification.Kind,
+                notification.Data,
+                notification.ContinuityLost));
         });
 
         _connection.On<ClientSessionOpenedNotification>(HubMethods.Client.SessionOpened, notification =>
@@ -921,7 +929,11 @@ internal sealed class PhoneClient : IAsyncDisposable
 }
 
 /// <summary>One frame as the phone received it.</summary>
-internal sealed record OutputFrame(long Seq, TerminalOutputKind Kind, byte[] Data);
+internal sealed record OutputFrame(
+    long Seq,
+    TerminalOutputKind Kind,
+    byte[] Data,
+    bool ContinuityLost);
 
 /// <summary>
 /// The desk terminal, in memory. Real enough for the tee to be observable: the
@@ -1075,4 +1087,3 @@ internal sealed class DiscardingNotifier : IPushNotifier
     {
     }
 }
-

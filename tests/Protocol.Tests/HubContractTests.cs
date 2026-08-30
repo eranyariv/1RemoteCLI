@@ -38,9 +38,11 @@ public class HubContractTests
             Seq = 1,
             Kind = TerminalOutputKind.Snapshot,
             Data = [],
+            ContinuityLost = true,
         });
 
         Assert.Equal(TerminalOutputKind.Snapshot, received.Kind);
+        Assert.True(received.ContinuityLost);
     }
 
     [Fact]

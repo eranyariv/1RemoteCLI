@@ -411,7 +411,8 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
         TerminalOutputKind kind,
         byte[] data,
         string? target,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool continuityLost = false)
     {
         if (!IsConnected)
         {
@@ -431,6 +432,7 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
                     Kind = kind,
                     Data = data,
                     TargetConnectionId = target,
+                    ContinuityLost = continuityLost,
                 },
                 cancellationToken).ConfigureAwait(false);
 
@@ -881,7 +883,11 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
                     return;
                 }
 
-                await SendSnapshotAsync(session, notification.ClientConnectionId).ConfigureAwait(false);
+                bool continuityLost = notification.ContinuityLost
+                    || (notification.LastSeq is long requested && requested != session.Tail.LastSeq);
+
+                await SendSnapshotAsync(session, notification.ClientConnectionId, continuityLost)
+                    .ConfigureAwait(false);
             })).ConfigureAwait(false);
 
         _logger.ClientAttached(
@@ -909,7 +915,10 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
     /// between two frames of the same snapshot.
     /// </para>
     /// </summary>
-    private async ValueTask SendSnapshotAsync(TerminalSession session, string? targetConnectionId)
+    private async ValueTask SendSnapshotAsync(
+        TerminalSession session,
+        string? targetConnectionId,
+        bool continuityLost)
     {
         // Everything already applied to the screen being captured goes out first, as
         // ordinary numbered output. Holding it back would strand the other watchers,
@@ -935,7 +944,8 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
                 i == 0 ? TerminalOutputKind.Snapshot : TerminalOutputKind.Delta,
                 frames[i],
                 targetConnectionId,
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None,
+                continuityLost: i == 0 && continuityLost).ConfigureAwait(false);
         }
     }
 

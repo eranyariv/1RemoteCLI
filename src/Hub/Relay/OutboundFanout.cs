@@ -181,6 +181,7 @@ public sealed class OutboundFanout
                 Cols = 0,
                 Rows = 0,
                 LastSeq = null,
+                ContinuityLost = true,
             });
     }
 

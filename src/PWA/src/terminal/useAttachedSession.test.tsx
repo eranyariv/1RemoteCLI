@@ -142,6 +142,43 @@ describe('useAttachedSession', () => {
     expect(result.current.missedOutput).toBe(true)
   })
 
+  it('trusts an explicit snapshot report instead of inferring loss from its sequence', async () => {
+    const { result } = renderHook(() => useAttachedSession(options(relay, true)))
+
+    await waitFor(() => expect(result.current.state).toBe('attached'))
+
+    act(() => {
+      relay.emit('terminalOutput', {
+        sessionId: 'session-1',
+        seq: 1,
+        kind: 'Delta',
+        data: new Uint8Array([1]),
+        continuityLost: false,
+      })
+      relay.emit('terminalOutput', {
+        sessionId: 'session-1',
+        seq: 9,
+        kind: 'Snapshot',
+        data: new Uint8Array([2]),
+        continuityLost: false,
+      })
+    })
+
+    expect(result.current.missedOutput).toBe(false)
+
+    act(() => {
+      relay.emit('terminalOutput', {
+        sessionId: 'session-1',
+        seq: 12,
+        kind: 'Snapshot',
+        data: new Uint8Array([3]),
+        continuityLost: true,
+      })
+    })
+
+    expect(result.current.missedOutput).toBe(true)
+  })
+
   it('says the session ended when it is gone on the way back', async () => {
     const { result, rerender } = renderHook((connected: boolean) => useAttachedSession(options(relay, connected)), {
       initialProps: true,

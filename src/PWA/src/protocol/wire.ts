@@ -118,6 +118,8 @@ export interface TerminalOutput {
   seq: number
   kind: TerminalOutputKind
   data: Uint8Array
+  /** Null means an older agent did not explicitly report whether history was lost. */
+  continuityLost: boolean | null
 }
 
 export interface ChatPermissionOption {
@@ -381,6 +383,7 @@ export function decodeTerminalOutput(value: unknown): TerminalOutput {
     seq: num(n[1]),
     kind: n[2] === 'Snapshot' ? 'Snapshot' : 'Delta',
     data: bytes(n[3]),
+    continuityLost: n.length > 5 ? bool(n[5]) : null,
   }
 }
 

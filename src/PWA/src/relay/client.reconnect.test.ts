@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Server } from '../protocol/methods'
 
 const start = vi.fn(async () => {})
+const stop = vi.fn(async () => {})
 const invoke = vi.fn<(method: string, ...args: unknown[]) => Promise<unknown>>()
 const getAccessToken = vi.fn(async () => 'token' as string | null)
 
@@ -28,7 +29,7 @@ vi.mock('@microsoft/signalr', () => {
       return {
         start,
         invoke,
-        stop: async () => {},
+        stop,
         state: 'Connected',
         on: () => {},
         onclose: () => {},
@@ -69,6 +70,7 @@ describe('reconnecting', () => {
   beforeEach(() => {
     reconnected = null
     start.mockClear()
+    stop.mockClear()
     invoke.mockReset()
     // The handshake answers with a rejection or nothing; ListMachines and ListProjects answer with a list.
     invoke.mockImplementation(async (method: string) =>
@@ -114,5 +116,31 @@ describe('reconnecting', () => {
     // And the handshake comes first: listing machines against a connection the hub
     // does not know is the same mistake one method earlier.
     expect(order[0]).toBe(Server.ClientHandshake)
+  })
+
+  it('cancels a token-pending connection before replacing it', async () => {
+    let releaseToken: (token: string | null) => void = () => {}
+    getAccessToken
+      .mockImplementationOnce(
+        () => new Promise<string | null>((resolve) => {
+          releaseToken = resolve
+        }),
+      )
+      .mockResolvedValue('replacement-token')
+
+    const client = new RelayClient('http://example.invalid/hub')
+    const first = client.start()
+    const replacement = client.restart()
+
+    releaseToken('stale-token')
+    await first
+    await replacement
+
+    // The attempt that was waiting for a token observes the stop before it creates
+    // a socket. Only the replacement transport reaches SignalR and the handshake.
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(invoke).toHaveBeenCalledWith(Server.ClientHandshake, expect.anything())
+
+    await client.stop()
   })
 })

@@ -236,6 +236,11 @@ describe('decoding what the hub sends', () => {
     // snapshot as a delta and never clears the screen.
     expect(output.kind).toBe('Snapshot')
     expect(Array.from(output.data)).toEqual([0x1b, 0x5b, 0x32, 0x4a, 0x68, 0x69, 0x0d, 0x0a])
+    expect(output.continuityLost).toBe(true)
+  })
+
+  it('falls back to sequence inference for output from an older agent', () => {
+    expect(decodeTerminalOutput(['session-1', 7, 'Snapshot', new Uint8Array()]).continuityLost).toBeNull()
   })
 
   it('reads a sequence number well past 32 bits', () => {

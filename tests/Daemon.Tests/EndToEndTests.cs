@@ -616,6 +616,9 @@ public sealed class EndToEndTests : IAsyncLifetime
                 () => phone.Frames.Skip(seen).Any(frame => frame.Kind == TerminalOutputKind.Snapshot),
                 "a repaint to arrive");
 
+            Assert.True(phone.Frames.Skip(seen).First(
+                frame => frame.Kind == TerminalOutputKind.Snapshot).ContinuityLost);
+
             await EndToEndHarness.WaitUntilAsync(
                 () => Normalize(phone.Render(80, 25)) == Normalize(session.Screen.Text()),
                 "the phone's rendering to match the agent's screen");

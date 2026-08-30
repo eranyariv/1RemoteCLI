@@ -241,6 +241,7 @@ public sealed class WireContractTests
             Seq = 4294967297,
             Kind = TerminalOutputKind.Snapshot,
             Data = [0x1b, 0x5b, 0x32, 0x4a, 0x68, 0x69, 0x0d, 0x0a],
+            ContinuityLost = true,
         });
 
         Add(messages, "sessionAwaitingInput", new ClientSessionAwaitingInputNotification

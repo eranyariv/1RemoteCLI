@@ -163,7 +163,15 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
         const step = receive(position.current, output)
         position.current = step.position
 
-        if (step.missed) setMissedOutput(true)
+        // New agents state whether a snapshot actually replaces unrecoverable
+        // history. Older agents omit that field, so retain sequence-gap inference
+        // for mixed-version deployments.
+        const missed =
+          output.kind === 'Snapshot' && output.continuityLost !== null
+            ? output.continuityLost
+            : step.missed
+
+        if (missed) setMissedOutput(true)
         if (!step.apply) return
 
         sampler.output()

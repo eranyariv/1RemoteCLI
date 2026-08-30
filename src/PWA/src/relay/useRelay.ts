@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { RelayClient, type RelayStatus } from './client'
+import { watchRelayLifecycle } from './lifecycle'
 import type { HubError } from '../protocol/wire'
 import {
   machineOffline,
@@ -139,24 +140,10 @@ export function useRelay(signedIn: boolean): Relay {
     }
   }, [client, signedIn])
 
-  // A phone suspends the tab when it locks. SignalR notices eventually, but the
-  // user is looking at the screen now, so nudge it the moment they come back.
   useEffect(() => {
     if (!signedIn) return
 
-    const wake = () => {
-      if (document.visibilityState === 'visible' && !client.connected) {
-        void client.start()
-      }
-    }
-
-    document.addEventListener('visibilitychange', wake)
-    window.addEventListener('online', wake)
-
-    return () => {
-      document.removeEventListener('visibilitychange', wake)
-      window.removeEventListener('online', wake)
-    }
+    return watchRelayLifecycle(client, () => setStatus('reconnecting'))
   }, [client, signedIn])
 
   const refresh = useCallback(async () => {

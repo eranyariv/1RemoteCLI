@@ -113,6 +113,16 @@ public sealed class TerminalOutputNotification
     /// </summary>
     [Key(4)]
     public string? TargetConnectionId { get; set; }
+
+    /// <summary>
+    /// True when this snapshot replaces output that can no longer be replayed.
+    /// <para>
+    /// A snapshot is also used for harmless first attaches and repaints, so clients
+    /// must not infer history loss from <see cref="Kind"/> alone.
+    /// </para>
+    /// </summary>
+    [Key(5)]
+    public bool ContinuityLost { get; set; }
 }
 
 /// <summary>Agent to hub. The idle heuristic thinks this session is waiting on the user.</summary>
@@ -197,6 +207,10 @@ public sealed class AttachRequestedNotification
     /// <summary>Last sequence the client saw. Null, or too old for the tail buffer, forces a snapshot.</summary>
     [Key(4)]
     public long? LastSeq { get; set; }
+
+    /// <summary>The hub discarded this client's live backlog before requesting the repaint.</summary>
+    [Key(5)]
+    public bool ContinuityLost { get; set; }
 }
 
 /// <summary>Hub to agent. A client detached or disconnected.</summary>

@@ -104,6 +104,7 @@ public sealed class OutboundFanoutTests
         Assert.Null(repaint.LastSeq);
         Assert.Equal(0, repaint.Cols);
         Assert.Equal(0, repaint.Rows);
+        Assert.True(repaint.ContinuityLost);
 
         Assert.Equal(1, fanout.Repaints);
     }

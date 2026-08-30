@@ -8,19 +8,20 @@ afterEach(() => {
   cleanups.splice(0).forEach((cleanup) => cleanup())
 })
 
-function setup() {
+function setup(viewportY = 90, baseY = 100) {
   const element = document.createElement('div')
+  const terminalElement = document.createElement('div')
+  element.appendChild(terminalElement)
   Object.defineProperty(element, 'clientHeight', { value: 200 })
-  const scrollLines = vi.fn()
   const diagnose = vi.fn()
   const terminal = {
     rows: 10,
     cols: 40,
-    scrollLines,
-    buffer: { active: { viewportY: 90, baseY: 100 } },
+    element: terminalElement,
+    buffer: { active: { viewportY, baseY } },
   }
   cleanups.push(installTouchScroll(element, terminal, diagnose))
-  return { element, scrollLines, diagnose }
+  return { element, terminalElement, diagnose }
 }
 
 function touch(
@@ -39,41 +40,68 @@ function touch(
 
 describe('installTouchScroll', () => {
   it('scrolls toward older output when the finger moves down', () => {
-    const { element, scrollLines, diagnose } = setup()
+    const { element, terminalElement, diagnose } = setup()
+    const wheels: WheelEvent[] = []
+    terminalElement.addEventListener('wheel', (event) => {
+      wheels.push(event)
+      event.preventDefault()
+    })
 
     touch(element, 'touchstart', 20, 20)
     const move = touch(element, 'touchmove', 20, 80)
 
     expect(move.defaultPrevented).toBe(true)
-    expect(scrollLines).toHaveBeenCalledWith(-3)
+    expect(wheels).toHaveLength(3)
+    expect(wheels.every((event) => event.deltaY === -20)).toBe(true)
     expect(diagnose).toHaveBeenCalledWith(
       'scroll-request',
       expect.objectContaining({ lines: -3, viewportY: 90, baseY: 100 }),
     )
+    expect(diagnose).toHaveBeenCalledWith(
+      'wheel-result',
+      expect.objectContaining({ lines: -3, wheelEvents: 3, handled: 3 }),
+    )
   })
 
   it('scrolls toward newer output when the finger moves up', () => {
-    const { element, scrollLines } = setup()
+    const { element, terminalElement } = setup()
+    const deltas: number[] = []
+    terminalElement.addEventListener('wheel', (event) => deltas.push(event.deltaY))
 
     touch(element, 'touchstart', 20, 80)
     touch(element, 'touchmove', 20, 20)
 
-    expect(scrollLines).toHaveBeenCalledWith(3)
+    expect(deltas).toEqual([20, 20, 20])
+  })
+
+  it('uses wheel input even when xterm has no local history', () => {
+    const { element, terminalElement } = setup(0, 0)
+    const deltas: number[] = []
+    terminalElement.addEventListener('wheel', (event) => deltas.push(event.deltaY))
+
+    touch(element, 'touchstart', 20, 80)
+    touch(element, 'touchmove', 20, 40)
+
+    expect(deltas).toEqual([20, 20])
   })
 
   it('accumulates movements smaller than one terminal row', () => {
-    const { element, scrollLines } = setup()
+    const { element, terminalElement } = setup()
+    const wheel = vi.fn()
+    terminalElement.addEventListener('wheel', wheel)
 
     touch(element, 'touchstart', 20, 60)
     touch(element, 'touchmove', 20, 50)
-    expect(scrollLines).not.toHaveBeenCalled()
+    expect(wheel).not.toHaveBeenCalled()
 
     touch(element, 'touchmove', 20, 35)
-    expect(scrollLines).toHaveBeenCalledWith(1)
+    expect(wheel).toHaveBeenCalledOnce()
   })
 
   it('leaves horizontal and multi-touch gestures alone', () => {
-    const { element, scrollLines } = setup()
+    const { element, terminalElement } = setup()
+    const wheel = vi.fn()
+    terminalElement.addEventListener('wheel', wheel)
 
     touch(element, 'touchstart', 20, 20)
     const horizontal = touch(element, 'touchmove', 80, 24)
@@ -83,16 +111,18 @@ describe('installTouchScroll', () => {
 
     expect(horizontal.defaultPrevented).toBe(false)
     expect(multiTouch.defaultPrevented).toBe(false)
-    expect(scrollLines).not.toHaveBeenCalled()
+    expect(wheel).not.toHaveBeenCalled()
   })
 
   it('removes its event handlers when disposed', () => {
-    const { element, scrollLines } = setup()
+    const { element, terminalElement } = setup()
+    const wheel = vi.fn()
+    terminalElement.addEventListener('wheel', wheel)
     cleanups.splice(0).forEach((cleanup) => cleanup())
 
     touch(element, 'touchstart', 20, 20)
     touch(element, 'touchmove', 20, 80)
 
-    expect(scrollLines).not.toHaveBeenCalled()
+    expect(wheel).not.toHaveBeenCalled()
   })
 })

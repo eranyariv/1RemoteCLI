@@ -3,13 +3,13 @@ const DIRECTION_THRESHOLD_PX = 8
 interface TouchScrollTerminal {
   readonly cols: number
   readonly rows: number
+  readonly element: HTMLElement | undefined
   readonly buffer: {
     readonly active: {
       readonly viewportY: number
       readonly baseY: number
     }
   }
-  scrollLines(lines: number): void
 }
 
 type DiagnosticValue = string | number | boolean | null
@@ -25,9 +25,13 @@ function targetName(target: EventTarget | null): string {
 }
 
 /**
- * Restores one-finger scrollback navigation removed by xterm 6.0.0.
+ * Restores one-finger terminal scrolling removed by xterm 6.0.0.
  *
- * This can go away once xterm's fix for xtermjs/xterm.js#5489 is released.
+ * Feeding xterm wheel events rather than calling `scrollLines` is load-bearing:
+ * xterm scrolls its local buffer when one exists, but when a full-screen CLI has
+ * no local history it translates wheel input into the Up/Down or mouse sequences
+ * that the program uses for its own history. That is also what the desktop wheel
+ * does. This adapter can go away once xtermjs/xterm.js#5489 ships.
  */
 export function installTouchScroll(
   element: HTMLElement,
@@ -159,18 +163,43 @@ export function installTouchScroll(
     })
     if (lines === 0) return
 
-    terminal.scrollLines(lines)
+    const wheelTarget = terminal.element
+    if (!wheelTarget) {
+      diagnose('wheel-target-missing', {
+        lines,
+        ...position(),
+      })
+      return
+    }
+
+    let handled = 0
+    const wheelDelta = Math.sign(lines) * rowHeight
+    for (let i = 0; i < Math.abs(lines); i += 1) {
+      const wheel = new WheelEvent('wheel', {
+        bubbles: true,
+        cancelable: true,
+        clientX: touch.clientX,
+        clientY: touch.clientY,
+        deltaMode: 0,
+        deltaY: wheelDelta,
+      })
+      wheelTarget.dispatchEvent(wheel)
+      if (wheel.defaultPrevented) handled += 1
+    }
     remainder -= lines * rowHeight
 
-    diagnose('scroll-result', {
+    diagnose('wheel-result', {
       lines,
+      wheelEvents: Math.abs(lines),
+      wheelDelta: Math.round(wheelDelta * 100) / 100,
+      handled,
       remainder: Math.round(remainder * 100) / 100,
       viewportYBefore: before.viewportY,
       baseYBefore: before.baseY,
       ...position(),
     })
     queueMicrotask(() => {
-      diagnose('scroll-settled', {
+      diagnose('wheel-settled', {
         lines,
         ...position(),
       })

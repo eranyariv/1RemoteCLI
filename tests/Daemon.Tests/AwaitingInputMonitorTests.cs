@@ -241,6 +241,28 @@ public sealed class AwaitingInputMonitorTests
     }
 
     [Fact]
+    public void The_window_reads_an_agent_by_the_same_threshold_the_sweep_does()
+    {
+        // Issue #184. IsAwaitingInput answers the settings window, and it was reading
+        // the shell's eight-second period for every session whatever was running. A
+        // coding agent pausing to think showed as "waiting" in the machine's own list
+        // while the sweep, correctly, stayed quiet about it -- the window and the
+        // notifications disagreeing about one session, which is the single thing this
+        // method exists in this class to prevent.
+        var world = new World();
+        TerminalSession session = world.Session();
+
+        world.Write(session, "Allow this edit? (y/n) ");
+        world.Advance(TimeSpan.FromSeconds(20));
+
+        Assert.False(world.Monitor.IsAwaitingInput(session));
+
+        world.Advance(TimeSpan.FromSeconds(40));
+
+        Assert.True(world.Monitor.IsAwaitingInput(session));
+    }
+
+    [Fact]
     public async Task A_session_that_ends_is_forgotten()
     {
         var world = new World();

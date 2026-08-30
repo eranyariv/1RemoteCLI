@@ -49,7 +49,7 @@ export function SettingsPage({
   const selected = CliDensities[settings.cliDensity]
 
   return (
-    <section className="flex flex-col gap-8" aria-label="User settings">
+    <section className="vertical-list-surface flex flex-col gap-8" aria-label="User settings">
       <div className="flex flex-col gap-4">
         <div>
           <h2 id="terminal-density-heading" className="text-base font-semibold text-slate-100">

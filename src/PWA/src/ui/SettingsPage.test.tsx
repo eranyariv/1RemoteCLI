@@ -18,6 +18,18 @@ describe('SettingsPage', () => {
     expect(screen.getByText('Compact', { selector: 'span.text-xs' })).toBeTruthy()
   })
 
+  // iOS rubber-bands a clipped scroller sideways even where its scroll width is
+  // correct, which drags this screen off the left edge and crops it. The shared
+  // .vertical-list-surface guard is what stops it; overflow-x: hidden alone does not.
+  it('pins the screen against sideways panning', () => {
+    const { container } = render(
+      <SettingsPage settings={DefaultUserSettings} onChange={vi.fn()} />,
+    )
+
+    const screenRoot = container.querySelector('section[aria-label="User settings"]')
+    expect(screenRoot?.classList.contains('vertical-list-surface')).toBe(true)
+  })
+
   it('selects a density from its label', () => {
     const onChange = vi.fn()
     render(

@@ -5,7 +5,6 @@ import { ErrorCodes } from '../protocol/errors'
 import type { HubError, TerminalOutputKind } from '../protocol/wire'
 import { EMPTY_STATS, Sampler, type LatencyStats } from './latency'
 import { receive, startOfStream, type StreamPosition } from './stream'
-import { TraceRecorder } from './trace'
 
 export type AttachState = 'attaching' | 'attached' | 'reconnecting' | 'closed' | 'failed'
 
@@ -30,13 +29,9 @@ export interface AttachedSession {
    */
   dismissMissedOutput(): void
   latency: LatencyStats
-  recorder: TraceRecorder
-  recording: boolean
   send(data: Uint8Array): void
   interrupt(): void
   resize(cols: number, rows: number): void
-  startRecording(): void
-  stopRecording(): void
   retry(): void
 }
 
@@ -89,10 +84,6 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
   samplerRef.current ??= new Sampler()
   const sampler = samplerRef.current
 
-  const recorderRef = useRef<TraceRecorder | null>(null)
-  recorderRef.current ??= new TraceRecorder()
-  const recorder = recorderRef.current
-
   const position = useRef<StreamPosition>(startOfStream)
 
   // Set once the session is known to be over. Read by the attach effect, which
@@ -109,7 +100,6 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
   const [endedWhileAway, setEndedWhileAway] = useState(false)
   const [missedOutput, setMissedOutput] = useState(false)
   const [latency, setLatency] = useState<LatencyStats>(EMPTY_STATS)
-  const [recording, setRecording] = useState(false)
 
   const restore = useRef(options.restoreOnDetach)
   restore.current = options.restoreOnDetach
@@ -175,7 +165,6 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
         if (!step.apply) return
 
         sampler.output()
-        recorder.frame(output.seq, output.kind, output.data)
         onOutput.current(output.data, output.kind)
       }),
 
@@ -214,7 +203,7 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
     return () => {
       for (const unsubscribe of off) unsubscribe()
     }
-  }, [client, machineId, sessionId, sampler, recorder])
+  }, [client, machineId, sessionId, sampler])
 
   // Attach, and re-attach whenever the connection comes back. The hub's attachment
   // registry is keyed by connection, so a reconnected socket has no attachment at
@@ -299,16 +288,6 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
     [client, sessionId],
   )
 
-  const startRecording = useCallback(() => {
-    recorder.start()
-    setRecording(true)
-  }, [recorder])
-
-  const stopRecording = useCallback(() => {
-    recorder.stop()
-    setRecording(false)
-  }, [recorder])
-
   const dismissMissedOutput = useCallback(() => setMissedOutput(false), [])
 
   const retry = useCallback(() => {
@@ -326,13 +305,9 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
     missedOutput,
     dismissMissedOutput,
     latency,
-    recorder,
-    recording,
     send,
     interrupt,
     resize,
-    startRecording,
-    stopRecording,
     retry,
   }
 }

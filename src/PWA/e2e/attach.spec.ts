@@ -78,6 +78,30 @@ test.describe('finding and opening a session', () => {
     expect(classesOf('red')).toMatch(/xterm-fg-\d/)
   })
 
+  test('shows working state and makes CLI commands easy to close', async ({ app, desk }) => {
+    await desk('command palette')
+    await attach(app, 'command palette')
+    await expectScreen(app, 'E2E-READY')
+
+    const working = app.getByLabel('CLI working')
+    await expect(working).toBeVisible()
+    await expect(working).toHaveClass(/bg-amber-400/)
+    await expect(app.getByRole('button', { name: 'Record terminal diagnostics' })).toHaveCount(0)
+
+    await app.getByRole('button', { name: 'Set what this session is running' }).click()
+    await app.getByRole('button', { name: 'Claude Code' }).click()
+    await expect(app.getByRole('button', { name: /^\/compact/ })).toBeVisible()
+
+    const type = app.getByRole('button', { name: 'Running Claude Code — change' })
+    await type.click()
+    await expect(app.getByRole('button', { name: /^\/compact/ })).toBeHidden()
+
+    await type.click()
+    await expect(app.getByRole('button', { name: /^\/compact/ })).toBeVisible()
+    await app.getByRole('button', { name: 'Close Claude Code shortcuts and commands' }).click()
+    await expect(app.getByRole('button', { name: /^\/compact/ })).toBeHidden()
+  })
+
   /**
    * The isolation guarantee, seen from a browser.
    *

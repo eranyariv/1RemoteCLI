@@ -28,7 +28,6 @@ import {
 } from '../terminal/viewport'
 import { applyOutput } from '../terminal/apply'
 import { verdict } from '../terminal/latency'
-import { downloadTrace } from '../terminal/trace'
 import { pasteClipboardText, quoteTerminalPath } from '../terminal/attachment'
 import { refocusTerminalIfActive } from '../terminal/focus'
 import { installTouchScroll } from '../terminal/touchScroll'
@@ -183,9 +182,7 @@ export function TerminalView({
     term.loadAddon(fit)
     term.loadAddon(new WebLinksAddon())
     term.open(host)
-    const disposeTouchScroll = installTouchScroll(host, term, (event, details) => {
-      attached.recorder.diagnostic('touch-scroll', event, details)
-    })
+    const disposeTouchScroll = installTouchScroll(host, term)
 
     term.onData((data) => sendRef.current(applyModifiers(data, consumeModifiers())))
     term.onBinary((data) => sendRef.current(encodeBinary(data)))
@@ -199,7 +196,7 @@ export function TerminalView({
       termRef.current = null
       fitRef.current = null
     }
-  }, [attached.recorder, consumeModifiers])
+  }, [consumeModifiers])
 
   // Fit to the container, and tell the far end when the shape changed.
   //
@@ -363,9 +360,15 @@ export function TerminalView({
    * chose is the whole confirmation this needs.
    */
   const editType = useCallback(() => {
+    if (showActions) {
+      setShowActions(false)
+      setShowPicker(false)
+      return
+    }
+
     setShowActions(true)
     setShowPicker(true)
-  }, [])
+  }, [showActions])
 
   const pasteClipboard = useCallback(async () => {
     setTransferError(null)
@@ -441,46 +444,6 @@ export function TerminalView({
 
   const catalog = catalogFor(session.cliType)
 
-  const startTrace = useCallback(() => {
-    attached.startRecording()
-
-    const host = hostRef.current
-    const term = termRef.current
-    const viewport = window.visualViewport
-    attached.recorder.diagnostic('touch-scroll', 'recording-started', {
-      appVersion: __APP_VERSION__,
-      userAgent: navigator.userAgent,
-      platform: navigator.platform,
-      maxTouchPoints: navigator.maxTouchPoints,
-      devicePixelRatio: window.devicePixelRatio,
-      screenWidth: window.screen.width,
-      screenHeight: window.screen.height,
-      innerWidth: window.innerWidth,
-      innerHeight: window.innerHeight,
-      visualViewportWidth: viewport?.width ?? null,
-      visualViewportHeight: viewport?.height ?? null,
-      visualViewportOffsetTop: viewport?.offsetTop ?? null,
-      hostClientWidth: host?.clientWidth ?? null,
-      hostClientHeight: host?.clientHeight ?? null,
-      terminalRows: term?.rows ?? null,
-      terminalCols: term?.cols ?? null,
-      viewportY: term?.buffer.active.viewportY ?? null,
-      baseY: term?.buffer.active.baseY ?? null,
-    })
-  }, [attached])
-
-  const saveTrace = useCallback(() => {
-    attached.stopRecording()
-    downloadTrace(
-      attached.recorder.build({
-        program: session.program,
-        machine: machine.displayName,
-        cols: geometry.cols,
-        rows: geometry.rows,
-      }),
-    )
-  }, [attached, session.program, machine.displayName, geometry.cols, geometry.rows])
-
   useLockHorizontalPan(screenRef)
 
   const tone = verdict(attached.latency.p50)
@@ -518,6 +481,7 @@ export function TerminalView({
             <button
               type="button"
               onClick={editType}
+              aria-expanded={showActions}
               aria-label={
                 session.cliType === 'Generic'
                   ? 'Set what this session is running'
@@ -531,19 +495,6 @@ export function TerminalView({
         </div>
 
         <StateDot state={attached.state} />
-
-        <button
-          type="button"
-          onClick={attached.recording ? saveTrace : startTrace}
-          aria-label={
-            attached.recording ? 'Stop recording and save' : 'Record terminal diagnostics'
-          }
-          className={`min-h-10 rounded-lg px-3 text-sm transition active:bg-slate-800 ${
-            attached.recording ? 'text-rose-400' : 'text-slate-500'
-          }`}
-        >
-          {attached.recording ? `● ${attached.recorder.entryCount}` : '○'}
-        </button>
       </header>
 
       {attached.state === 'failed' && attached.error ? (
@@ -683,6 +634,23 @@ export function TerminalView({
         */}
         {showActions ? (
           <div className="border-b border-slate-800 px-2 py-2">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-xs font-medium text-slate-400">
+                {labelFor(session.cliType)} shortcuts and commands
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowActions(false)
+                  setShowPicker(false)
+                }}
+                aria-label={`Close ${labelFor(session.cliType)} shortcuts and commands`}
+                className="min-h-9 rounded-lg px-3 text-xs text-sky-400 transition active:bg-slate-800"
+              >
+                Close
+              </button>
+            </div>
+
             {showOnScreenKeys && catalog.shortcuts.length > 0 ? (
               <div {...PAN_X} className="flex items-center gap-1 overflow-x-auto pb-2">
                 {catalog.shortcuts.map((key) => (
@@ -769,7 +737,10 @@ export function TerminalView({
             <button
               type="button"
               aria-expanded={showActions}
-              onClick={() => setShowActions((v) => !v)}
+              onClick={() => {
+                setShowActions((v) => !v)
+                setShowPicker(false)
+              }}
               aria-label={`Shortcuts and commands for ${labelFor(session.cliType)}`}
               className={`min-h-10 shrink-0 rounded-lg px-3 text-sm transition active:bg-slate-700 ${
                 showActions ? 'bg-slate-700 text-slate-100' : 'text-slate-400'
@@ -914,12 +885,16 @@ function KeyButton({
 function StateDot({ state }: { state: string }) {
   const colour =
     state === 'attached'
-      ? 'bg-emerald-400'
+      ? 'bg-amber-400'
       : state === 'attaching' || state === 'reconnecting'
         ? 'bg-amber-400'
         : state === 'closed'
           ? 'bg-slate-600'
           : 'bg-rose-500'
 
-  return <span className={`size-2 shrink-0 rounded-full ${colour}`} aria-label={state} />
+  const label = state === 'attached' ? 'CLI working' : state
+
+  return (
+    <span className={`size-2 shrink-0 rounded-full ${colour}`} aria-label={label} title={label} />
+  )
 }

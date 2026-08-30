@@ -63,7 +63,7 @@ import {
   type TerminalOutput,
   type TerminalUploadReply,
 } from '../protocol/wire'
-import type { PushRegistration } from '../push/subscription'
+import type { PushPreferences, PushRegistration } from '../push/subscription'
 import {
   CHAT_ATTACHMENT_CHUNK_BYTES,
   MAX_CHAT_ATTACHMENT_BYTES,
@@ -862,10 +862,20 @@ export class RelayClient {
   }
 
   /** Offers this browser's push subscription, so the hub can reach the phone when nothing is connected. */
-  async registerPush(registration: PushRegistration): Promise<HubError | null> {
+  async registerPush(
+    registration: PushRegistration,
+    preferences: PushPreferences,
+  ): Promise<HubError | null> {
     return this.request(
       Server.RegisterPush,
-      encodeRegisterPush(registration.endpoint, registration.keys.p256dh, registration.keys.auth),
+      encodeRegisterPush(
+        registration.endpoint,
+        registration.keys.p256dh,
+        registration.keys.auth,
+        !preferences.awaitingInput,
+        !preferences.sessionFinished,
+        !preferences.announcements,
+      ),
     )
   }
 

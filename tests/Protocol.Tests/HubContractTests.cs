@@ -94,6 +94,45 @@ public class HubContractTests
     }
 
     [Fact]
+    public void OlderPushRegistrationKeepsEveryNotificationKindEnabled()
+    {
+        byte[] bytes = MessagePackSerializer.Serialize(
+            new OriginalRegisterPushRequest
+            {
+                Endpoint = "https://push.example/device",
+                Keys = new PushKeys { P256dh = "p256dh", Auth = "auth" },
+            },
+            Options);
+
+        RegisterPushRequest received =
+            MessagePackSerializer.Deserialize<RegisterPushRequest>(bytes, Options);
+
+        Assert.False(received.DisableAwaitingInput);
+        Assert.False(received.DisableSessionFinished);
+        Assert.False(received.DisableAnnouncements);
+    }
+
+    [Fact]
+    public void OlderHubCanReadANewerPushRegistration()
+    {
+        byte[] bytes = MessagePackSerializer.Serialize(
+            new RegisterPushRequest
+            {
+                Endpoint = "https://push.example/device",
+                Keys = new PushKeys { P256dh = "p256dh", Auth = "auth" },
+                DisableAwaitingInput = true,
+                DisableAnnouncements = true,
+            },
+            Options);
+
+        OriginalRegisterPushRequest received =
+            MessagePackSerializer.Deserialize<OriginalRegisterPushRequest>(bytes, Options);
+
+        Assert.Equal("https://push.example/device", received.Endpoint);
+        Assert.Equal("p256dh", received.Keys.P256dh);
+    }
+
+    [Fact]
     public void AttachCarriesAnOptionalLastSeqForResume()
     {
         Assert.Null(RoundTrip(new AttachSessionRequest { MachineId = "m", SessionId = "s", Cols = 80, Rows = 24 }).LastSeq);
@@ -324,6 +363,16 @@ public class HubContractTests
 
         [Key(4)]
         public int ProtocolVersion { get; set; }
+    }
+
+    [MessagePackObject]
+    public sealed class OriginalRegisterPushRequest
+    {
+        [Key(0)]
+        public string Endpoint { get; set; } = string.Empty;
+
+        [Key(1)]
+        public PushKeys Keys { get; set; } = new();
     }
 
     /// <summary>A session as a version 5 agent describes one: nothing past ProjectId.</summary>

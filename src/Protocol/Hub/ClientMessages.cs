@@ -308,6 +308,16 @@ public sealed class RegisterPushRequest
     /// <summary>The subscription's <c>p256dh</c> and <c>auth</c> keys.</summary>
     [Key(1)]
     public PushKeys Keys { get; set; } = new();
+
+    /// <summary>Disabled on this device. False by default keeps older clients fully subscribed.</summary>
+    [Key(2)]
+    public bool DisableAwaitingInput { get; set; }
+
+    [Key(3)]
+    public bool DisableSessionFinished { get; set; }
+
+    [Key(4)]
+    public bool DisableAnnouncements { get; set; }
 }
 
 /// <summary>Web Push subscription key material.</summary>

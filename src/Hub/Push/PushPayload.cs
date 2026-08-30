@@ -3,6 +3,15 @@ using System.Text.Json.Serialization;
 
 namespace OneRemoteCli.Hub.Push;
 
+[Flags]
+public enum PushNotificationKinds
+{
+    None = 0,
+    AwaitingInput = 1,
+    SessionFinished = 2,
+    Announcement = 4,
+}
+
 /// <summary>
 /// What the service worker is handed, and the deep link that makes a notification
 /// worth tapping.
@@ -21,6 +30,9 @@ namespace OneRemoteCli.Hub.Push;
 /// </summary>
 public sealed record PushPayload
 {
+    [JsonIgnore]
+    public PushNotificationKinds Kind { get; init; }
+
     [JsonPropertyName("title")]
     public string Title { get; init; } = string.Empty;
 
@@ -56,6 +68,7 @@ public sealed record PushPayload
     public static PushPayload AwaitingInput(string machineName, string sessionName, string? hint, string deepLink) =>
         new()
         {
+            Kind = PushNotificationKinds.AwaitingInput,
             Title = $"{sessionName} is waiting",
             // The hint is the prompt itself, which is the single most useful thing to
             // put on a lock screen: the user knows what they started, not what it
@@ -69,6 +82,7 @@ public sealed record PushPayload
     public static PushPayload Finished(string machineName, string sessionName, int exitCode, string deepLink) =>
         new()
         {
+            Kind = PushNotificationKinds.SessionFinished,
             Title = exitCode == 0 ? $"{sessionName} finished" : $"{sessionName} failed",
             Body = exitCode == 0 ? $"On {machineName}." : $"Exit code {exitCode}, on {machineName}.",
             Url = deepLink,
@@ -90,6 +104,7 @@ public sealed record PushPayload
     public static PushPayload FromOperator(string text) =>
         new()
         {
+            Kind = PushNotificationKinds.Announcement,
             Title = "1RemoteCLI",
             Body = text,
             Url = "/",

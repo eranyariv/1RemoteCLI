@@ -68,7 +68,11 @@ export default function App() {
   // What the terminal was last given. See the note where it is used.
   const lastOpen = useRef<{ machine: MachineInfo; session: SessionInfo } | null>(null)
 
-  const registerPush = usePushRegistration(relay.client, relay.status === 'connected')
+  const registerPush = usePushRegistration(relay.client, relay.status === 'connected', {
+    awaitingInput: userSettings.settings.notifyAwaitingInput,
+    sessionFinished: userSettings.settings.notifySessionFinished,
+    announcements: userSettings.settings.notifyAnnouncements,
+  })
 
   // A notification tapped while the app is already running. The service worker
   // sends a message rather than navigating, because navigating would drop the
@@ -264,7 +268,7 @@ export default function App() {
         {settingsOpen ? (
           <SettingsPage
             settings={userSettings.settings}
-            onDensityChange={userSettings.setCliDensity}
+            onChange={userSettings.updateSettings}
           />
         ) : selectedProjectId ? (
           <>
@@ -343,6 +347,8 @@ export default function App() {
               machine={showing.machine}
               session={showing.session}
               density={userSettings.settings.cliDensity}
+              showKeyBar={userSettings.settings.showKeyBar}
+              showLatency={userSettings.settings.showLatency}
               onClose={closeSession}
             />
           )}
@@ -365,6 +371,9 @@ export default function App() {
         selectedProjectId={selectedProjectId}
         agentChatOpen={showing?.session.kind === 'AgentChat'}
         terminalOpen={showing?.session.kind === 'Terminal'}
+        speechLanguage={userSettings.settings.speechLanguage}
+        speechVoice={userSettings.settings.speechVoice}
+        autoListen={userSettings.settings.autoListen}
         onSelectProject={setSelectedProjectId}
         onOpenSession={openSession}
         onCloseSession={closeSession}

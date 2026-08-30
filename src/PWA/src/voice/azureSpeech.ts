@@ -26,6 +26,11 @@ export interface SpeechProvider {
   dispose(): void
 }
 
+export interface SpeechProviderOptions {
+  recognitionLanguage?: string
+  voiceName?: string
+}
+
 export function validateRecognizedText(value: string): string {
   const text = value.trim()
   if (text.length > MAX_RECOGNIZED_TEXT_CHARS) {
@@ -112,6 +117,11 @@ export class AzureSpeechProvider implements SpeechProvider {
   private recognizer: SpeechRecognizer | null = null
   private synthesizer: SpeechSynthesizer | null = null
   private operation = 0
+  private readonly options: SpeechProviderOptions
+
+  constructor(options: SpeechProviderOptions = {}) {
+    this.options = options
+  }
 
   cancel(): void {
     this.operation += 1
@@ -135,7 +145,7 @@ export class AzureSpeechProvider implements SpeechProvider {
     if (operation !== this.operation) throw new Error('Listening was cancelled.')
 
     const config = SpeechSDK.SpeechConfig.fromAuthorizationToken(grant.token, grant.region)
-    config.speechRecognitionLanguage = grant.recognitionLanguage
+    config.speechRecognitionLanguage = this.options.recognitionLanguage ?? grant.recognitionLanguage
     config.setProperty(SpeechSDK.PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs, '10000')
     config.setProperty(
       SpeechSDK.PropertyId.Speech_SegmentationMaximumTimeMs,
@@ -207,7 +217,7 @@ export class AzureSpeechProvider implements SpeechProvider {
     if (operation !== this.operation) throw new Error('Speech was cancelled.')
 
     const config = SpeechSDK.SpeechConfig.fromAuthorizationToken(grant.token, grant.region)
-    config.speechSynthesisVoiceName = grant.voiceName
+    config.speechSynthesisVoiceName = this.options.voiceName ?? grant.voiceName
     const audio = SpeechSDK.AudioConfig.fromDefaultSpeakerOutput()
     const synthesizer = new SpeechSDK.SpeechSynthesizer(config, audio)
     this.synthesizer = synthesizer

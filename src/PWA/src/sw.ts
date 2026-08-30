@@ -78,7 +78,8 @@ self.addEventListener('fetch', (event) => {
  * A session wants something. This is the product's reason for existing on a
  * phone at all: without it, the app only helps if you happen to be looking.
  *
- * A notification is shown for every push, unconditionally. iOS revokes push
+ * A notification is shown for every push that reaches this device, unconditionally.
+ * Category preferences are applied by the hub before delivery. iOS revokes push
  * permission from apps that receive pushes without showing anything, so
  * "nothing worth saying" is not an available option — and having the OS quietly
  * withdraw permission would cost every future notification, not just this one.

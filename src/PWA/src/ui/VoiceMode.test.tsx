@@ -12,7 +12,7 @@ import type {
 } from '../protocol/wire'
 import type { RelayClient, RelayStatus } from '../relay/client'
 import type { SpeechProvider } from '../voice/azureSpeech'
-import { VoiceMode } from './VoiceMode'
+import { VoiceMode, type VoiceModeProps } from './VoiceMode'
 
 type ClientEvent = 'chatTranscript' | 'terminalOutput'
 
@@ -146,8 +146,13 @@ async function answer(provider: FakeSpeechProvider, listenNumber: number, value:
   await act(async () => provider.answer(value))
 }
 
-function setup(selectedSession?: SessionInfo, initialRelayStatus: RelayStatus = 'connected') {
+function setup(
+  selectedSession?: SessionInfo,
+  initialRelayStatus: RelayStatus = 'connected',
+  preferences: Pick<VoiceModeProps, 'speechLanguage' | 'speechVoice' | 'autoListen'> = {},
+) {
   const provider = new FakeSpeechProvider()
+  const createProvider = vi.fn(() => provider)
   const relay = new FakeRelay()
   const onSelectProject = vi.fn()
   const onOpenSession = vi.fn()
@@ -172,22 +177,11 @@ function setup(selectedSession?: SessionInfo, initialRelayStatus: RelayStatus = 
     onSelectProject,
     onOpenSession,
     onCloseSession,
-    createProvider: () => provider,
+    createProvider,
+    ...preferences,
   }
 
-  const rendered = render(
-    <VoiceMode
-      client={relay.client}
-      relayStatus={initialRelayStatus}
-      projects={[general]}
-      machines={[machine]}
-      selectedProjectId={null}
-      onSelectProject={onSelectProject}
-      onOpenSession={onOpenSession}
-      onCloseSession={onCloseSession}
-      createProvider={() => provider}
-    />,
-  )
+  const rendered = render(<VoiceMode {...props} relayStatus={initialRelayStatus} />)
   fireEvent.click(screen.getByRole('button', { name: 'Start voice mode' }))
 
   return {
@@ -196,6 +190,7 @@ function setup(selectedSession?: SessionInfo, initialRelayStatus: RelayStatus = 
     onSelectProject,
     onOpenSession,
     onCloseSession,
+    createProvider,
     setRelayStatus(status: RelayStatus) {
       rendered.rerender(<VoiceMode {...props} relayStatus={status} />)
     },
@@ -279,6 +274,28 @@ describe('VoiceMode', () => {
     await answer(view.provider, 6, 'back to sessions')
     await waitFor(() => expect(view.onCloseSession).toHaveBeenCalled())
     expect(view.relay.sendChatMessage).toHaveBeenCalledTimes(3)
+  })
+
+  it('starts speech with the selected language and reply voice', () => {
+    const view = setup(undefined, 'connected', {
+      speechLanguage: 'he-IL',
+      speechVoice: 'en-US-AndrewMultilingualNeural',
+    })
+
+    expect(view.createProvider).toHaveBeenCalledWith({
+      recognitionLanguage: 'he-IL',
+      voiceName: 'en-US-AndrewMultilingualNeural',
+    })
+  })
+
+  it('uses tap-to-talk when auto-listen is off', async () => {
+    const view = setup(undefined, 'connected', { autoListen: false })
+
+    await waitFor(() => expect(view.provider.speak).toHaveBeenCalled())
+    expect(view.provider.listen).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Listen' }))
+    await waitFor(() => expect(view.provider.listen).toHaveBeenCalledOnce())
   })
 
   it('requires confirmation before sending a risky terminal command', async () => {

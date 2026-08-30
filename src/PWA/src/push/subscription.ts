@@ -15,6 +15,12 @@ export interface PushRegistration {
   keys: { p256dh: string; auth: string }
 }
 
+export interface PushPreferences {
+  awaitingInput: boolean
+  sessionFinished: boolean
+  announcements: boolean
+}
+
 /**
  * The VAPID public key, as `pushManager.subscribe` wants it.
  *

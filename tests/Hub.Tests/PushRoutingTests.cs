@@ -331,6 +331,27 @@ public sealed class PushRoutingTests : IAsyncLifetime
         Assert.Equal(0, _subscriptions.UserCount);
     }
 
+    [Fact]
+    public async Task ASubscriptionStoresThisDevicesDisabledNotificationKinds()
+    {
+        HubConnection client = await ConnectClientAsync(AliceTenant, AliceObject);
+
+        Assert.Null(await client.InvokeAsync<ErrorNotification?>(
+            HubMethods.Server.RegisterPush,
+            new RegisterPushRequest
+            {
+                Endpoint = "https://push.example/alice",
+                Keys = new PushKeys { P256dh = "p256dh", Auth = "auth" },
+                DisableAwaitingInput = true,
+                DisableAnnouncements = true,
+            }));
+
+        PushSubscription only = Assert.Single(_subscriptions.For(UserKeyFor(AliceTenant, AliceObject)));
+        Assert.False(only.Allows(PushNotificationKinds.AwaitingInput));
+        Assert.True(only.Allows(PushNotificationKinds.SessionFinished));
+        Assert.False(only.Allows(PushNotificationKinds.Announcement));
+    }
+
     // Helpers.
 
     /// <summary>

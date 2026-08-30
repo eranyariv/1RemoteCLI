@@ -732,8 +732,21 @@ export function encodeSetSessionPinned(
  * The nested array is `PushKeys`, which is its own `[MessagePackObject]` and so
  * serialises as a positional array of its own rather than being flattened.
  */
-export function encodeRegisterPush(endpoint: string, p256dh: string, auth: string): unknown[] {
-  return [endpoint, [p256dh, auth]]
+export function encodeRegisterPush(
+  endpoint: string,
+  p256dh: string,
+  auth: string,
+  disableAwaitingInput = false,
+  disableSessionFinished = false,
+  disableAnnouncements = false,
+): unknown[] {
+  return [
+    endpoint,
+    [p256dh, auth],
+    disableAwaitingInput,
+    disableSessionFinished,
+    disableAnnouncements,
+  ]
 }
 
 /** `CreateProjectRequest` */

@@ -43,13 +43,21 @@ public sealed class WebPushSender(
             return;
         }
 
-        IReadOnlyList<PushSubscription> subscriptions = _store.For(userKey);
-        if (subscriptions.Count == 0)
+        IReadOnlyList<PushSubscription> registered = _store.For(userKey);
+        if (registered.Count == 0)
         {
             // Worth saying out loud. The single most likely cause is that the hub was
             // restarted and the subscriptions went with it, and "no notifications" is
             // otherwise indistinguishable from a dozen other causes.
             _logger.LogDebug("No push subscriptions registered; nothing to notify.");
+            return;
+        }
+
+        IReadOnlyList<PushSubscription> subscriptions =
+            [.. registered.Where(subscription => subscription.Allows(payload.Kind))];
+        if (subscriptions.Count == 0)
+        {
+            _logger.LogDebug("Every registered device disabled this notification category.");
             return;
         }
 

@@ -6,7 +6,14 @@ namespace OneRemoteCli.Hub.Push;
 /// <param name="Endpoint">The push service URL. Unique per subscription, so it is the identity.</param>
 /// <param name="P256dh">The subscriber's public key, base64url.</param>
 /// <param name="Auth">The subscriber's auth secret, base64url.</param>
-public readonly record struct PushSubscription(string Endpoint, string P256dh, string Auth);
+public readonly record struct PushSubscription(
+    string Endpoint,
+    string P256dh,
+    string Auth,
+    PushNotificationKinds DisabledKinds = PushNotificationKinds.None)
+{
+    public bool Allows(PushNotificationKinds kind) => (DisabledKinds & kind) == 0;
+}
 
 /// <summary>
 /// Who to push to, per user.

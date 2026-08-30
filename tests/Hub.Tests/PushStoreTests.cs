@@ -113,6 +113,20 @@ public sealed class PushStoreTests
 
         Assert.Throws<ArgumentException>(() => store.Register(" ", Sub("https://push/1")));
     }
+
+    [Fact]
+    public void ADeviceCanDisableIndividualNotificationKinds()
+    {
+        var subscription = new PushSubscription(
+            "https://push/1",
+            "p256dh",
+            "auth",
+            PushNotificationKinds.AwaitingInput | PushNotificationKinds.Announcement);
+
+        Assert.False(subscription.Allows(PushNotificationKinds.AwaitingInput));
+        Assert.True(subscription.Allows(PushNotificationKinds.SessionFinished));
+        Assert.False(subscription.Allows(PushNotificationKinds.Announcement));
+    }
 }
 
 public sealed class PushPayloadTests
@@ -199,6 +213,7 @@ public sealed class PushPayloadTests
         Assert.Contains("\"body\":\"Allow?\"", json, StringComparison.Ordinal);
         Assert.Contains("\"url\":\"/?machine=m\\u0026session=s\"", json, StringComparison.Ordinal);
         Assert.Contains("\"perishable\":true", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"Kind\"", json, StringComparison.Ordinal);
     }
 }
 

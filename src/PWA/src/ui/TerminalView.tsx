@@ -42,6 +42,8 @@ export interface TerminalViewProps {
   machine: MachineInfo
   session: SessionInfo
   density: CliDensity
+  showKeyBar: boolean
+  showLatency: boolean
   onClose(): void
 }
 
@@ -76,6 +78,8 @@ export function TerminalView({
   machine,
   session,
   density,
+  showKeyBar,
+  showLatency,
   onClose,
 }: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
@@ -89,7 +93,7 @@ export function TerminalView({
   const [showActions, setShowActions] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
   const [modifiers, setModifiers] = useState<Modifiers>(NoModifiers)
-  const [showOnScreenKeys] = useState(() => needsOnScreenKeys(window))
+  const [showOnScreenKeys] = useState(() => showKeyBar && needsOnScreenKeys(window))
   const [transferError, setTransferError] = useState<string | null>(null)
   const [upload, setUpload] = useState<{
     name: string
@@ -739,69 +743,71 @@ export function TerminalView({
           </div>
         ) : null}
 
-        <div {...PAN_X} className="flex items-center gap-1 overflow-x-auto px-2 py-2">
-          {showOnScreenKeys ? (
-            <>
-              <ModifierButton
-                label="Ctrl"
-                armed={modifiers.ctrl}
-                onToggle={() => toggleModifier('ctrl')}
-              />
-              <ModifierButton
-                label="Alt"
-                armed={modifiers.alt}
-                onToggle={() => toggleModifier('alt')}
-              />
+        {showKeyBar ? (
+          <div {...PAN_X} className="flex items-center gap-1 overflow-x-auto px-2 py-2">
+            {showOnScreenKeys ? (
+              <>
+                <ModifierButton
+                  label="Ctrl"
+                  armed={modifiers.ctrl}
+                  onToggle={() => toggleModifier('ctrl')}
+                />
+                <ModifierButton
+                  label="Alt"
+                  armed={modifiers.alt}
+                  onToggle={() => toggleModifier('alt')}
+                />
 
-              <span className="mx-1 h-6 w-px shrink-0 bg-slate-700" aria-hidden="true" />
+                <span className="mx-1 h-6 w-px shrink-0 bg-slate-700" aria-hidden="true" />
 
-              {KeyBarLayout.map((key) => (
-                <KeyButton key={key.name} definition={key} onPress={press} />
-              ))}
-            </>
-          ) : null}
+                {KeyBarLayout.map((key) => (
+                  <KeyButton key={key.name} definition={key} onPress={press} />
+                ))}
+              </>
+            ) : null}
 
-          <button
-            type="button"
-            aria-expanded={showActions}
-            onClick={() => setShowActions((v) => !v)}
-            aria-label={`Shortcuts and commands for ${labelFor(session.cliType)}`}
-            className={`min-h-10 shrink-0 rounded-lg px-3 text-sm transition active:bg-slate-700 ${
-              showActions ? 'bg-slate-700 text-slate-100' : 'text-slate-400'
-            }`}
-          >
-            ⌘
-          </button>
-
-          <button
-            type="button"
-            onClick={() => void pasteClipboard()}
-            disabled={attached.state !== 'attached' || upload !== null}
-            className="min-h-10 shrink-0 rounded-lg px-3 text-sm text-slate-300 transition enabled:active:bg-slate-700 disabled:text-slate-600"
-          >
-            Paste
-          </button>
-
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={attached.state !== 'attached' || upload !== null}
-            className="min-h-10 shrink-0 rounded-lg px-3 text-sm text-slate-300 transition enabled:active:bg-slate-700 disabled:text-slate-600"
-          >
-            Attach
-          </button>
-
-          {showOnScreenKeys ? (
             <button
               type="button"
-              onClick={() => setShowExtras((v) => !v)}
-              aria-label="More keys"
-              className="min-h-10 shrink-0 rounded-lg px-3 font-mono text-sm text-slate-400 transition active:bg-slate-700"
+              aria-expanded={showActions}
+              onClick={() => setShowActions((v) => !v)}
+              aria-label={`Shortcuts and commands for ${labelFor(session.cliType)}`}
+              className={`min-h-10 shrink-0 rounded-lg px-3 text-sm transition active:bg-slate-700 ${
+                showActions ? 'bg-slate-700 text-slate-100' : 'text-slate-400'
+              }`}
             >
-              {showExtras ? '×' : '···'}
+              ⌘
             </button>
-          ) : null}
-        </div>
+
+            <button
+              type="button"
+              onClick={() => void pasteClipboard()}
+              disabled={attached.state !== 'attached' || upload !== null}
+              className="min-h-10 shrink-0 rounded-lg px-3 text-sm text-slate-300 transition enabled:active:bg-slate-700 disabled:text-slate-600"
+            >
+              Paste
+            </button>
+
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={attached.state !== 'attached' || upload !== null}
+              className="min-h-10 shrink-0 rounded-lg px-3 text-sm text-slate-300 transition enabled:active:bg-slate-700 disabled:text-slate-600"
+            >
+              Attach
+            </button>
+
+            {showOnScreenKeys ? (
+              <button
+                type="button"
+                onClick={() => setShowExtras((v) => !v)}
+                aria-label="More keys"
+                className="min-h-10 shrink-0 rounded-lg px-3 font-mono text-sm text-slate-400 transition active:bg-slate-700"
+              >
+                {showExtras ? '×' : '···'}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
 
         {showOnScreenKeys && showExtras ? (
           <div className="flex items-center gap-1 border-t border-slate-800 px-2 py-2">
@@ -811,28 +817,30 @@ export function TerminalView({
           </div>
         ) : null}
 
-        <p className="px-3 pb-2 text-[11px] text-slate-600">
-          {attached.latency.p50 === null ? (
-            'Latency: measuring…'
-          ) : (
-            <>
-              Latency{' '}
-              <span
-                className={
-                  tone === 'good'
-                    ? 'text-emerald-400'
-                    : tone === 'fair'
-                      ? 'text-amber-400'
-                      : 'text-rose-400'
-                }
-              >
-                {Math.round(attached.latency.p50)} ms
-              </span>{' '}
-              median, {Math.round(attached.latency.p95 ?? 0)} ms p95, over{' '}
-              {attached.latency.count} keystrokes
-            </>
-          )}
-        </p>
+        {showLatency ? (
+          <p className="px-3 pb-2 text-[11px] text-slate-600">
+            {attached.latency.p50 === null ? (
+              'Latency: measuring…'
+            ) : (
+              <>
+                Latency{' '}
+                <span
+                  className={
+                    tone === 'good'
+                      ? 'text-emerald-400'
+                      : tone === 'fair'
+                        ? 'text-amber-400'
+                        : 'text-rose-400'
+                  }
+                >
+                  {Math.round(attached.latency.p50)} ms
+                </span>{' '}
+                median, {Math.round(attached.latency.p95 ?? 0)} ms p95, over{' '}
+                {attached.latency.count} keystrokes
+              </>
+            )}
+          </p>
+        ) : null}
       </div>
     </div>
   )

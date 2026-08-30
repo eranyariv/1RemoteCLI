@@ -486,7 +486,13 @@ public sealed class RelayHub(
 
         bool changed = _pushSubscriptions.Register(
             RequireUserKey(),
-            new PushSubscription(request.Endpoint, request.Keys.P256dh, request.Keys.Auth));
+            new PushSubscription(
+                request.Endpoint,
+                request.Keys.P256dh,
+                request.Keys.Auth,
+                (request.DisableAwaitingInput ? PushNotificationKinds.AwaitingInput : PushNotificationKinds.None) |
+                (request.DisableSessionFinished ? PushNotificationKinds.SessionFinished : PushNotificationKinds.None) |
+                (request.DisableAnnouncements ? PushNotificationKinds.Announcement : PushNotificationKinds.None)));
 
         if (changed)
         {

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 
 export type CliDensity = 'comfortable' | 'compact' | 'dense'
+export type SpeechLanguage = 'en-US' | 'en-GB' | 'he-IL'
+export type SpeechVoice = 'en-US-AvaMultilingualNeural' | 'en-US-AndrewMultilingualNeural'
 
 export interface CliDensityDefinition {
   label: string
@@ -30,12 +32,39 @@ export const CliDensities: Record<CliDensity, CliDensityDefinition> = {
   },
 }
 
+export const SpeechLanguages: Record<SpeechLanguage, string> = {
+  'en-US': 'English (United States)',
+  'en-GB': 'English (United Kingdom)',
+  'he-IL': 'Hebrew (Israel)',
+}
+
+export const SpeechVoices: Record<SpeechVoice, string> = {
+  'en-US-AvaMultilingualNeural': 'Ava',
+  'en-US-AndrewMultilingualNeural': 'Andrew',
+}
+
 export interface UserSettings {
   cliDensity: CliDensity
+  showKeyBar: boolean
+  showLatency: boolean
+  speechLanguage: SpeechLanguage
+  speechVoice: SpeechVoice
+  autoListen: boolean
+  notifyAwaitingInput: boolean
+  notifySessionFinished: boolean
+  notifyAnnouncements: boolean
 }
 
 export const DefaultUserSettings: UserSettings = {
   cliDensity: 'compact',
+  showKeyBar: true,
+  showLatency: true,
+  speechLanguage: 'en-US',
+  speechVoice: 'en-US-AvaMultilingualNeural',
+  autoListen: true,
+  notifyAwaitingInput: true,
+  notifySessionFinished: true,
+  notifyAnnouncements: true,
 }
 
 const StoragePrefix = '1remote.user-settings.v1:'
@@ -49,6 +78,21 @@ function isCliDensity(value: unknown): value is CliDensity {
   return value === 'comfortable' || value === 'compact' || value === 'dense'
 }
 
+function isSpeechLanguage(value: unknown): value is SpeechLanguage {
+  return value === 'en-US' || value === 'en-GB' || value === 'he-IL'
+}
+
+function isSpeechVoice(value: unknown): value is SpeechVoice {
+  return (
+    value === 'en-US-AvaMultilingualNeural' ||
+    value === 'en-US-AndrewMultilingualNeural'
+  )
+}
+
+function boolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback
+}
+
 export function readUserSettings(username: string | undefined): UserSettings {
   const key = storageKey(username)
   if (!key) return DefaultUserSettings
@@ -57,11 +101,32 @@ export function readUserSettings(username: string | undefined): UserSettings {
     const raw = window.localStorage.getItem(key)
     if (!raw) return DefaultUserSettings
 
-    const value = JSON.parse(raw) as { cliDensity?: unknown }
+    const value = JSON.parse(raw) as Record<string, unknown>
     return {
       cliDensity: isCliDensity(value.cliDensity)
         ? value.cliDensity
         : DefaultUserSettings.cliDensity,
+      showKeyBar: boolean(value.showKeyBar, DefaultUserSettings.showKeyBar),
+      showLatency: boolean(value.showLatency, DefaultUserSettings.showLatency),
+      speechLanguage: isSpeechLanguage(value.speechLanguage)
+        ? value.speechLanguage
+        : DefaultUserSettings.speechLanguage,
+      speechVoice: isSpeechVoice(value.speechVoice)
+        ? value.speechVoice
+        : DefaultUserSettings.speechVoice,
+      autoListen: boolean(value.autoListen, DefaultUserSettings.autoListen),
+      notifyAwaitingInput: boolean(
+        value.notifyAwaitingInput,
+        DefaultUserSettings.notifyAwaitingInput,
+      ),
+      notifySessionFinished: boolean(
+        value.notifySessionFinished,
+        DefaultUserSettings.notifySessionFinished,
+      ),
+      notifyAnnouncements: boolean(
+        value.notifyAnnouncements,
+        DefaultUserSettings.notifyAnnouncements,
+      ),
     }
   } catch {
     return DefaultUserSettings
@@ -92,14 +157,14 @@ export function useUserSettings(username: string | undefined) {
     setStored({ key, settings: readUserSettings(username) })
   }, [key, username])
 
-  const setCliDensity = useCallback(
-    (cliDensity: CliDensity) => {
-      const next = { cliDensity }
+  const updateSettings = useCallback(
+    (changes: Partial<UserSettings>) => {
+      const next = { ...settings, ...changes }
       writeUserSettings(username, next)
       setStored({ key, settings: next })
     },
-    [key, username],
+    [key, settings, username],
   )
 
-  return { settings, setCliDensity }
+  return { settings, updateSettings }
 }

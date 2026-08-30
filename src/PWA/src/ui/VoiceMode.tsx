@@ -5,7 +5,11 @@ import type { RelayClient, RelayStatus } from '../relay/client'
 import { sessionLabel } from '../relay/machines'
 import { GENERAL_PROJECT_ID, projectStats } from '../relay/projects'
 import { encodeText } from '../terminal/keys'
-import { AzureSpeechProvider, type SpeechProvider } from '../voice/azureSpeech'
+import {
+  AzureSpeechProvider,
+  type SpeechProvider,
+  type SpeechProviderOptions,
+} from '../voice/azureSpeech'
 import {
   chatEventSpeech,
   RecentUtterances,
@@ -48,10 +52,13 @@ export interface VoiceModeProps {
   selectedProjectId: string | null
   agentChatOpen?: boolean
   terminalOpen?: boolean
+  speechLanguage?: string
+  speechVoice?: string
+  autoListen?: boolean
   onSelectProject(projectId: string | null): void
   onOpenSession(machine: MachineInfo, session: SessionInfo): void
   onCloseSession(): void
-  createProvider?: () => SpeechProvider
+  createProvider?: (options: SpeechProviderOptions) => SpeechProvider
 }
 
 function projectChoices(
@@ -122,10 +129,13 @@ export function VoiceMode({
   selectedProjectId,
   agentChatOpen = false,
   terminalOpen = false,
+  speechLanguage = 'en-US',
+  speechVoice = 'en-US-AvaMultilingualNeural',
+  autoListen = true,
   onSelectProject,
   onOpenSession,
   onCloseSession,
-  createProvider = () => new AzureSpeechProvider(),
+  createProvider = (options) => new AzureSpeechProvider(options),
 }: VoiceModeProps) {
   const [state, reactDispatch] = useReducer(voiceReducer, initialVoiceState)
   const stateRef = useRef(state)
@@ -201,6 +211,26 @@ export function VoiceMode({
     return conversationPrompt()
   }, [conversationPrompt, projectsPrompt, sessionsPrompt])
 
+  const listenForUtterance = useCallback(
+    async (
+      provider: SpeechProvider,
+      operation: number,
+    ): Promise<'handled' | 'empty' | 'duplicate' | 'cancelled'> => {
+      apply({ type: 'activity', activity: 'listening' })
+      const transcript = await provider.listen()
+      if (operation !== operationRef.current || !stateRef.current.active) return 'cancelled'
+
+      if (!transcript) return 'empty'
+      if (recentUtterances.current.isDuplicate(transcript)) return 'duplicate'
+
+      setHeard(transcript)
+      apply({ type: 'activity', activity: 'thinking' })
+      await handleRef.current(transcript)
+      return 'handled'
+    },
+    [apply],
+  )
+
   const runCycle = useCallback(
     async (requestedSpeech: string) => {
       const provider = providerRef.current
@@ -225,22 +255,19 @@ export function VoiceMode({
           return
         }
 
-        apply({ type: 'activity', activity: 'listening' })
-        const transcript = await provider.listen()
-        if (operation !== operationRef.current || !stateRef.current.active) return
+        if (!autoListen) {
+          apply({ type: 'activity', activity: 'muted' })
+          return
+        }
 
-        if (!transcript) {
+        const outcome = await listenForUtterance(provider, operation)
+        if (outcome === 'empty') {
           void runCycle(`I did not hear anything. ${promptForCurrentLevel()}`)
           return
         }
-        if (recentUtterances.current.isDuplicate(transcript)) {
+        if (outcome === 'duplicate') {
           void runCycle('That utterance was already handled. Please continue.')
-          return
         }
-
-        setHeard(transcript)
-        apply({ type: 'activity', activity: 'thinking' })
-        await handleRef.current(transcript)
       } catch (error) {
         if (operation !== operationRef.current || !stateRef.current.active) return
         apply({
@@ -249,8 +276,31 @@ export function VoiceMode({
         })
       }
     },
-    [apply, promptForCurrentLevel, relayStatus],
+    [apply, autoListen, listenForUtterance, promptForCurrentLevel, relayStatus],
   )
+
+  const listenNow = useCallback(async () => {
+    const provider = providerRef.current
+    if (!provider || !stateRef.current.active) return
+
+    const operation = ++operationRef.current
+    provider.cancel()
+
+    try {
+      const outcome = await listenForUtterance(provider, operation)
+      if (outcome === 'empty') {
+        void runCycle(`I did not hear anything. ${promptForCurrentLevel()}`)
+      } else if (outcome === 'duplicate') {
+        void runCycle('That utterance was already handled. Please continue.')
+      }
+    } catch (error) {
+      if (operation !== operationRef.current || !stateRef.current.active) return
+      apply({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Voice mode failed.',
+      })
+    }
+  }, [apply, listenForUtterance, promptForCurrentLevel, runCycle])
 
   const stopVoice = useCallback(
     async (announce: boolean) => {
@@ -584,7 +634,10 @@ export function VoiceMode({
     }
 
     providerRef.current?.dispose()
-    providerRef.current = createProvider()
+    providerRef.current = createProvider({
+      recognitionLanguage: speechLanguage,
+      voiceName: speechVoice,
+    })
     disconnectedRef.current = false
     everConnectedRef.current = relayStatus === 'connected'
     const stored = loadVoiceLocation(localStorage)
@@ -641,11 +694,13 @@ export function VoiceMode({
     runCycle,
     selectedProjectId,
     sessionsPrompt,
+    speechLanguage,
+    speechVoice,
   ])
 
   const toggleMute = useCallback(async () => {
     if (stateRef.current.activity === 'muted') {
-      void runCycle(`Microphone on. ${promptForCurrentLevel()}`)
+      void listenNow()
       return
     }
 
@@ -658,7 +713,7 @@ export function VoiceMode({
       // The visible muted state remains authoritative if audio output failed.
     }
     apply({ type: 'activity', activity: 'muted' })
-  }, [apply, promptForCurrentLevel, runCycle])
+  }, [apply, listenNow])
 
   useEffect(() => {
     const offTerminal = client.on('terminalOutput', (output) => {
@@ -851,7 +906,7 @@ export function VoiceMode({
           onClick={() => void toggleMute()}
           className="min-h-9 rounded-lg bg-slate-800 px-3 text-xs active:bg-slate-700"
         >
-          {state.activity === 'muted' ? 'Unmute' : 'Mute'}
+          {state.activity === 'muted' ? 'Listen' : 'Mute'}
         </button>
         {state.level !== 'projects' ? (
           <button

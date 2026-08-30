@@ -35,6 +35,7 @@ import {
   encodeDeleteProject,
   encodeDetachSession,
   encodeInterruptSession,
+  encodeRegisterPush,
   encodeRespondChatPermission,
   encodeResizeTerminal,
   encodeSendInput,
@@ -613,6 +614,16 @@ describe('encoding what we send the hub', () => {
     expect(encodeSetSessionPinned(want[0] as string, want[1] as string, want[2] as boolean)).toEqual(
       want,
     )
+  })
+
+  it('sends per-device push category preferences as disabled flags', () => {
+    expect(encodeRegisterPush('endpoint', 'p256dh', 'auth', true, false, true)).toEqual([
+      'endpoint',
+      ['p256dh', 'auth'],
+      true,
+      false,
+      true,
+    ])
   })
 
   it('sends a move to a project', () => {

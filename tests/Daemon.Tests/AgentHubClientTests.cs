@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
+using MessagePack;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.SignalR;
@@ -43,7 +44,9 @@ public sealed class AgentHubClientTests : IAsyncLifetime
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         builder.Logging.ClearProviders();
         builder.Services.AddSingleton(_recorder);
-        builder.Services.AddSignalR().AddMessagePackProtocol();
+        builder.Services
+            .AddSignalR(options => options.MaximumReceiveMessageSize = 1024 * 1024)
+            .AddMessagePackProtocol();
 
         _server = builder.Build();
         _server.MapHub<RecordingHub>("/hub");
@@ -384,6 +387,55 @@ public sealed class AgentHubClientTests : IAsyncLifetime
                 Directory.Delete(root, recursive: true);
             }
         }
+    }
+
+    [Fact]
+    public async Task SplitsLargeChatSnapshotsIntoBoundedOrderedFrames()
+    {
+        AgentHubClient client = await StartAsync(new SessionRegistry());
+        await Next<RegisterMachineRequest>();
+
+        var session = new AcpSession(
+            "large-chat",
+            @"C:\repo",
+            "Large chat",
+            DateTimeOffset.UtcNow);
+        ChatEvent[] events =
+        [
+            .. Enumerable.Range(0, 256).Select(index => new ChatEvent
+            {
+                EventId = $"event-{index:D3}",
+                Kind = ChatEventKind.AgentMessage,
+                Text = new string((char)('a' + index % 26), 16 * 1024),
+            }),
+        ];
+
+        await client.OnChatTranscriptAsync(
+            session,
+            ChatTranscriptKind.Snapshot,
+            events,
+            targetConnectionId: "phone");
+
+        var frames = new List<ChatTranscriptNotification>();
+        while (frames.Sum(frame => frame.Events.Length) < events.Length)
+        {
+            frames.Add(await Next<ChatTranscriptNotification>());
+        }
+
+        Assert.True(frames.Count > 1);
+        Assert.Equal(ChatTranscriptKind.Snapshot, frames[0].Kind);
+        Assert.All(frames.Skip(1), frame => Assert.Equal(ChatTranscriptKind.Delta, frame.Kind));
+        Assert.All(frames, frame => Assert.Equal("phone", frame.TargetConnectionId));
+        Assert.Equal(
+            events.Select(item => item.EventId),
+            frames.SelectMany(frame => frame.Events).Select(item => item.EventId));
+
+        var options = new MessagePackHubProtocolOptions().SerializerOptions;
+        Assert.All(
+            frames,
+            frame => Assert.True(
+                MessagePackSerializer.Serialize(frame, options).Length <=
+                AgentHubClient.MaximumChatTranscriptFrameBytes));
     }
 
     [Fact]

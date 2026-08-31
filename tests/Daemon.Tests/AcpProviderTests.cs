@@ -95,6 +95,7 @@ public sealed class AcpProviderTests
         Assert.Equal(1, loads);
         Assert.Equal(ChatSessionState.Ready, provider.Snapshot().Single().ChatState);
         Assert.Equal(["phone-one", "phone-two"], sink.TranscriptTargets);
+        Assert.Equal(["snapshot", "ready", "snapshot"], sink.Operations);
     }
 
     [Fact]
@@ -167,6 +168,54 @@ public sealed class AcpProviderTests
         Assert.Equal(2, plans.Length);
         Assert.Equal(["turn-1", "turn-2"], plans.Select(item => item.PlanTurnId));
         Assert.Equal(["First task", "Second task"], plans.Select(item => item.PlanEntries[0].Content));
+    }
+
+    [Fact]
+    public async Task FailedSnapshotCanBeRetriedWithoutReloadingTheAcpSession()
+    {
+        int loads = 0;
+
+        Task<JsonElement> Call(
+            string method,
+            JsonObject parameters,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(method switch
+            {
+                "session/list" => JsonSerializer.SerializeToElement(new
+                {
+                    sessions = new[]
+                    {
+                        new
+                        {
+                            sessionId = "large",
+                            cwd = @"C:\repo",
+                            title = "Large chat",
+                            updatedAt = DateTimeOffset.UtcNow,
+                        },
+                    },
+                    nextCursor = (string?)null,
+                }),
+                "session/load" when ++loads == 1 => JsonSerializer.SerializeToElement(new { }),
+                _ => throw new InvalidOperationException(method),
+            });
+
+        var sink = new RecordingChatSink { FailSnapshots = 1 };
+        await using var provider = new AcpProvider(Call);
+        provider.AttachSink(sink);
+        await provider.RefreshAsync();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => provider.AttachAsync("large", "phone"));
+
+        AcpSession session = Assert.Single(provider.Snapshot());
+        Assert.True(session.Loaded);
+        Assert.Equal(ChatSessionState.Unavailable, session.ChatState);
+
+        await provider.AttachAsync("large", "phone");
+
+        Assert.Equal(1, loads);
+        Assert.Equal(ChatSessionState.Ready, session.ChatState);
+        Assert.Equal(["snapshot", "updated", "snapshot", "ready"], sink.Operations);
     }
 
     [Fact]
@@ -943,6 +992,10 @@ public sealed class AcpProviderTests
 
         public List<ChatEvent[]> Snapshots { get; } = [];
 
+        public List<string> Operations { get; } = [];
+
+        public int FailSnapshots { get; set; }
+
         public ValueTask OnChatOpenedAsync(
             AcpSession session,
             CancellationToken cancellationToken = default) =>
@@ -950,8 +1003,11 @@ public sealed class AcpProviderTests
 
         public ValueTask OnChatUpdatedAsync(
             AcpSession session,
-            CancellationToken cancellationToken = default) =>
-            ValueTask.CompletedTask;
+            CancellationToken cancellationToken = default)
+        {
+            Operations.Add(session.ChatState == ChatSessionState.Ready ? "ready" : "updated");
+            return ValueTask.CompletedTask;
+        }
 
         public ValueTask OnChatClosedAsync(
             AcpSession session,
@@ -966,6 +1022,13 @@ public sealed class AcpProviderTests
             CancellationToken cancellationToken = default)
         {
             Assert.Equal(ChatTranscriptKind.Snapshot, kind);
+            Operations.Add("snapshot");
+            if (FailSnapshots > 0)
+            {
+                FailSnapshots--;
+                throw new InvalidOperationException("Snapshot relay failed.");
+            }
+
             TranscriptTargets.Add(targetConnectionId);
             Snapshots.Add(events);
             return ValueTask.CompletedTask;

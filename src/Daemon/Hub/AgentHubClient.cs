@@ -1,4 +1,6 @@
 using System.Runtime.InteropServices;
+using MessagePack;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.Http.Connections.Client;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,6 +35,14 @@ namespace OneRemoteCli.Daemon.Hub;
 /// </summary>
 public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposable
 {
+    // The hub accepts 8 MiB, but keeping transcript frames far below that leaves room
+    // for SignalR's invocation envelope and avoids one large history monopolizing a
+    // phone connection.
+    internal const int MaximumChatTranscriptFrameBytes = 512 * 1024;
+    private const int ChatTranscriptEnvelopeBytes = 4 * 1024;
+    private static readonly MessagePackSerializerOptions TranscriptSerializerOptions =
+        new MessagePackHubProtocolOptions().SerializerOptions;
+
     /// <summary>Backoff bounds for reconnecting. Short enough to feel instant, capped so a dead hub is cheap.</summary>
     private static readonly TimeSpan MinimumRetry = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan MaximumRetry = TimeSpan.FromSeconds(30);
@@ -46,6 +56,7 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
     private readonly ChatAttachmentStore _chatAttachments;
     private readonly Func<CancellationToken, Task<string?>> _tokenProvider;
     private readonly ILogger _logger;
+    private readonly SemaphoreSlim _chatTranscriptGate = new(1, 1);
     private AcpProvider? _chat;
     private int _notificationLevel;
 
@@ -1058,17 +1069,29 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
 
         try
         {
-            await _connection.SendAsync(
-                HubMethods.Server.ChatTranscript,
-                new ChatTranscriptNotification
+            await _chatTranscriptGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                int index = 0;
+                foreach (ChatEvent[] chunk in SplitChatTranscript(events))
                 {
-                    SessionId = session.SessionId,
-                    Seq = session.Seq,
-                    Kind = kind,
-                    Events = events,
-                    TargetConnectionId = targetConnectionId,
-                },
-                cancellationToken).ConfigureAwait(false);
+                    await _connection.SendAsync(
+                        HubMethods.Server.ChatTranscript,
+                        new ChatTranscriptNotification
+                        {
+                            SessionId = session.SessionId,
+                            Seq = session.Seq,
+                            Kind = index++ == 0 ? kind : ChatTranscriptKind.Delta,
+                            Events = chunk,
+                            TargetConnectionId = targetConnectionId,
+                        },
+                        cancellationToken).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                _chatTranscriptGate.Release();
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1080,6 +1103,45 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
             {
                 Once(1304, () => _logger.Failed(ex, "Relaying a chat transcript"));
             }
+
+            // A live delta can be recovered by the next attach snapshot. An attach
+            // snapshot itself has no such successor, so its caller must know it did
+            // not finish and keep the session unavailable for an explicit retry.
+            if (kind == ChatTranscriptKind.Snapshot)
+            {
+                throw;
+            }
+        }
+    }
+
+    private static IEnumerable<ChatEvent[]> SplitChatTranscript(ChatEvent[] events)
+    {
+        if (events.Length == 0)
+        {
+            yield return [];
+            yield break;
+        }
+
+        var chunk = new List<ChatEvent>();
+        int bytes = ChatTranscriptEnvelopeBytes;
+
+        foreach (ChatEvent item in events)
+        {
+            int itemBytes = MessagePackSerializer.Serialize(item, TranscriptSerializerOptions).Length;
+            if (chunk.Count > 0 && bytes + itemBytes > MaximumChatTranscriptFrameBytes)
+            {
+                yield return [.. chunk];
+                chunk.Clear();
+                bytes = ChatTranscriptEnvelopeBytes;
+            }
+
+            chunk.Add(item);
+            bytes += itemBytes;
+        }
+
+        if (chunk.Count > 0)
+        {
+            yield return [.. chunk];
         }
     }
 
@@ -1281,5 +1343,6 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
         await StopQuietlyAsync().ConfigureAwait(false);
         await _connection.DisposeAsync().ConfigureAwait(false);
         _chatAttachments.Dispose();
+        _chatTranscriptGate.Dispose();
     }
 }

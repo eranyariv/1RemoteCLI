@@ -290,20 +290,35 @@ public sealed class AcpProvider : IAsyncDisposable
                 }
 
                 session.Loaded = true;
-                if (session.SetChatState(ChatSessionState.Ready) && _sink is not null)
+            }
+
+            // Keep the composer blocked until the whole snapshot has been queued. A
+            // large history is sent in several frames, and allowing a new prompt in
+            // between them could interleave fresh deltas with stale replayed events.
+            if (_sink is not null)
+            {
+                try
                 {
-                    await _sink.OnChatUpdatedAsync(session, cancellationToken).ConfigureAwait(false);
+                    await _sink.OnChatTranscriptAsync(
+                        session,
+                        ChatTranscriptKind.Snapshot,
+                        session.Snapshot(),
+                        clientConnectionId,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    if (session.SetChatState(ChatSessionState.Unavailable))
+                    {
+                        await _sink.OnChatUpdatedAsync(session, cancellationToken).ConfigureAwait(false);
+                    }
+                    throw;
                 }
             }
 
-            if (_sink is not null)
+            if (session.SetChatState(ChatSessionState.Ready) && _sink is not null)
             {
-                await _sink.OnChatTranscriptAsync(
-                    session,
-                    ChatTranscriptKind.Snapshot,
-                    session.Snapshot(),
-                    clientConnectionId,
-                    cancellationToken).ConfigureAwait(false);
+                await _sink.OnChatUpdatedAsync(session, cancellationToken).ConfigureAwait(false);
             }
         }
         finally

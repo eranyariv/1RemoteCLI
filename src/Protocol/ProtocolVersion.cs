@@ -35,9 +35,12 @@ public static class ProtocolVersion
     /// Version 7 appends explicit terminal continuity state and learned project-move
     /// suggestions, and adds the optional move kind used to distinguish manual,
     /// suggested, and automatic choices. Every new field has a safe older-peer default.
+    /// Version 8 appends agent-chat ownership state, allowing the PWA to wait until
+    /// sequential ACP handoff succeeds instead of writing into a session another
+    /// Copilot process is using.
     /// </para>
     /// </summary>
-    public const int Current = 7;
+    public const int Current = 8;
 
     /// <summary>Oldest version this build still accepts from a peer.</summary>
     public const int MinimumSupported = 1;

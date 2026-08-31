@@ -133,6 +133,8 @@ public sealed class AcpProvider : IAsyncDisposable
             _settings.Program,
             _settings.CliType);
         session.UpdateCapabilities(PromptCapabilities);
+        session.Loaded = true;
+        session.SetChatState(ChatSessionState.Ready);
 
         if (!_sessions.TryAdd(sessionId, session))
         {
@@ -176,6 +178,8 @@ public sealed class AcpProvider : IAsyncDisposable
                 _client.PermissionRequested += OnPermissionRequestedAsync;
                 _client.ElicitationRequested += OnElicitationRequestedAsync;
                 await ApplyCapabilitiesAsync(_client.PromptCapabilities, cancellationToken)
+                    .ConfigureAwait(false);
+                await SetUnloadedSessionStateAsync(ChatSessionState.Available, cancellationToken)
                     .ConfigureAwait(false);
 
                 while (!cancellationToken.IsCancellationRequested)
@@ -236,6 +240,7 @@ public sealed class AcpProvider : IAsyncDisposable
                 {
                     session.Loaded = false;
                 }
+                await SetUnloadedSessionStateAsync(ChatSessionState.Unavailable).ConfigureAwait(false);
             }
 
             try
@@ -262,16 +267,33 @@ public sealed class AcpProvider : IAsyncDisposable
             if (!session.Loaded)
             {
                 session.Reset();
-                await CallAsync(
-                    "session/load",
-                    new JsonObject
+                try
+                {
+                    await CallAsync(
+                        "session/load",
+                        new JsonObject
+                        {
+                            ["sessionId"] = session.SessionId,
+                            ["cwd"] = session.Cwd,
+                            ["mcpServers"] = new JsonArray(),
+                        },
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    ChatSessionState failed = StateForLoadFailure(ex);
+                    if (session.SetChatState(failed) && _sink is not null)
                     {
-                        ["sessionId"] = session.SessionId,
-                        ["cwd"] = session.Cwd,
-                        ["mcpServers"] = new JsonArray(),
-                    },
-                    cancellationToken).ConfigureAwait(false);
+                        await _sink.OnChatUpdatedAsync(session, cancellationToken).ConfigureAwait(false);
+                    }
+                    throw;
+                }
+
                 session.Loaded = true;
+                if (session.SetChatState(ChatSessionState.Ready) && _sink is not null)
+                {
+                    await _sink.OnChatUpdatedAsync(session, cancellationToken).ConfigureAwait(false);
+                }
             }
 
             if (_sink is not null)
@@ -293,6 +315,7 @@ public sealed class AcpProvider : IAsyncDisposable
     public void StartPrompt(string sessionId, string text)
     {
         AcpSession session = Get(sessionId);
+        ThrowIfNotReady(session);
         string prompt = NormalizePrompt(text);
 
         _ = RunPromptAsync(session, prompt, [], CancellationToken.None);
@@ -324,6 +347,7 @@ public sealed class AcpProvider : IAsyncDisposable
             : throw new AcpPromptException(
                 ErrorCodes.SessionNotFound,
                 $"That {_settings.DisplayName} chat is no longer available.");
+        ThrowIfNotReady(session);
 
         if (attachments.Count > 0 && Volatile.Read(ref _client) is null && _call is null)
         {
@@ -344,7 +368,7 @@ public sealed class AcpProvider : IAsyncDisposable
         string sessionId,
         string text,
         CancellationToken cancellationToken = default) =>
-        RunPromptAsync(Get(sessionId), NormalizePrompt(text), [], cancellationToken);
+        RunPromptAsync(ReadySession(sessionId), NormalizePrompt(text), [], cancellationToken);
 
     internal Task PromptAsync(
         string sessionId,
@@ -352,7 +376,7 @@ public sealed class AcpProvider : IAsyncDisposable
         IReadOnlyList<ChatAttachmentContent> attachments,
         CancellationToken cancellationToken)
     {
-        AcpSession session = Get(sessionId);
+        AcpSession session = ReadySession(sessionId);
         string prompt = text.Trim();
         JsonArray content = AcpPromptContent.Build(prompt, attachments, session.PromptCapabilities);
 
@@ -438,6 +462,29 @@ public sealed class AcpProvider : IAsyncDisposable
             {
                 _log?.Invoke(
                     $"chat: could not publish capabilities for {session.SessionId} ({ex.Message}).");
+            }
+        }
+    }
+
+    private async Task SetUnloadedSessionStateAsync(
+        ChatSessionState state,
+        CancellationToken cancellationToken = default)
+    {
+        foreach (AcpSession session in _sessions.Values)
+        {
+            if (session.Loaded || !session.SetChatState(state) || _sink is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                await _sink.OnChatUpdatedAsync(session, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _log?.Invoke(
+                    $"chat: could not publish availability for {session.SessionId} ({ex.Message}).");
             }
         }
     }
@@ -877,6 +924,40 @@ public sealed class AcpProvider : IAsyncDisposable
         _sessions.TryGetValue(sessionId, out AcpSession? session)
             ? session
             : throw new InvalidOperationException($"No {_settings.DisplayName} chat session {sessionId}.");
+
+    private AcpSession ReadySession(string sessionId)
+    {
+        AcpSession session = Get(sessionId);
+        ThrowIfNotReady(session);
+        return session;
+    }
+
+    private void ThrowIfNotReady(AcpSession session)
+    {
+        if (session.ChatState == ChatSessionState.Busy)
+        {
+            throw new AcpPromptException(
+                ErrorCodes.ChatSessionBusy,
+                $"That {_settings.DisplayName} chat is open in another client. Close it there, then retry.");
+        }
+
+        if (session.ChatState != ChatSessionState.Ready)
+        {
+            throw new AcpPromptException(
+                ErrorCodes.ChatSessionUnavailable,
+                $"That {_settings.DisplayName} chat is not available on this machine right now.");
+        }
+    }
+
+    internal static ChatSessionState StateForLoadFailure(Exception error)
+    {
+        string message = error.Message;
+        return message.Contains("already in use", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("in use by", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("already loaded", StringComparison.OrdinalIgnoreCase)
+            ? ChatSessionState.Busy
+            : ChatSessionState.Unavailable;
+    }
 
     private AcpClient Client =>
         _client ?? throw new InvalidOperationException($"{_settings.DisplayName} ACP is not running.");

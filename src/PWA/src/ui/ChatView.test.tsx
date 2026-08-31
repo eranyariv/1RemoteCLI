@@ -79,6 +79,7 @@ const session: SessionInfo = {
   chatCapabilities: null,
   suggestedProjectId: null,
   suggestedProjectMoves: 0,
+  chatState: 'Ready',
 }
 
 function chatEvent(
@@ -275,6 +276,58 @@ describe('ChatView', () => {
       expect(relay.sendChatMessage).toHaveBeenCalledWith('chat-1', 'continue'),
     )
     expect((input as HTMLTextAreaElement).value).toBe('')
+  })
+
+  it('blocks prompts while Copilot Desktop owns the session and retries the handoff', async () => {
+    render(
+      <ChatView
+        client={relay.client}
+        connected
+        machine={machine}
+        session={{ ...session, chatState: 'Busy' }}
+        onClose={() => {}}
+      />,
+    )
+
+    expect(
+      screen.getByText(/This chat is open in Copilot Desktop or another Copilot process/),
+    ).toBeTruthy()
+    expect((screen.getByLabelText('Message agent') as HTMLTextAreaElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry handoff' }))
+    await waitFor(() => expect(relay.attach).toHaveBeenCalledTimes(2))
+    expect(relay.sendChatMessage).not.toHaveBeenCalled()
+  })
+
+  it('explains that a ready Copilot chat is a sequential handoff', () => {
+    render(
+      <ChatView
+        client={relay.client}
+        connected
+        machine={machine}
+        session={session}
+        onClose={() => {}}
+      />,
+    )
+
+    expect(screen.getByText(/Copilot Desktop does not live-sync with this view/)).toBeTruthy()
+    expect((screen.getByLabelText('Message agent') as HTMLTextAreaElement).disabled).toBe(false)
+  })
+
+  it('offers the same handoff retry for Claude Code chats', () => {
+    render(
+      <ChatView
+        client={relay.client}
+        connected
+        machine={machine}
+        session={{ ...session, cliType: 'ClaudeCode', chatState: 'Busy' }}
+        onClose={() => {}}
+      />,
+    )
+
+    expect(screen.getByText(/This chat is open in Claude Code or another Claude Code process/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Retry handoff' })).toBeTruthy()
   })
 
   it('renders every permission option and forwards the selected one', async () => {

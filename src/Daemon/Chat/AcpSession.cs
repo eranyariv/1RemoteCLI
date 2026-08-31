@@ -40,6 +40,23 @@ public sealed class AcpSession(
 
     public bool Loaded { get; set; }
 
+    public ChatSessionState ChatState { get; private set; } = ChatSessionState.Available;
+
+    /// <summary>Returns true when the ACP ownership state actually changed.</summary>
+    public bool SetChatState(ChatSessionState state)
+    {
+        lock (_gate)
+        {
+            if (ChatState == state)
+            {
+                return false;
+            }
+
+            ChatState = state;
+            return true;
+        }
+    }
+
     /// <summary>
     /// What the ACP process behind this session accepts in a prompt.
     /// <para>

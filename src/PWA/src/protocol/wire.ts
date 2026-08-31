@@ -23,6 +23,7 @@ export type TerminalOutputKind = 'Delta' | 'Snapshot'
 export type SessionKind = 'Terminal' | 'AgentChat'
 export type SessionProjectMoveKind = 'Manual' | 'Suggested' | 'Always'
 export type ChatTranscriptKind = 'Delta' | 'Snapshot'
+export type ChatSessionState = 'Unknown' | 'Available' | 'Ready' | 'Busy' | 'Unavailable'
 export type ChatEventKind =
   | 'UserMessage'
   | 'AgentMessage'
@@ -78,6 +79,8 @@ export interface SessionInfo {
   suggestedProjectId: string | null
   /** Number of matching sessions previously moved by accepting this suggestion. */
   suggestedProjectMoves: number
+  /** Whether this agent process can safely drive the ACP session. */
+  chatState: ChatSessionState
 }
 
 export interface ChatCapabilities {
@@ -306,12 +309,22 @@ export function decodeSession(value: unknown): SessionInfo {
     chatCapabilities: chatCapabilities(s[14]),
     suggestedProjectId: typeof s[15] === 'string' && s[15].length > 0 ? s[15] : null,
     suggestedProjectMoves: Math.max(0, num(s[16])),
+    chatState: chatSessionState(s[17]),
   }
 }
 
 function chatCapabilities(value: unknown): ChatCapabilities | null {
   if (!Array.isArray(value)) return null
   return { image: bool(value[0]), embeddedContext: bool(value[1]) }
+}
+
+function chatSessionState(value: unknown): ChatSessionState {
+  return value === 'Available' ||
+    value === 'Ready' ||
+    value === 'Busy' ||
+    value === 'Unavailable'
+    ? value
+    : 'Unknown'
 }
 
 function cliType(value: unknown): CliType {

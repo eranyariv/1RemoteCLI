@@ -108,6 +108,7 @@ function session(kind: SessionInfo['kind'], id: string, name: string): SessionIn
     chatCapabilities: null,
     suggestedProjectId: null,
     suggestedProjectMoves: 0,
+    chatState: kind === 'AgentChat' ? 'Ready' : 'Unknown',
   }
 }
 

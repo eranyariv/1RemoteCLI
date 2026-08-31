@@ -64,6 +64,7 @@ export function ChatView({
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [detailLevel, setDetailLevel] = useState<DetailLevel>('summary')
   const [attachments, setAttachments] = useState<ChatAttachmentDraft[]>([])
   const [composerError, setComposerError] = useState<string | null>(null)
@@ -86,7 +87,14 @@ export function ChatView({
   const attachmentsRef = useRef<ChatAttachmentDraft[]>([])
 
   const capabilities = session.chatCapabilities
-  const canAttach = attachmentsAllowed(capabilities)
+  const chatReady = session.chatState === 'Ready'
+  const canAttach = chatReady && attachmentsAllowed(capabilities)
+  const loadBlocked =
+    session.chatState === 'Busy' ||
+    session.chatState === 'Unavailable' ||
+    session.chatState === 'Unknown'
+  const desktopApp = session.cliType === 'ClaudeCode' ? 'Claude Code' : 'Copilot Desktop'
+  const chatProvider = session.cliType === 'ClaudeCode' ? 'Claude Code' : 'Copilot'
 
   useEffect(() => {
     const off = client.on('chatTranscript', (transcript) => {
@@ -125,7 +133,7 @@ export function ChatView({
     return () => {
       active = false
     }
-  }, [client, connected, machine.machineId, session.sessionId])
+  }, [client, connected, loadAttempt, machine.machineId, session.sessionId])
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: 'end' })
@@ -293,7 +301,12 @@ export function ChatView({
   // user chose that file, and sending without it while it is still sitting in the
   // composer would look like it went.
   const canSend =
-    connected && !sending && !uploading && !failed && (draft.trim().length > 0 || ready.length > 0)
+    connected &&
+    chatReady &&
+    !sending &&
+    !uploading &&
+    !failed &&
+    (draft.trim().length > 0 || ready.length > 0)
 
   const send = async (event: FormEvent) => {
     event.preventDefault()
@@ -359,7 +372,13 @@ export function ChatView({
           className={`shrink-0 text-xs ${connected ? 'text-emerald-400' : 'text-amber-400'}`}
         >
           {connected
-            ? pendingInput
+            ? session.chatState === 'Busy'
+              ? 'open elsewhere'
+              : session.chatState === 'Available'
+                ? 'opening'
+                : session.chatState === 'Unavailable' || session.chatState === 'Unknown'
+                  ? 'unavailable'
+                  : pendingInput
               ? isElicitation(pendingInput)
                 ? 'input needed'
                 : 'approval needed'
@@ -392,14 +411,47 @@ export function ChatView({
       </div>
 
       <div
+        role={loadBlocked ? 'alert' : 'status'}
+        className={`border-b px-4 py-3 text-xs leading-5 ${
+          session.chatState === 'Busy'
+            ? 'border-amber-500/30 bg-amber-500/10 text-amber-100'
+            : session.chatState === 'Unavailable' || session.chatState === 'Unknown'
+              ? 'border-rose-500/30 bg-rose-500/10 text-rose-100'
+              : 'border-sky-500/20 bg-sky-500/5 text-sky-100'
+        }`}
+      >
+        <p>
+          {session.chatState === 'Busy'
+            ? `This chat is open in ${desktopApp} or another ${chatProvider} process. Close it there before continuing here.`
+            : session.chatState === 'Unavailable'
+              ? `This chat could not be loaded on the machine. ${desktopApp} does not live-sync with 1RemoteCLI.`
+              : session.chatState === 'Unknown'
+                ? `Update the 1RemoteCLI agent on this machine before continuing this ${chatProvider} chat safely.`
+                : session.chatState === 'Available'
+                  ? `Opening this chat is a sequential handoff. Close it in ${desktopApp} first; the two views do not live-sync.`
+                  : `${desktopApp} does not live-sync with this view. Reopen the session there after finishing here to continue the saved conversation.`}
+        </p>
+        {session.chatState === 'Busy' || session.chatState === 'Unavailable' ? (
+          <button
+            type="button"
+            onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+            disabled={!connected}
+            className="mt-2 min-h-9 rounded-lg border border-current/30 px-3 font-semibold disabled:opacity-40"
+          >
+            Retry handoff
+          </button>
+        ) : null}
+      </div>
+
+      <div
         className="min-w-0 max-w-full flex-1 space-y-3 overflow-x-hidden overflow-y-auto px-4 py-4"
         aria-live="polite"
       >
         {loadError ? (
           <p className="py-8 text-center text-sm text-rose-300">{loadError}</p>
-        ) : !loaded ? (
+        ) : !loaded && !loadBlocked ? (
           <p className="py-8 text-center text-sm text-slate-500">Loading the transcript…</p>
-        ) : events.length === 0 ? (
+        ) : loadBlocked ? null : events.length === 0 ? (
           <p className="py-8 text-center text-sm text-slate-500">No messages yet.</p>
         ) : null}
 
@@ -536,7 +588,10 @@ export function ChatView({
                   (capabilities?.embeddedContext ? fileInput : imageInput).current?.click()
                 }
                 disabled={
-                  !connected || sending || attachments.length >= MAX_CHAT_ATTACHMENT_COUNT
+                  !connected ||
+                  !chatReady ||
+                  sending ||
+                  attachments.length >= MAX_CHAT_ATTACHMENT_COUNT
                 }
                 aria-label={capabilities?.embeddedContext ? 'Attach a file' : 'Attach a photo'}
                 className="min-h-12 rounded-xl border border-slate-700 px-3 text-sm text-slate-300 active:bg-slate-800 disabled:opacity-40"
@@ -548,7 +603,10 @@ export function ChatView({
                   type="button"
                   onClick={() => cameraInput.current?.click()}
                   disabled={
-                    !connected || sending || attachments.length >= MAX_CHAT_ATTACHMENT_COUNT
+                    !connected ||
+                    !chatReady ||
+                    sending ||
+                    attachments.length >= MAX_CHAT_ATTACHMENT_COUNT
                   }
                   aria-label="Take a photo"
                   className="min-h-12 rounded-xl border border-slate-700 px-3 text-sm text-slate-300 active:bg-slate-800 disabled:opacity-40"
@@ -570,9 +628,10 @@ export function ChatView({
             }}
             rows={2}
             maxLength={MAX_CHAT_PROMPT_TEXT_CHARS}
-            placeholder="Message agent"
+            disabled={!chatReady}
+            placeholder={chatReady ? 'Message agent' : 'Waiting for safe handoff'}
             aria-label="Message agent"
-            className="min-h-12 min-w-0 flex-1 resize-none rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-[16px] outline-none placeholder:text-slate-600 focus:border-sky-500"
+            className="min-h-12 min-w-0 flex-1 resize-none rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-[16px] outline-none placeholder:text-slate-600 focus:border-sky-500 disabled:opacity-50"
           />
           <button
             type="submit"

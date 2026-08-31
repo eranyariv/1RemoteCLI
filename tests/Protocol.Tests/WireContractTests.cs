@@ -152,6 +152,7 @@ public sealed class WireContractTests
                             DisplayName = "Issue 3",
                             CliType = CliType.CopilotCli,
                             Kind = SessionKind.AgentChat,
+                            ChatState = ChatSessionState.Available,
                         },
                     ],
                 },
@@ -511,6 +512,7 @@ public sealed class WireContractTests
                 DisplayName = "Issue 3",
                 CliType = CliType.CopilotCli,
                 Kind = SessionKind.AgentChat,
+                ChatState = ChatSessionState.Ready,
                 ChatCapabilities = new ChatCapabilities
                 {
                     Image = true,

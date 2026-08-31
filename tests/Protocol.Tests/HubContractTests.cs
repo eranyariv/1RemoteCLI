@@ -292,6 +292,31 @@ public class HubContractTests
     }
 
     [Fact]
+    public void ChatOwnershipStateIsAppendedAndDefaultsToUnknown()
+    {
+        SessionInfo current = RoundTrip(new SessionInfo
+        {
+            SessionId = "chat-1",
+            Kind = SessionKind.AgentChat,
+            ChatState = ChatSessionState.Ready,
+        });
+
+        Assert.Equal(ChatSessionState.Ready, current.ChatState);
+
+        byte[] olderBytes = MessagePackSerializer.Serialize(
+            new VersionFiveSessionInfo
+            {
+                SessionId = "chat-1",
+                Program = "GitHub Copilot",
+                Kind = SessionKind.AgentChat,
+            },
+            Options);
+
+        SessionInfo older = MessagePackSerializer.Deserialize<SessionInfo>(olderBytes, Options);
+        Assert.Equal(ChatSessionState.Unknown, older.ChatState);
+    }
+
+    [Fact]
     public void ChatAttachmentLimitsStayBelowTheTerminalUploadCeiling()
     {
         // Base64 inflates by four thirds before the bytes reach the ACP agent, and

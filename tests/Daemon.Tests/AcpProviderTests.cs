@@ -42,6 +42,8 @@ public sealed class AcpProviderTests
 
         Assert.Equal("created", created.SessionId);
         Assert.Equal("My repo", created.Title);
+        Assert.True(created.Loaded);
+        Assert.Equal(ChatSessionState.Ready, created.ChatState);
         Assert.Same(created, Assert.Single(provider.Snapshot()));
         Assert.Equal("session/new", calls[0].Method);
         Assert.Equal(@"C:\repo", calls[0].Parameters["cwd"]!.GetValue<string>());
@@ -91,7 +93,74 @@ public sealed class AcpProviderTests
         await provider.AttachAsync("shared", "phone-two");
 
         Assert.Equal(1, loads);
+        Assert.Equal(ChatSessionState.Ready, provider.Snapshot().Single().ChatState);
         Assert.Equal(["phone-one", "phone-two"], sink.TranscriptTargets);
+    }
+
+    [Fact]
+    public async Task RefusesAHandoffWhileAnotherCopilotProcessOwnsTheSession()
+    {
+        Task<JsonElement> Call(
+            string method,
+            JsonObject parameters,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            return method switch
+            {
+                "session/list" => Task.FromResult(JsonSerializer.SerializeToElement(new
+                {
+                    sessions = new[]
+                    {
+                        new
+                        {
+                            sessionId = "desktop-owned",
+                            cwd = @"C:\repo",
+                            title = "Open in Desktop",
+                            updatedAt = DateTimeOffset.UtcNow,
+                        },
+                    },
+                    nextCursor = (string?)null,
+                })),
+                "session/load" => throw new InvalidOperationException(
+                    "Session desktop-owned is already in use by another client"),
+                _ => throw new InvalidOperationException(method),
+            };
+        }
+
+        var sink = new RecordingUpdateSink();
+        await using var provider = new AcpProvider(Call);
+        provider.AttachSink(sink);
+        await provider.RefreshAsync();
+
+        AcpSession session = Assert.Single(provider.Snapshot());
+        Assert.Equal(ChatSessionState.Available, session.ChatState);
+        AcpPromptException notAttached = Assert.Throws<AcpPromptException>(
+            () => provider.StartPrompt("desktop-owned", "continue"));
+        Assert.Equal(ErrorCodes.ChatSessionUnavailable, notAttached.Code);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => provider.AttachAsync("desktop-owned", "phone"));
+
+        Assert.False(session.Loaded);
+        Assert.Equal(ChatSessionState.Busy, session.ChatState);
+        Assert.Contains("desktop-owned", sink.Updated);
+
+        AcpPromptException refused = Assert.Throws<AcpPromptException>(
+            () => provider.StartPrompt("desktop-owned", "continue"));
+        Assert.Equal(ErrorCodes.ChatSessionBusy, refused.Code);
+    }
+
+    [Theory]
+    [InlineData("session is already loaded", ChatSessionState.Busy)]
+    [InlineData("session is in use by another process", ChatSessionState.Busy)]
+    [InlineData("history file is corrupt", ChatSessionState.Unavailable)]
+    public void ClassifiesSessionLoadFailures(string message, ChatSessionState expected)
+    {
+        Assert.Equal(
+            expected,
+            AcpProvider.StateForLoadFailure(new InvalidOperationException(message)));
     }
 
     [Fact]

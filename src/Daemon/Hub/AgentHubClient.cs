@@ -1232,6 +1232,7 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
         AwaitingInput = session.AwaitingInput,
         Kind = SessionKind.AgentChat,
         ChatCapabilities = session.PromptCapabilities.ToChatCapabilities(),
+        ChatState = session.ChatState,
     };
 
     private static string AgentVersion => ProductVersion.Current;

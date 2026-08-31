@@ -81,6 +81,16 @@ describe('the fixture itself', () => {
     // against the wrong contract, which is worse than having no tests.
     expect(fixture.protocolVersion).toBe(PROTOCOL_VERSION)
   })
+
+  it('treats an omitted or unknown chat state as unknown', () => {
+    const raw = wire('sessionUpdated') as unknown[]
+    const session = raw[1] as unknown[]
+
+    expect(decodeSessionUpdated([raw[0], session.slice(0, 17)]).session.chatState).toBe('Unknown')
+    expect(
+      decodeSessionUpdated([raw[0], [...session.slice(0, 17), 'LiveShared']]).session.chatState,
+    ).toBe('Unknown')
+  })
 })
 
 describe('decoding what the hub sends', () => {
@@ -135,6 +145,7 @@ describe('decoding what the hub sends', () => {
     expect(sessions[0].kind).toBe('Terminal')
     expect(sessions[1].kind).toBe('AgentChat')
     expect(sessions[1].program).toBe('GitHub Copilot')
+    expect(sessions[1].chatState).toBe('Available')
   })
 
   it('calls a session Generic when the type is missing or unknown', () => {
@@ -156,6 +167,7 @@ describe('decoding what the hub sends', () => {
     expect(updated.machineId).toBe(want.machineId)
     expect(updated.session.sessionId).toBe(want.session.sessionId)
     expect(updated.session.cliType).toBe('CopilotCli')
+    expect(updated.session.chatState).toBe('Unknown')
   })
 
   it('reads the name the user gave a session, and whether they pinned it', () => {
@@ -364,6 +376,7 @@ describe('decoding what the hub sends', () => {
 
     expect(updated.session.kind).toBe('AgentChat')
     expect(updated.session.chatCapabilities).toEqual({ image: true, embeddedContext: true })
+    expect(updated.session.chatState).toBe('Ready')
   })
 
   it('treats a chat session from an agent that predates attachments as unable to take them', () => {

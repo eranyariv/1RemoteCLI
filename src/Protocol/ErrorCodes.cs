@@ -90,4 +90,10 @@ public static class ErrorCodes
 
     /// <summary>The connected agent predates agent-chat attachments.</summary>
     public const string AttachmentUnavailable = "attachment_unavailable";
+
+    /// <summary>Another ACP or Copilot process currently owns the chat session.</summary>
+    public const string ChatSessionBusy = "chat_session_busy";
+
+    /// <summary>The ACP process could not currently load the chat session.</summary>
+    public const string ChatSessionUnavailable = "chat_session_unavailable";
 }

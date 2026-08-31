@@ -58,6 +58,33 @@ public enum ChatEventKind : byte
     Plan = 5,
 }
 
+/// <summary>
+/// Whether this agent process can safely drive an ACP session.
+/// <para>
+/// ACP sessions are disk-backed and can be resumed by another process, but only as
+/// a sequential handoff. They are not live-shared conversations. The state lets a
+/// phone wait for <see cref="Ready"/> rather than sending into a session still owned
+/// by Copilot Desktop or another ACP client.
+/// </para>
+/// </summary>
+public enum ChatSessionState
+{
+    /// <summary>An older agent did not report cross-process ownership state.</summary>
+    Unknown = 0,
+
+    /// <summary>The session was discovered but this ACP process has not loaded it yet.</summary>
+    Available = 1,
+
+    /// <summary>This ACP process loaded the session and can safely accept prompts.</summary>
+    Ready = 2,
+
+    /// <summary>Another Copilot process currently owns the session.</summary>
+    Busy = 3,
+
+    /// <summary>The ACP process or session could not currently be loaded.</summary>
+    Unavailable = 4,
+}
+
 /// <summary>One choice offered by an ACP permission or elicitation request.</summary>
 [MessagePackObject]
 public sealed class ChatPermissionOption
@@ -319,6 +346,13 @@ public sealed class SessionInfo
     /// <summary>How many matching sessions accepted this exact suggestion.</summary>
     [Key(16)]
     public int SuggestedProjectMoves { get; set; }
+
+    /// <summary>
+    /// Whether an agent-chat session is exclusively loaded by this agent process.
+    /// Unknown is the safe default for terminal sessions and agents predating protocol 8.
+    /// </summary>
+    [Key(17)]
+    public ChatSessionState ChatState { get; set; }
 }
 
 /// <summary>

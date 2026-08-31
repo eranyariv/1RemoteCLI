@@ -274,6 +274,63 @@ public sealed class AcpSessionTests
     }
 
     [Fact]
+    public void PlanSnapshotsReplaceInPlaceAndPriorTurnsRemainInHistory()
+    {
+        var session = Create();
+        ChatEvent firstPrompt = session.AddUserPrompt("Ship the release");
+
+        ChatEvent first = session.Apply(
+            "plan",
+            null,
+            null,
+            null,
+            null,
+            null,
+            planEntries:
+            [
+                new() { Content = "Prepare release", Priority = "high", Status = "in_progress" },
+                new() { Content = "Run tests", Priority = "medium", Status = "pending", Depth = 1 },
+            ])!;
+        string rootId = first.PlanEntries[0].TaskId;
+        string childId = first.PlanEntries[1].TaskId;
+
+        ChatEvent replacement = session.Apply(
+            "plan",
+            null,
+            null,
+            null,
+            null,
+            null,
+            planEntries:
+            [
+                new() { Content = "Prepare release", Priority = "high", Status = "completed" },
+                new() { Content = "Run tests", Priority = "medium", Status = "failed", Depth = 1 },
+            ])!;
+
+        Assert.Equal(first.EventId, replacement.EventId);
+        Assert.Equal(firstPrompt.EventId, replacement.PlanTurnId);
+        Assert.Equal(2, replacement.PlanRevision);
+        Assert.Equal(rootId, replacement.PlanEntries[0].TaskId);
+        Assert.Equal(childId, replacement.PlanEntries[1].TaskId);
+        Assert.Equal(rootId, replacement.PlanEntries[1].ParentTaskId);
+        Assert.Equal("failed", replacement.PlanEntries[1].Status);
+
+        ChatEvent secondPrompt = session.AddUserPrompt("Fix the tests");
+        ChatEvent second = session.Apply(
+            "plan",
+            null,
+            null,
+            null,
+            null,
+            null,
+            planEntries: [new() { Content = "Repair test", Status = "in_progress" }])!;
+
+        Assert.NotEqual(replacement.EventId, second.EventId);
+        Assert.Equal(secondPrompt.EventId, second.PlanTurnId);
+        Assert.Equal(2, session.Snapshot().Count(item => item.Kind == ChatEventKind.Plan));
+    }
+
+    [Fact]
     public void PermissionsSetAndClearAttention()
     {
         var session = Create();

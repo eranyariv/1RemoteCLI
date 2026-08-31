@@ -317,6 +317,43 @@ public class HubContractTests
     }
 
     [Fact]
+    public void EnrichedPlansRemainReadableByVersionEightPeers()
+    {
+        var current = RoundTrip(new ChatPlanEntry
+        {
+            Content = "Run tests",
+            Priority = "high",
+            Status = "failed",
+            TaskId = "tests",
+            ParentTaskId = "release",
+            Depth = 1,
+        });
+
+        Assert.Equal("tests", current.TaskId);
+        Assert.Equal("release", current.ParentTaskId);
+        Assert.Equal(1, current.Depth);
+
+        byte[] currentBytes = MessagePackSerializer.Serialize(current, Options);
+        VersionEightChatPlanEntry older =
+            MessagePackSerializer.Deserialize<VersionEightChatPlanEntry>(currentBytes, Options);
+        Assert.Equal("Run tests", older.Content);
+        Assert.Equal("failed", older.Status);
+
+        byte[] olderBytes = MessagePackSerializer.Serialize(
+            new VersionEightChatPlanEntry
+            {
+                Content = "Inspect project",
+                Priority = "medium",
+                Status = "pending",
+            },
+            Options);
+        ChatPlanEntry upgraded = MessagePackSerializer.Deserialize<ChatPlanEntry>(olderBytes, Options);
+        Assert.Equal(string.Empty, upgraded.TaskId);
+        Assert.Null(upgraded.ParentTaskId);
+        Assert.Equal(0, upgraded.Depth);
+    }
+
+    [Fact]
     public void ChatAttachmentLimitsStayBelowTheTerminalUploadCeiling()
     {
         // Base64 inflates by four thirds before the bytes reach the ACP agent, and
@@ -447,5 +484,18 @@ public class HubContractTests
 
         [Key(13)]
         public string? ProjectId { get; set; }
+    }
+
+    [MessagePackObject]
+    public sealed class VersionEightChatPlanEntry
+    {
+        [Key(0)]
+        public string Content { get; set; } = string.Empty;
+
+        [Key(1)]
+        public string Priority { get; set; } = "medium";
+
+        [Key(2)]
+        public string Status { get; set; } = "pending";
     }
 }

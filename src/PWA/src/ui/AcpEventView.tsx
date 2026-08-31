@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 
-import type { ChatContentBlock, ChatEvent } from '../protocol/wire'
+import type { ChatContentBlock, ChatEvent, ChatPlanEntry } from '../protocol/wire'
 
 export type AcpDetailLevel = 'compact' | 'summary' | 'full'
 
@@ -83,9 +83,12 @@ function PlanView({
   detailLevel: AcpDetailLevel
 }) {
   const [expanded, setExpanded] = useState(detailLevel !== 'compact')
+  const [collapsedTasks, setCollapsedTasks] = useState<Set<string>>(() => new Set())
   const previousDetailLevel = useRef(detailLevel)
   const completed = item.planEntries.filter((entry) => entry.status === 'completed').length
+  const failed = item.planEntries.filter((entry) => entry.status === 'failed').length
   const running = item.planEntries.some((entry) => entry.status === 'in_progress')
+  const plan = planForest(item.planEntries)
 
   useEffect(() => {
     const levelChanged = previousDetailLevel.current !== detailLevel
@@ -98,6 +101,14 @@ function PlanView({
     }
   }, [detailLevel, running])
 
+  useEffect(() => {
+    const current = new Set(item.planEntries.map((entry) => entry.taskId))
+    setCollapsedTasks((collapsed) => {
+      const retained = new Set([...collapsed].filter((taskId) => current.has(taskId)))
+      return retained.size === collapsed.size ? collapsed : retained
+    })
+  }, [item.planEntries])
+
   if (item.planEntries.length === 0) return null
 
   return (
@@ -107,44 +118,159 @@ function PlanView({
         onToggle={() => setExpanded((value) => !value)}
         icon={<PlanIcon />}
         label="Plan"
-        meta={`${completed}/${item.planEntries.length}`}
+        meta={`${completed}/${item.planEntries.length}${failed > 0 ? ` · ${failed} failed` : ''}`}
         tone="text-sky-200"
       />
       {expanded ? (
-        <ol className="space-y-2 border-t border-sky-400/15 px-3 py-3">
-          {item.planEntries.map((entry, index) => (
-            <li
-              key={`${index}-${entry.content}`}
-              className="flex min-w-0 items-start gap-2.5 text-sm"
+        <div className="border-t border-sky-400/15 px-3 py-3">
+          <div className="mb-3 flex items-center gap-3">
+            <div
+              role="progressbar"
+              aria-label="Plan progress"
+              aria-valuemin={0}
+              aria-valuemax={item.planEntries.length}
+              aria-valuenow={completed}
+              className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-slate-800"
             >
-              <PlanStatus status={entry.status} />
-              <span
-                className={`min-w-0 flex-1 break-words leading-5 [overflow-wrap:anywhere] ${
-                  entry.status === 'completed'
-                    ? 'text-slate-500 line-through'
-                    : entry.status === 'in_progress'
-                      ? 'font-medium text-slate-100'
-                      : 'text-slate-400'
-                }`}
-              >
-                {entry.content}
-              </span>
-              {entry.priority !== 'medium' ? (
-                <span
-                  className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
-                    entry.priority === 'high'
-                      ? 'bg-amber-400/10 text-amber-300'
-                      : 'bg-slate-800 text-slate-500'
-                  }`}
-                >
-                  {entry.priority}
-                </span>
-              ) : null}
-            </li>
+              <div
+                className="h-full rounded-full bg-emerald-400 transition-[width]"
+                style={{ width: `${(completed / item.planEntries.length) * 100}%` }}
+              />
+            </div>
+            <span className="shrink-0 text-[11px] text-slate-400">
+              {completed} of {item.planEntries.length} complete
+            </span>
+          </div>
+          <ol role="tree" aria-label="Plan tasks" className="space-y-1">
+            {plan.map((node) => (
+              <PlanTask
+                key={node.entry.taskId}
+                node={node}
+                collapsedTasks={collapsedTasks}
+                onToggle={(taskId) =>
+                  setCollapsedTasks((collapsed) => {
+                    const next = new Set(collapsed)
+                    if (next.has(taskId)) next.delete(taskId)
+                    else next.add(taskId)
+                    return next
+                  })
+                }
+              />
+            ))}
+          </ol>
+        </div>
+      ) : null}
+    </article>
+  )
+}
+
+interface PlanNode {
+  entry: ChatPlanEntry
+  children: PlanNode[]
+}
+
+function planForest(entries: ChatPlanEntry[]): PlanNode[] {
+  const roots: PlanNode[] = []
+  const seen = new Map<string, PlanNode>()
+  const depthStack: PlanNode[] = []
+
+  for (const entry of entries) {
+    const node: PlanNode = { entry, children: [] }
+    const explicitParent = entry.parentTaskId ? seen.get(entry.parentTaskId) : undefined
+    const depthParent = entry.depth > 0 ? depthStack[entry.depth - 1] : undefined
+    const parent = explicitParent ?? depthParent
+
+    if (parent) parent.children.push(node)
+    else roots.push(node)
+
+    seen.set(entry.taskId, node)
+    depthStack[entry.depth] = node
+    depthStack.length = entry.depth + 1
+  }
+
+  return roots
+}
+
+function PlanTask({
+  node,
+  collapsedTasks,
+  onToggle,
+}: {
+  node: PlanNode
+  collapsedTasks: Set<string>
+  onToggle(taskId: string): void
+}) {
+  const { entry, children } = node
+  const collapsed = children.length > 0 && collapsedTasks.has(entry.taskId)
+  const active = entry.status === 'in_progress'
+  const textTone =
+    entry.status === 'completed'
+      ? 'text-slate-500 line-through'
+      : entry.status === 'failed'
+        ? 'text-rose-200'
+        : active
+          ? 'font-semibold text-white'
+          : 'text-slate-300'
+
+  return (
+    <li
+      role="treeitem"
+      aria-level={entry.depth + 1}
+      aria-current={active ? 'step' : undefined}
+      aria-expanded={children.length > 0 ? !collapsed : undefined}
+      className="min-w-0"
+    >
+      <div
+        className={`relative flex min-w-0 items-start gap-2 rounded-lg px-2 py-1.5 text-sm ${
+          entry.depth > 0
+            ? 'before:absolute before:-left-2 before:top-4 before:w-2 before:border-t before:border-slate-700/80'
+            : ''
+        } ${
+          active ? 'bg-sky-400/10 ring-1 ring-inset ring-sky-400/25' : ''
+        }`}
+      >
+        <PlanStatus status={entry.status} />
+        <span className={`min-w-0 flex-1 break-words leading-5 [overflow-wrap:anywhere] ${textTone}`}>
+          {entry.content}
+        </span>
+        {entry.priority !== 'medium' ? (
+          <span
+            className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
+              entry.priority === 'high'
+                ? 'bg-amber-400/10 text-amber-300'
+                : 'bg-slate-800 text-slate-500'
+            }`}
+          >
+            {entry.priority}
+          </span>
+        ) : null}
+        {children.length > 0 ? (
+          <button
+            type="button"
+            aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${entry.content}`}
+            onClick={() => onToggle(entry.taskId)}
+            className="-mr-1 flex size-7 shrink-0 items-center justify-center rounded-md text-slate-400 active:bg-slate-700"
+          >
+            <Chevron expanded={!collapsed} />
+          </button>
+        ) : null}
+      </div>
+      {!collapsed && children.length > 0 ? (
+        <ol
+          role="group"
+          className="ml-4 space-y-1 border-l border-slate-700/80 pl-2 before:block"
+        >
+          {children.map((child) => (
+            <PlanTask
+              key={child.entry.taskId}
+              node={child}
+              collapsedTasks={collapsedTasks}
+              onToggle={onToggle}
+            />
           ))}
         </ol>
       ) : null}
-    </article>
+    </li>
   )
 }
 
@@ -379,6 +505,7 @@ function PlanStatus({ status }: { status: string }) {
         <svg viewBox="0 0 16 16" className="size-3" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden>
           <path d="m4 8 2.4 2.4L12 5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
+        <span className="sr-only">Completed</span>
       </span>
     )
   }
@@ -387,11 +514,27 @@ function PlanStatus({ status }: { status: string }) {
     return (
       <span className="mt-0.5 text-sky-300">
         <Spinner />
+        <span className="sr-only">In progress</span>
       </span>
     )
   }
 
-  return <span className="mt-0.5 size-4 shrink-0 rounded-full border border-slate-600" aria-hidden />
+  if (status === 'failed') {
+    return (
+      <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-rose-500/20 text-rose-300">
+        <svg viewBox="0 0 16 16" className="size-3" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+          <path d="m5 5 6 6m0-6-6 6" strokeLinecap="round" />
+        </svg>
+        <span className="sr-only">Failed</span>
+      </span>
+    )
+  }
+
+  return (
+    <span className="mt-0.5 size-4 shrink-0 rounded-full border border-slate-600">
+      <span className="sr-only">Pending</span>
+    </span>
+  )
 }
 
 function DiffSide({ label, text, tone }: { label: string; text: string; tone: 'rose' | 'emerald' }) {

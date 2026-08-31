@@ -308,13 +308,37 @@ describe('decoding what the hub sends', () => {
       content: 'Run the tests',
       priority: 'medium',
       status: 'in_progress',
+      taskId: 'run-tests',
+      parentTaskId: 'release',
+      depth: 1,
     })
+    expect(transcript.events[3].planTurnId).toBe('prompt:release')
+    expect(transcript.events[3].planRevision).toBe(3)
     expect(transcript.events[4].permissionRequestId).toBe('req-1')
     expect(transcript.events[4].options).toEqual([
       { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
       { optionId: 'reject-once', name: 'Deny', kind: 'reject_once' },
     ])
     expect(transcript.events[5].options[1].name).toBe('SQLite')
+  })
+
+  it('keeps version-eight ACP plans flat with deterministic fallback task ids', () => {
+    const raw = wire('chatTranscript') as unknown[]
+    const events = (raw[3] as unknown[]).map((event) => [...(event as unknown[])])
+    const plan = events[3]
+    plan[10] = (plan[10] as unknown[]).map((entry) => (entry as unknown[]).slice(0, 3))
+    events[3] = plan.slice(0, 13)
+
+    const first = decodeChatTranscript([raw[0], raw[1], raw[2], events]).events[3]
+    const second = decodeChatTranscript([raw[0], raw[1], raw[2], events]).events[3]
+
+    expect(first.planEntries[0].parentTaskId).toBeNull()
+    expect(first.planEntries[0].depth).toBe(0)
+    expect(first.planEntries.map((entry) => entry.taskId)).toEqual(
+      second.planEntries.map((entry) => entry.taskId),
+    )
+    expect(first.planTurnId).toBeNull()
+    expect(first.planRevision).toBe(0)
   })
 
   it('reads a token expiry', () => {

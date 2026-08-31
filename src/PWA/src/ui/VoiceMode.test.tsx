@@ -141,6 +141,8 @@ function permissionEvent(): ChatEvent {
     planEntries: [],
     rawInputJson: null,
     rawOutputJson: null,
+    planTurnId: null,
+    planRevision: 0,
   }
 }
 

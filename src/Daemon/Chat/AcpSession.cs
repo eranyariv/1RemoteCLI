@@ -1,4 +1,6 @@
 using OneRemoteCli.Protocol.Hub;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace OneRemoteCli.Daemon.Chat;
 
@@ -21,6 +23,7 @@ public sealed class AcpSession(
     private string? _suppressedPromptEchoMessageId;
     private int _pendingPromptEchoLength;
     private bool _pendingPromptHasAttachments;
+    private string? _currentTurnId;
     private long _syntheticId;
     private long _seq;
 
@@ -119,6 +122,7 @@ public sealed class AcpSession(
             _byId.Clear();
             _openMessageId = null;
             _openMessageKind = null;
+            _currentTurnId = null;
             ClearPendingPromptEcho();
             _seq++;
             AwaitingInput = false;
@@ -213,6 +217,7 @@ public sealed class AcpSession(
             _openMessageId = eventId;
             _openMessageKind = ChatEventKind.UserMessage;
             _pendingPromptId = eventId;
+            _currentTurnId = eventId;
             _pendingPromptText = text;
             _suppressedPromptEchoMessageId = null;
             _pendingPromptEchoLength = 0;
@@ -390,6 +395,7 @@ public sealed class AcpSession(
         }
 
         ChatEvent item = ApplyMessage(ChatEventKind.UserMessage, messageId, text, content);
+        _currentTurnId = item.EventId;
         if (replace)
         {
             item.Text = text ?? string.Empty;
@@ -546,7 +552,8 @@ public sealed class AcpSession(
 
     private ChatEvent ApplyPlan(ChatPlanEntry[]? entries)
     {
-        const string id = "plan";
+        string turnId = _currentTurnId ?? "session";
+        string id = $"plan:{turnId}";
         if (!_byId.TryGetValue(id, out ChatEvent? item))
         {
             item = new ChatEvent
@@ -554,16 +561,141 @@ public sealed class AcpSession(
                 EventId = id,
                 Kind = ChatEventKind.Plan,
                 Title = "Plan",
+                PlanTurnId = _currentTurnId,
             };
             Upsert(item);
         }
 
-        item.PlanEntries = entries is null ? [] : [.. entries.Select(Copy)];
+        item.PlanEntries = EnrichPlanEntries(entries ?? [], item.PlanEntries);
         item.Text = string.Join(Environment.NewLine, item.PlanEntries.Select(entry => entry.Content));
+        item.PlanRevision++;
         _openMessageId = null;
         _openMessageKind = null;
         return item;
     }
+
+    private static ChatPlanEntry[] EnrichPlanEntries(
+        IReadOnlyList<ChatPlanEntry> incoming,
+        IReadOnlyList<ChatPlanEntry> previous)
+    {
+        var usedIds = new HashSet<string>(StringComparer.Ordinal);
+        var priorByContent = previous
+            .GroupBy(entry => NormalizedTaskContent(entry.Content), StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => new Queue<string>(group.Select(entry => entry.TaskId)),
+                StringComparer.Ordinal);
+        var occurrenceByContent = new Dictionary<string, int>(StringComparer.Ordinal);
+        var result = new ChatPlanEntry[incoming.Count];
+
+        for (int index = 0; index < incoming.Count; index++)
+        {
+            ChatPlanEntry source = incoming[index];
+            string normalized = NormalizedTaskContent(source.Content);
+            occurrenceByContent.TryGetValue(normalized, out int occurrence);
+            occurrenceByContent[normalized] = occurrence + 1;
+
+            string taskId = source.TaskId.Trim();
+            if (taskId.Length == 0 &&
+                priorByContent.TryGetValue(normalized, out Queue<string>? priorIds))
+            {
+                while (priorIds.Count > 0 && taskId.Length == 0)
+                {
+                    string candidate = priorIds.Dequeue();
+                    if (!usedIds.Contains(candidate))
+                    {
+                        taskId = candidate;
+                    }
+                }
+            }
+
+            if (taskId.Length == 0 || usedIds.Contains(taskId))
+            {
+                taskId = StableTaskId(normalized, occurrence);
+                int collision = 1;
+                while (usedIds.Contains(taskId))
+                {
+                    taskId = StableTaskId(normalized, occurrence + collision++);
+                }
+            }
+            usedIds.Add(taskId);
+
+            result[index] = new ChatPlanEntry
+            {
+                Content = source.Content,
+                Priority = NormalizePriority(source.Priority),
+                Status = NormalizePlanStatus(source.Status),
+                TaskId = taskId,
+                ParentTaskId = string.IsNullOrWhiteSpace(source.ParentTaskId)
+                    ? null
+                    : source.ParentTaskId.Trim(),
+                Depth = Math.Clamp(source.Depth, 0, 16),
+            };
+        }
+
+        ResolvePlanHierarchy(result);
+        return result;
+    }
+
+    private static void ResolvePlanHierarchy(ChatPlanEntry[] entries)
+    {
+        var resolved = new Dictionary<string, ChatPlanEntry>(StringComparer.Ordinal);
+        var ancestors = new ChatPlanEntry?[17];
+
+        foreach (ChatPlanEntry entry in entries)
+        {
+            if (entry.ParentTaskId is not null &&
+                resolved.TryGetValue(entry.ParentTaskId, out ChatPlanEntry? parent))
+            {
+                entry.Depth = Math.Min(parent.Depth + 1, 16);
+            }
+            else if (entry.Depth > 0 && ancestors[entry.Depth - 1] is ChatPlanEntry depthParent)
+            {
+                entry.ParentTaskId = depthParent.TaskId;
+                entry.Depth = Math.Min(depthParent.Depth + 1, 16);
+            }
+            else
+            {
+                entry.ParentTaskId = null;
+                entry.Depth = 0;
+            }
+
+            ancestors[entry.Depth] = entry;
+            for (int depth = entry.Depth + 1; depth < ancestors.Length; depth++)
+            {
+                ancestors[depth] = null;
+            }
+            resolved[entry.TaskId] = entry;
+        }
+    }
+
+    private static string StableTaskId(string normalizedContent, int occurrence)
+    {
+        byte[] hash = SHA256.HashData(
+            Encoding.UTF8.GetBytes($"{normalizedContent}\n{occurrence}"));
+        return $"task:{Convert.ToHexString(hash.AsSpan(0, 8)).ToLowerInvariant()}";
+    }
+
+    private static string NormalizedTaskContent(string content) =>
+        string.Join(' ', content.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+            .ToUpperInvariant();
+
+    private static string NormalizePriority(string priority) =>
+        priority.Trim().ToLowerInvariant() switch
+        {
+            "high" => "high",
+            "low" => "low",
+            _ => "medium",
+        };
+
+    private static string NormalizePlanStatus(string status) =>
+        status.Trim().ToLowerInvariant().Replace('-', '_') switch
+        {
+            "completed" or "complete" or "done" => "completed",
+            "in_progress" or "running" or "active" => "in_progress",
+            "failed" or "failure" or "error" => "failed",
+            _ => "pending",
+        };
 
     private void Upsert(ChatEvent item)
     {
@@ -604,6 +736,8 @@ public sealed class AcpSession(
             PlanEntries = [.. item.PlanEntries.Select(Copy)],
             RawInputJson = item.RawInputJson,
             RawOutputJson = item.RawOutputJson,
+            PlanTurnId = item.PlanTurnId,
+            PlanRevision = item.PlanRevision,
         };
 
     private static ChatContentBlock Copy(ChatContentBlock item) =>
@@ -629,5 +763,13 @@ public sealed class AcpSession(
         new() { Path = item.Path, Line = item.Line };
 
     private static ChatPlanEntry Copy(ChatPlanEntry item) =>
-        new() { Content = item.Content, Priority = item.Priority, Status = item.Status };
+        new()
+        {
+            Content = item.Content,
+            Priority = item.Priority,
+            Status = item.Status,
+            TaskId = item.TaskId,
+            ParentTaskId = item.ParentTaskId,
+            Depth = item.Depth,
+        };
 }

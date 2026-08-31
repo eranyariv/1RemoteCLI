@@ -96,6 +96,8 @@ function chatEvent(
     planEntries: [],
     rawInputJson: null,
     rawOutputJson: null,
+    planTurnId: null,
+    planRevision: 0,
     ...item,
   }
 }
@@ -485,7 +487,14 @@ describe('ChatView', () => {
             kind: 'Plan',
             text: '',
             planEntries: [
-              { content: 'Wait for deployment', priority: 'medium', status: 'in_progress' },
+              {
+                content: 'Wait for deployment',
+                priority: 'medium',
+                status: 'in_progress',
+                taskId: 'wait',
+                parentTaskId: null,
+                depth: 0,
+              },
             ],
           }),
         ],
@@ -535,8 +544,22 @@ describe('ChatView', () => {
             kind: 'Plan',
             text: '',
             planEntries: [
-              { content: 'Read settings', priority: 'high', status: 'completed' },
-              { content: 'Edit settings', priority: 'medium', status: 'in_progress' },
+              {
+                content: 'Read settings',
+                priority: 'high',
+                status: 'completed',
+                taskId: 'read',
+                parentTaskId: null,
+                depth: 0,
+              },
+              {
+                content: 'Edit settings',
+                priority: 'medium',
+                status: 'in_progress',
+                taskId: 'edit',
+                parentTaskId: null,
+                depth: 0,
+              },
             ],
           }),
           chatEvent({

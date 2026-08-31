@@ -162,6 +162,9 @@ export interface ChatPlanEntry {
   content: string
   priority: string
   status: string
+  taskId: string
+  parentTaskId: string | null
+  depth: number
 }
 
 export interface ChatEvent {
@@ -178,6 +181,8 @@ export interface ChatEvent {
   planEntries: ChatPlanEntry[]
   rawInputJson: string | null
   rawOutputJson: string | null
+  planTurnId: string | null
+  planRevision: number
 }
 
 export interface ChatTranscript {
@@ -444,13 +449,39 @@ function decodeToolLocation(value: unknown): ChatToolLocation {
   }
 }
 
-function decodePlanEntry(value: unknown): ChatPlanEntry {
+function decodePlanEntry(
+  value: unknown,
+  occurrenceByContent: Map<string, number>,
+): ChatPlanEntry {
   const entry = tuple(value, 'ChatPlanEntry')
+  const content = str(entry[0])
+  const normalized = content.trim().replace(/\s+/g, ' ').toLocaleUpperCase()
+  const occurrence = occurrenceByContent.get(normalized) ?? 0
+  occurrenceByContent.set(normalized, occurrence + 1)
+
   return {
-    content: str(entry[0]),
+    content,
     priority: str(entry[1]) || 'medium',
     status: str(entry[2]) || 'pending',
+    taskId: str(entry[3]) || legacyTaskId(normalized, occurrence),
+    parentTaskId: optionalString(entry[4]),
+    depth: Math.max(0, Math.min(16, num(entry[5]))),
   }
+}
+
+function decodePlanEntries(value: unknown): ChatPlanEntry[] {
+  if (!Array.isArray(value)) return []
+  const occurrenceByContent = new Map<string, number>()
+  return value.map((entry) => decodePlanEntry(entry, occurrenceByContent))
+}
+
+function legacyTaskId(content: string, occurrence: number): string {
+  let hash = 2166136261
+  for (const character of `${content}\n${occurrence}`) {
+    hash ^= character.codePointAt(0) ?? 0
+    hash = Math.imul(hash, 16777619)
+  }
+  return `legacy:${(hash >>> 0).toString(16)}`
 }
 
 function decodeChatEvent(value: unknown): ChatEvent {
@@ -478,9 +509,11 @@ function decodeChatEvent(value: unknown): ChatEvent {
     options: Array.isArray(event[7]) ? event[7].map(decodePermissionOption) : [],
     content: Array.isArray(event[8]) ? event[8].map(decodeContentBlock) : [],
     locations: Array.isArray(event[9]) ? event[9].map(decodeToolLocation) : [],
-    planEntries: Array.isArray(event[10]) ? event[10].map(decodePlanEntry) : [],
+    planEntries: decodePlanEntries(event[10]),
     rawInputJson: optionalString(event[11]),
     rawOutputJson: optionalString(event[12]),
+    planTurnId: optionalString(event[13]),
+    planRevision: num(event[14]),
   }
 }
 

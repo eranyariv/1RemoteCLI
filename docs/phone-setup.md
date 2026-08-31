@@ -39,7 +39,7 @@ If the card says something else:
 
 Tap a machine, then a session. The current screen appears immediately — the agent keeps a live model of the terminal and sends you a snapshot on attach, so you are not waiting for the program to print something before you can see where it is.
 
-Recent Copilot and Claude Code conversations have a **Chat** badge. Opening one shows typed user messages, agent replies, tool calls, and any permission choices raised by a phone-started turn. Type in the composer to continue the conversation; choosing a permission option sends that exact ACP choice back to the agent.
+Recent Copilot and Claude Code conversations have a **Chat** badge. Opening one shows typed user messages, agent replies, tool calls, and any permission choices raised by a phone-started turn. Agent plans remain in the transcript as collapsible task trees with live progress, nested branches when the provider supplies them, and completed or failed history from earlier turns. Type in the composer to continue the conversation; choosing a permission option sends that exact ACP choice back to the agent.
 
 - **Type** — tap the screen; your keyboard comes up. Characters go straight to the program.
 - **Paste** — reads the phone clipboard and pastes it through the terminal. Programs that enable bracketed paste receive multiline text as one literal paste.

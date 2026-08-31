@@ -38,9 +38,11 @@ public static class ProtocolVersion
     /// Version 8 appends agent-chat ownership state, allowing the PWA to wait until
     /// sequential ACP handoff succeeds instead of writing into a session another
     /// Copilot process is using.
+    /// Version 9 enriches ACP plan entries with stable identity and optional hierarchy,
+    /// and identifies the user turn and replacement revision for each plan snapshot.
     /// </para>
     /// </summary>
-    public const int Current = 8;
+    public const int Current = 9;
 
     /// <summary>Oldest version this build still accepts from a peer.</summary>
     public const int MinimumSupported = 1;

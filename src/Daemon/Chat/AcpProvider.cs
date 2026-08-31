@@ -1264,9 +1264,23 @@ public sealed class AcpProvider : IAsyncDisposable
                     Content = String(item, "content") ?? string.Empty,
                     Priority = String(item, "priority") ?? "medium",
                     Status = String(item, "status") ?? "pending",
+                    TaskId = String(item, "taskId") ?? String(item, "id") ?? string.Empty,
+                    ParentTaskId = String(item, "parentTaskId") ?? String(item, "parentId"),
+                    Depth = PlanDepth(item),
                 })
                 .Where(item => item.Content.Length > 0),
         ];
+    }
+
+    private static int PlanDepth(JsonElement value)
+    {
+        long? depth = Integer(value, "depth");
+        return depth switch
+        {
+            > 16 => 16,
+            > 0 => (int)depth.Value,
+            _ => 0,
+        };
     }
 
     private static long? Integer(JsonElement value, string property) =>

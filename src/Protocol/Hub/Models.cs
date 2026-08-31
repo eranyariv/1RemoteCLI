@@ -169,6 +169,18 @@ public sealed class ChatPlanEntry
 
     [Key(2)]
     public string Status { get; set; } = "pending";
+
+    /// <summary>Stable within this plan so a replacement snapshot updates the same row.</summary>
+    [Key(3)]
+    public string TaskId { get; set; } = string.Empty;
+
+    /// <summary>Optional parent task. Null keeps ordinary ACP plans as a flat list.</summary>
+    [Key(4)]
+    public string? ParentTaskId { get; set; }
+
+    /// <summary>Resolved nesting depth, bounded by the daemon before it reaches the phone.</summary>
+    [Key(5)]
+    public int Depth { get; set; }
 }
 
 /// <summary>
@@ -215,6 +227,14 @@ public sealed class ChatEvent
 
     [Key(12)]
     public string? RawOutputJson { get; set; }
+
+    /// <summary>User-message event that owns this plan, or null for a session-level plan.</summary>
+    [Key(13)]
+    public string? PlanTurnId { get; set; }
+
+    /// <summary>Monotonic replacement number for this turn's atomic plan snapshot.</summary>
+    [Key(14)]
+    public int PlanRevision { get; set; }
 }
 
 /// <summary>

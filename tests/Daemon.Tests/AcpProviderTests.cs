@@ -98,6 +98,78 @@ public sealed class AcpProviderTests
     }
 
     [Fact]
+    public async Task AttachSnapshotsPreservePlansFromHistoricalTurns()
+    {
+        AcpProvider? provider = null;
+
+        Task<JsonElement> Call(
+            string method,
+            JsonObject parameters,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (method == "session/list")
+            {
+                return Task.FromResult(JsonSerializer.SerializeToElement(new
+                {
+                    sessions = new[]
+                    {
+                        new
+                        {
+                            sessionId = "history",
+                            cwd = @"C:\repo",
+                            title = "History",
+                            updatedAt = DateTimeOffset.UtcNow,
+                        },
+                    },
+                    nextCursor = (string?)null,
+                }));
+            }
+
+            if (method == "session/load")
+            {
+                AcpSession session = Assert.Single(provider!.Snapshot());
+                session.Apply("user_message", "turn-1", "First", null, null, null);
+                session.Apply(
+                    "plan",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    planEntries: [new() { Content = "First task", Status = "completed" }]);
+                session.Apply("user_message", "turn-2", "Second", null, null, null);
+                session.Apply(
+                    "plan",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    planEntries: [new() { Content = "Second task", Status = "in_progress" }]);
+                return Task.FromResult(JsonSerializer.SerializeToElement(new { }));
+            }
+
+            throw new InvalidOperationException(method);
+        }
+
+        var sink = new RecordingChatSink();
+        await using var ownedProvider = new AcpProvider(Call);
+        provider = ownedProvider;
+        ownedProvider.AttachSink(sink);
+        await ownedProvider.RefreshAsync();
+
+        await ownedProvider.AttachAsync("history", "phone");
+
+        ChatEvent[] snapshot = Assert.Single(sink.Snapshots);
+        ChatEvent[] plans = [.. snapshot.Where(item => item.Kind == ChatEventKind.Plan)];
+        Assert.Equal(2, plans.Length);
+        Assert.Equal(["turn-1", "turn-2"], plans.Select(item => item.PlanTurnId));
+        Assert.Equal(["First task", "Second task"], plans.Select(item => item.PlanEntries[0].Content));
+    }
+
+    [Fact]
     public async Task RefusesAHandoffWhileAnotherCopilotProcessOwnsTheSession()
     {
         Task<JsonElement> Call(
@@ -373,8 +445,20 @@ public sealed class AcpProviderTests
                 """
                 {
                   "entries": [
-                    { "content": "Inspect settings", "priority": "high", "status": "completed" },
-                    { "content": "Edit settings", "priority": "medium", "status": "in_progress" }
+                    {
+                      "content": "Inspect settings",
+                      "priority": "high",
+                      "status": "completed",
+                      "taskId": "settings"
+                    },
+                    {
+                      "content": "Edit settings",
+                      "priority": "medium",
+                      "status": "failed",
+                      "taskId": "edit-settings",
+                      "parentTaskId": "settings",
+                      "depth": 1
+                    }
                   ]
                 }
                 """));
@@ -388,6 +472,34 @@ public sealed class AcpProviderTests
             JsonSerializer.Deserialize<JsonElement>(tool.RawInputJson!).GetProperty("path").GetString());
         Assert.Equal(ChatEventKind.Plan, plan!.Kind);
         Assert.Equal("completed", plan.PlanEntries[0].Status);
+        Assert.Equal("edit-settings", plan.PlanEntries[1].TaskId);
+        Assert.Equal("settings", plan.PlanEntries[1].ParentTaskId);
+        Assert.Equal(1, plan.PlanEntries[1].Depth);
+        Assert.Equal("failed", plan.PlanEntries[1].Status);
+    }
+
+    [Fact]
+    public void DeepProviderPlansClampRatherThanLosingTheirHierarchy()
+    {
+        var entries = new JsonArray();
+        for (int depth = 0; depth <= 17; depth++)
+        {
+            entries.Add(new JsonObject
+            {
+                ["content"] = $"Task {depth}",
+                ["status"] = "pending",
+                ["depth"] = depth,
+            });
+        }
+
+        var session = new AcpSession("session-1", @"C:\repo", "Chat", DateTimeOffset.UtcNow);
+        ChatEvent plan = AcpProvider.ApplyUpdate(
+            session,
+            "plan",
+            JsonSerializer.SerializeToElement(new JsonObject { ["entries"] = entries }))!;
+
+        Assert.Equal(16, plan.PlanEntries[17].Depth);
+        Assert.Equal(plan.PlanEntries[15].TaskId, plan.PlanEntries[17].ParentTaskId);
     }
 
     [Fact]
@@ -826,7 +938,10 @@ public sealed class AcpProviderTests
     }
 
     private sealed class RecordingChatSink : IAgentChatSink
-    {        public List<string?> TranscriptTargets { get; } = [];
+    {
+        public List<string?> TranscriptTargets { get; } = [];
+
+        public List<ChatEvent[]> Snapshots { get; } = [];
 
         public ValueTask OnChatOpenedAsync(
             AcpSession session,
@@ -852,6 +967,7 @@ public sealed class AcpProviderTests
         {
             Assert.Equal(ChatTranscriptKind.Snapshot, kind);
             TranscriptTargets.Add(targetConnectionId);
+            Snapshots.Add(events);
             return ValueTask.CompletedTask;
         }
 

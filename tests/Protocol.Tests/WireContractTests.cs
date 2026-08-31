@@ -307,9 +307,11 @@ public sealed class WireContractTests
                 },
                 new ChatEvent
                 {
-                    EventId = "plan",
+                    EventId = "plan:prompt:release",
                     Kind = ChatEventKind.Plan,
                     Title = "Plan",
+                    PlanTurnId = "prompt:release",
+                    PlanRevision = 3,
                     PlanEntries =
                     [
                         new ChatPlanEntry
@@ -317,12 +319,16 @@ public sealed class WireContractTests
                             Content = "Inspect the tests",
                             Priority = "high",
                             Status = "completed",
+                            TaskId = "release",
                         },
                         new ChatPlanEntry
                         {
                             Content = "Run the tests",
                             Priority = "medium",
                             Status = "in_progress",
+                            TaskId = "run-tests",
+                            ParentTaskId = "release",
+                            Depth = 1,
                         },
                     ],
                 },

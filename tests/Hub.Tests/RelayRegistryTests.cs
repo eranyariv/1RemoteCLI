@@ -325,14 +325,23 @@ public sealed class RelayRegistryTests
         registry.RegisterMachine(Alice, "agent-a", Request("machine-a"));
         registry.AddSession("agent-a", Session("session-1"));
 
-        SessionAddress? address = registry.UpdateSession(
-            "agent-a",
-            Session("session-1", CliType.ClaudeCode));
+        SessionInfo correction = Session("session-1", CliType.ClaudeCode);
+        correction.LocalTasks =
+        [
+            new ChatTaskEntry
+            {
+                TaskId = "verify",
+                Title = "Verify relay",
+                Status = "pending",
+            },
+        ];
+        SessionAddress? address = registry.UpdateSession("agent-a", correction);
 
         Assert.Equal("machine-a", address!.MachineId);
 
         SessionInfo stored = Assert.Single(Assert.Single(registry.ListMachines(Alice)).Sessions);
         Assert.Equal(CliType.ClaudeCode, stored.CliType);
+        Assert.Equal("verify", Assert.Single(stored.LocalTasks!).TaskId);
     }
 
     [Fact]

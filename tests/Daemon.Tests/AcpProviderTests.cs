@@ -917,6 +917,85 @@ public sealed class AcpProviderTests
         Assert.Equal(2, sink.Updated.Count);
     }
 
+    [Fact]
+    public async Task RefreshPublishesChangesFromTheSessionLocalTaskPlan()
+    {
+        string sessionId = Guid.NewGuid().ToString();
+        string root = Path.Combine(Path.GetTempPath(), $"1remote-copilot-tasks-{Guid.NewGuid():N}");
+        string databasePath = Path.Combine(root, sessionId, "session.db");
+        DateTimeOffset updatedAt = DateTimeOffset.UtcNow;
+
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
+            await CreateDatabaseAsync(
+                databasePath,
+                """
+                CREATE TABLE todos (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    status TEXT
+                );
+                CREATE TABLE todo_deps (
+                    todo_id TEXT,
+                    depends_on TEXT,
+                    PRIMARY KEY(todo_id, depends_on)
+                );
+                INSERT INTO todos VALUES ('implement', 'Implement plan view', 'pending');
+                """);
+
+            Task<JsonElement> Call(
+                string method,
+                JsonObject parameters,
+                CancellationToken cancellationToken)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return Task.FromResult(method == "session/list"
+                    ? JsonSerializer.SerializeToElement(new
+                    {
+                        sessions = new[]
+                        {
+                            new
+                            {
+                                sessionId,
+                                cwd = @"C:\repo",
+                                title = "Plan work",
+                                updatedAt,
+                            },
+                        },
+                        nextCursor = (string?)null,
+                    })
+                    : throw new InvalidOperationException(method));
+            }
+
+            var sink = new RecordingChatSink();
+            var taskPlans = new CopilotTaskPlanIndex(sessionStateRoot: root);
+            await using var provider = new AcpProvider(Call, taskPlans: taskPlans);
+            provider.AttachSink(sink);
+
+            await provider.RefreshAsync();
+
+            AcpSession session = Assert.Single(provider.Snapshot());
+            Assert.Equal("pending", Assert.Single(session.LocalTasks!).Status);
+            sink.Operations.Clear();
+
+            await CreateDatabaseAsync(
+                databasePath,
+                "UPDATE todos SET status = 'in_progress' WHERE id = 'implement';");
+            await provider.RefreshAsync();
+
+            Assert.Equal("in_progress", Assert.Single(session.LocalTasks!).Status);
+            Assert.Equal(["updated"], sink.Operations);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     private static JsonElement Page(int start, int count, string? nextCursor)    {
         DateTimeOffset now = DateTimeOffset.UtcNow;
         var sessions = Enumerable.Range(start, count).Select(index => new

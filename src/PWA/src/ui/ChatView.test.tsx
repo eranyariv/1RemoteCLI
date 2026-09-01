@@ -80,6 +80,7 @@ const session: SessionInfo = {
   suggestedProjectId: null,
   suggestedProjectMoves: 0,
   chatState: 'Ready',
+  localTasks: null,
 }
 
 function chatEvent(
@@ -414,6 +415,80 @@ describe('ChatView', () => {
       expect(relay.respondChatPermission).toHaveBeenCalledWith('chat-1', 'req-2', 'sqlite'),
     )
     expect(screen.getByText('Which database should I use?')).toBeTruthy()
+  })
+
+  it('disables Plan when the session has no local task database snapshot', () => {
+    render(
+      <ChatView
+        client={relay.client}
+        connected
+        machine={machine}
+        session={session}
+        onClose={() => {}}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'Plan' }).hasAttribute('disabled')).toBe(true)
+  })
+
+  it('renders the local task plan with status and dependency ordering', () => {
+    render(
+      <ChatView
+        client={relay.client}
+        connected
+        machine={machine}
+        session={{
+          ...session,
+          localTasks: [
+            {
+              taskId: 'ship',
+              title: 'Ship the release',
+              status: 'blocked',
+              dependsOn: ['build'],
+            },
+            {
+              taskId: 'inspect',
+              title: 'Inspect the implementation',
+              status: 'completed',
+              dependsOn: [],
+            },
+            {
+              taskId: 'build',
+              title: 'Build the plan view',
+              status: 'in_progress',
+              dependsOn: ['inspect'],
+            },
+            {
+              taskId: 'document',
+              title: 'Document behavior',
+              status: 'pending',
+              dependsOn: [],
+            },
+          ],
+        }}
+        onClose={() => {}}
+      />,
+    )
+
+    const plan = screen.getByRole('button', { name: 'Plan' })
+    expect(plan.hasAttribute('disabled')).toBe(false)
+    fireEvent.click(plan)
+
+    expect(screen.getByRole('heading', { name: 'Tasks' })).toBeTruthy()
+    expect(screen.getByLabelText('Completed')).toBeTruthy()
+    expect(screen.getByLabelText('In progress')).toBeTruthy()
+    expect(screen.getByLabelText('Blocked')).toBeTruthy()
+    expect(screen.getByLabelText('Pending')).toBeTruthy()
+
+    const taskNames = screen
+      .getAllByRole('listitem')
+      .map((item) => item.textContent)
+      .filter((text) => text?.includes('implementation') || text?.includes('plan view') || text?.includes('release'))
+    expect(taskNames).toEqual([
+      '✓Inspect the implementation',
+      'Build the plan view',
+      '!Ship the release',
+    ])
   })
 
   it('switches tool activity between compact, summary, and full detail', () => {

@@ -153,6 +153,22 @@ public sealed class WireContractTests
                             CliType = CliType.CopilotCli,
                             Kind = SessionKind.AgentChat,
                             ChatState = ChatSessionState.Available,
+                            LocalTasks =
+                            [
+                                new ChatTaskEntry
+                                {
+                                    TaskId = "inspect",
+                                    Title = "Inspect implementation",
+                                    Status = "completed",
+                                },
+                                new ChatTaskEntry
+                                {
+                                    TaskId = "build",
+                                    Title = "Build plan view",
+                                    Status = "in_progress",
+                                    DependsOn = ["inspect"],
+                                },
+                            ],
                         },
                     ],
                 },

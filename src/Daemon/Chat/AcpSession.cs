@@ -26,6 +26,7 @@ public sealed class AcpSession(
     private string? _currentTurnId;
     private long _syntheticId;
     private long _seq;
+    private ChatTaskEntry[]? _localTasks;
 
     public string SessionId { get; } = sessionId;
 
@@ -40,6 +41,8 @@ public sealed class AcpSession(
     public CliType CliType { get; } = cliType;
 
     public SemaphoreSlim LoadGate { get; } = new(1, 1);
+
+    internal SemaphoreSlim TaskPlanGate { get; } = new(1, 1);
 
     public bool Loaded { get; set; }
 
@@ -90,6 +93,31 @@ public sealed class AcpSession(
     }
 
     public bool AwaitingInput { get; private set; }
+
+    public ChatTaskEntry[]? LocalTasks
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return CopyTasks(_localTasks);
+            }
+        }
+    }
+
+    public bool UpdateLocalTasks(ChatTaskEntry[]? tasks)
+    {
+        lock (_gate)
+        {
+            if (TasksEqual(_localTasks, tasks))
+            {
+                return false;
+            }
+
+            _localTasks = CopyTasks(tasks);
+            return true;
+        }
+    }
 
     public long Seq
     {
@@ -739,6 +767,38 @@ public sealed class AcpSession(
             PlanTurnId = item.PlanTurnId,
             PlanRevision = item.PlanRevision,
         };
+
+    private static ChatTaskEntry[]? CopyTasks(ChatTaskEntry[]? tasks) =>
+        tasks is null
+            ? null
+            :
+            [
+                .. tasks.Select(task => new ChatTaskEntry
+                {
+                    TaskId = task.TaskId,
+                    Title = task.Title,
+                    Status = task.Status,
+                    DependsOn = [.. task.DependsOn],
+                }),
+            ];
+
+    private static bool TasksEqual(ChatTaskEntry[]? left, ChatTaskEntry[]? right)
+    {
+        if (left is null || right is null)
+        {
+            return left is null && right is null;
+        }
+        if (left.Length != right.Length)
+        {
+            return false;
+        }
+
+        return left.Zip(right).All(pair =>
+            pair.First.TaskId == pair.Second.TaskId &&
+            pair.First.Title == pair.Second.Title &&
+            pair.First.Status == pair.Second.Status &&
+            pair.First.DependsOn.SequenceEqual(pair.Second.DependsOn, StringComparer.Ordinal));
+    }
 
     private static ChatContentBlock Copy(ChatContentBlock item) =>
         new()

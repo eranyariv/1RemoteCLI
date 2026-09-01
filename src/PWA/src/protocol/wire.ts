@@ -81,6 +81,8 @@ export interface SessionInfo {
   suggestedProjectMoves: number
   /** Whether this agent process can safely drive the ACP session. */
   chatState: ChatSessionState
+  /** Copilot Desktop's read-only session-local task plan, or null when unavailable. */
+  localTasks: ChatTaskEntry[] | null
 }
 
 export interface ChatCapabilities {
@@ -165,6 +167,13 @@ export interface ChatPlanEntry {
   taskId: string
   parentTaskId: string | null
   depth: number
+}
+
+export interface ChatTaskEntry {
+  taskId: string
+  title: string
+  status: string
+  dependsOn: string[]
 }
 
 export interface ChatEvent {
@@ -315,7 +324,24 @@ export function decodeSession(value: unknown): SessionInfo {
     suggestedProjectId: typeof s[15] === 'string' && s[15].length > 0 ? s[15] : null,
     suggestedProjectMoves: Math.max(0, num(s[16])),
     chatState: chatSessionState(s[17]),
+    localTasks: decodeChatTasks(s[18]),
   }
+}
+
+function decodeChatTasks(value: unknown): ChatTaskEntry[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null
+
+  const tasks = value
+    .filter(Array.isArray)
+    .map((item) => ({
+      taskId: str(item[0]),
+      title: str(item[1]),
+      status: str(item[2]) || 'pending',
+      dependsOn: Array.isArray(item[3]) ? item[3].map(str).filter(Boolean) : [],
+    }))
+    .filter((item) => item.taskId.length > 0 && item.title.length > 0)
+
+  return tasks.length > 0 ? tasks : null
 }
 
 function chatCapabilities(value: unknown): ChatCapabilities | null {

@@ -317,6 +317,44 @@ public class HubContractTests
     }
 
     [Fact]
+    public void LocalTaskPlansAreAppendedAndDefaultToUnavailable()
+    {
+        SessionInfo current = RoundTrip(new SessionInfo
+        {
+            SessionId = "chat-1",
+            Kind = SessionKind.AgentChat,
+            LocalTasks =
+            [
+                new ChatTaskEntry
+                {
+                    TaskId = "build",
+                    Title = "Build plan view",
+                    Status = "in_progress",
+                    DependsOn = ["inspect"],
+                },
+            ],
+        });
+
+        ChatTaskEntry task = Assert.Single(current.LocalTasks!);
+        Assert.Equal("build", task.TaskId);
+        Assert.Equal("Build plan view", task.Title);
+        Assert.Equal("in_progress", task.Status);
+        Assert.Equal(["inspect"], task.DependsOn);
+
+        byte[] olderBytes = MessagePackSerializer.Serialize(
+            new VersionFiveSessionInfo
+            {
+                SessionId = "chat-1",
+                Program = "GitHub Copilot",
+                Kind = SessionKind.AgentChat,
+            },
+            Options);
+
+        SessionInfo older = MessagePackSerializer.Deserialize<SessionInfo>(olderBytes, Options);
+        Assert.Null(older.LocalTasks);
+    }
+
+    [Fact]
     public void EnrichedPlansRemainReadableByVersionEightPeers()
     {
         var current = RoundTrip(new ChatPlanEntry

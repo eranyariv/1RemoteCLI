@@ -12,14 +12,20 @@ import {
   type ChatAttachmentDraft,
 } from '../chat/attachment'
 import { describeError } from '../protocol/errors'
-import type { ChatContentBlock, ChatEvent, MachineInfo, SessionInfo } from '../protocol/wire'
+import type {
+  ChatContentBlock,
+  ChatEvent,
+  ChatTaskEntry,
+  MachineInfo,
+  SessionInfo,
+} from '../protocol/wire'
 import type { RelayClient } from '../relay/client'
 import { sessionLabel } from '../relay/machines'
 import { AcpContentBlocks, AcpEventView, type AcpDetailLevel } from './AcpEventView'
 import { MarkdownText } from './MarkdownText'
 import { useLockHorizontalPan } from './useLockHorizontalPan'
 
-type DetailLevel = AcpDetailLevel
+type ViewMode = AcpDetailLevel | 'plan'
 
 const CancelElicitationOption = '__1remote_cancel__'
 const DeclineElicitationOption = '__1remote_decline__'
@@ -65,10 +71,11 @@ export function ChatView({
   const [sending, setSending] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loadAttempt, setLoadAttempt] = useState(0)
-  const [detailLevel, setDetailLevel] = useState<DetailLevel>('summary')
+  const [viewMode, setViewMode] = useState<ViewMode>('summary')
   const [attachments, setAttachments] = useState<ChatAttachmentDraft[]>([])
   const [composerError, setComposerError] = useState<string | null>(null)
   const bottom = useRef<HTMLDivElement>(null)
+  const content = useRef<HTMLDivElement>(null)
   const screenRef = useRef<HTMLElement | null>(null)
   const fileInput = useRef<HTMLInputElement | null>(null)
   const imageInput = useRef<HTMLInputElement | null>(null)
@@ -95,6 +102,12 @@ export function ChatView({
     session.chatState === 'Unknown'
   const desktopApp = session.cliType === 'ClaudeCode' ? 'Claude Code' : 'Copilot Desktop'
   const chatProvider = session.cliType === 'ClaudeCode' ? 'Claude Code' : 'Copilot'
+  const taskPlan = session.localTasks
+  const detailLevel: AcpDetailLevel = viewMode === 'plan' ? 'summary' : viewMode
+
+  useEffect(() => {
+    if (viewMode === 'plan' && !taskPlan) setViewMode('summary')
+  }, [taskPlan, viewMode])
 
   useEffect(() => {
     const off = client.on('chatTranscript', (transcript) => {
@@ -136,8 +149,16 @@ export function ChatView({
   }, [client, connected, loadAttempt, machine.machineId, session.sessionId])
 
   useEffect(() => {
-    bottom.current?.scrollIntoView({ block: 'end' })
-  }, [events])
+    if (viewMode !== 'plan') bottom.current?.scrollIntoView({ block: 'end' })
+  }, [events, viewMode])
+
+  useEffect(() => {
+    if (viewMode === 'plan') {
+      if (content.current) content.current.scrollTop = 0
+    } else {
+      bottom.current?.scrollIntoView({ block: 'end' })
+    }
+  }, [viewMode])
 
   const pendingInput = useMemo(
     () => events.find((event) => event.kind === 'Permission' && event.status === 'pending'),
@@ -390,21 +411,23 @@ export function ChatView({
       <div
         className="flex items-center justify-between gap-3 border-b border-slate-800 px-4 py-2"
         role="group"
-        aria-label="Transcript detail level"
+        aria-label="Conversation view"
       >
-        <span className="text-xs font-medium text-slate-400">Details</span>
+        <span className="text-xs font-medium text-slate-400">View</span>
         <div className="flex rounded-lg bg-slate-900 p-0.5">
-          {(['compact', 'summary', 'full'] as const).map((level) => (
+          {(['compact', 'summary', 'full', 'plan'] as const).map((mode) => (
             <button
-              key={level}
+              key={mode}
               type="button"
-              aria-pressed={detailLevel === level}
-              onClick={() => setDetailLevel(level)}
+              aria-pressed={viewMode === mode}
+              disabled={mode === 'plan' && !taskPlan}
+              title={mode === 'plan' && !taskPlan ? 'No local task plan is available' : undefined}
+              onClick={() => setViewMode(mode)}
               className={`min-h-8 rounded-md px-2.5 text-xs capitalize ${
-                detailLevel === level ? 'bg-slate-700 text-white' : 'text-slate-400'
-              }`}
+                viewMode === mode ? 'bg-slate-700 text-white' : 'text-slate-400'
+              } disabled:text-slate-700`}
             >
-              {level[0].toUpperCase() + level.slice(1)}
+              {mode[0].toUpperCase() + mode.slice(1)}
             </button>
           ))}
         </div>
@@ -444,10 +467,13 @@ export function ChatView({
       </div>
 
       <div
+        ref={content}
         className="min-w-0 max-w-full flex-1 space-y-3 overflow-x-hidden overflow-y-auto px-4 py-4"
         aria-live="polite"
       >
-        {loadError ? (
+        {viewMode === 'plan' && taskPlan ? (
+          <TaskPlan tasks={taskPlan} />
+        ) : loadError ? (
           <p className="py-8 text-center text-sm text-rose-300">{loadError}</p>
         ) : !loaded && !loadBlocked ? (
           <p className="py-8 text-center text-sm text-slate-500">Loading the transcript…</p>
@@ -455,16 +481,18 @@ export function ChatView({
           <p className="py-8 text-center text-sm text-slate-500">No messages yet.</p>
         ) : null}
 
-        {visibleEvents.map((item) => (
-          <TranscriptItem
-            key={item.eventId}
-            item={item}
-            detailLevel={detailLevel}
-            onPermission={(requestId, optionId) =>
-              client.respondChatPermission(session.sessionId, requestId, optionId)
-            }
-          />
-        ))}
+        {viewMode !== 'plan'
+          ? visibleEvents.map((item) => (
+              <TranscriptItem
+                key={item.eventId}
+                item={item}
+                detailLevel={detailLevel}
+                onPermission={(requestId, optionId) =>
+                  client.respondChatPermission(session.sessionId, requestId, optionId)
+                }
+              />
+            ))
+          : null}
         <div ref={bottom} />
       </div>
 
@@ -646,13 +674,113 @@ export function ChatView({
   )
 }
 
+function TaskPlan({ tasks }: { tasks: ChatTaskEntry[] }) {
+  const ordered = useMemo(() => orderTasks(tasks), [tasks])
+
+  return (
+    <section className="mx-auto w-full max-w-2xl py-2" aria-labelledby="task-plan-heading">
+      <div className="mb-3 flex items-baseline justify-between">
+        <h3 id="task-plan-heading" className="text-sm font-semibold text-slate-100">
+          Tasks
+        </h3>
+        <span className="text-xs text-slate-500">
+          {tasks.filter((task) => task.status === 'completed').length}/{tasks.length}
+        </span>
+      </div>
+      <ol className="grid gap-1">
+        {ordered.map((task) => (
+          <li key={task.taskId} className="flex min-w-0 items-start gap-3 rounded-lg px-1 py-2">
+            <TaskStatusIcon status={task.status} />
+            <span
+              className={`min-w-0 flex-1 break-words text-sm leading-5 [overflow-wrap:anywhere] ${
+                task.status === 'in_progress'
+                  ? 'font-medium text-slate-100'
+                  : task.status === 'blocked'
+                    ? 'text-amber-200'
+                    : task.status === 'failed'
+                      ? 'text-rose-200'
+                      : 'text-slate-300'
+              }`}
+            >
+              {task.title}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </section>
+  )
+}
+
+function TaskStatusIcon({ status }: { status: string }) {
+  if (status === 'completed') {
+    return (
+      <span
+        aria-label="Completed"
+        className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold text-slate-950"
+      >
+        ✓
+      </span>
+    )
+  }
+  if (status === 'in_progress') {
+    return (
+      <span
+        aria-label="In progress"
+        className="mt-0.5 size-4 shrink-0 animate-spin rounded-full border-2 border-slate-700 border-t-sky-400"
+      />
+    )
+  }
+  if (status === 'blocked' || status === 'failed') {
+    const failed = status === 'failed'
+    return (
+      <span
+        aria-label={failed ? 'Failed' : 'Blocked'}
+        className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold ${
+          failed ? 'border-rose-400 text-rose-300' : 'border-amber-400 text-amber-300'
+        }`}
+      >
+        {failed ? '×' : '!'}
+      </span>
+    )
+  }
+  return (
+    <span
+      aria-label="Pending"
+      className="mt-0.5 size-4 shrink-0 rounded-full border-2 border-slate-600"
+    />
+  )
+}
+
+function orderTasks(tasks: ChatTaskEntry[]): ChatTaskEntry[] {
+  const byId = new Map(tasks.map((task) => [task.taskId, task]))
+  const ordered: ChatTaskEntry[] = []
+  const visited = new Set<string>()
+  const visiting = new Set<string>()
+
+  const visit = (task: ChatTaskEntry) => {
+    if (visited.has(task.taskId)) return
+    if (visiting.has(task.taskId)) return
+    visiting.add(task.taskId)
+    for (const dependencyId of task.dependsOn) {
+      const dependency = byId.get(dependencyId)
+      if (dependency) visit(dependency)
+    }
+    visiting.delete(task.taskId)
+    visited.add(task.taskId)
+    ordered.push(task)
+  }
+
+  for (const task of tasks) visit(task)
+  return ordered
+}
+
 function TranscriptItem({
   item,
   detailLevel,
   onPermission,
 }: {
   item: ChatEvent
-  detailLevel: DetailLevel
+  detailLevel: AcpDetailLevel
   onPermission(requestId: string, optionId: string): Promise<unknown>
 }) {
   const [answer, setAnswer] = useState('')

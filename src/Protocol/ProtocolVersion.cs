@@ -40,9 +40,11 @@ public static class ProtocolVersion
     /// Copilot process is using.
     /// Version 9 enriches ACP plan entries with stable identity and optional hierarchy,
     /// and identifies the user turn and replacement revision for each plan snapshot.
+    /// Version 10 appends a read-only snapshot of Copilot Desktop's session-local task
+    /// table so the PWA can offer the same plan outside native ACP plan events.
     /// </para>
     /// </summary>
-    public const int Current = 9;
+    public const int Current = 10;
 
     /// <summary>Oldest version this build still accepts from a peer.</summary>
     public const int MinimumSupported = 1;

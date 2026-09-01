@@ -57,4 +57,4 @@ export const Client = {
 } as const
 
 /** Must match `ProtocolVersion.Current`. */
-export const PROTOCOL_VERSION = 9
+export const PROTOCOL_VERSION = 10

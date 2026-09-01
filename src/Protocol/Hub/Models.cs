@@ -183,6 +183,24 @@ public sealed class ChatPlanEntry
     public int Depth { get; set; }
 }
 
+/// <summary>One read-only task from a Copilot Desktop session's local task database.</summary>
+[MessagePackObject]
+public sealed class ChatTaskEntry
+{
+    [Key(0)]
+    public string TaskId { get; set; } = string.Empty;
+
+    [Key(1)]
+    public string Title { get; set; } = string.Empty;
+
+    [Key(2)]
+    public string Status { get; set; } = "pending";
+
+    /// <summary>Task ids that must finish before this task can start.</summary>
+    [Key(3)]
+    public string[] DependsOn { get; set; } = [];
+}
+
 /// <summary>
 /// One replaceable transcript item. Re-sending an <see cref="EventId"/> updates it.
 /// </summary>
@@ -373,6 +391,13 @@ public sealed class SessionInfo
     /// </summary>
     [Key(17)]
     public ChatSessionState ChatState { get; set; }
+
+    /// <summary>
+    /// Read-only tasks from the session-local Copilot database. Null means no compatible,
+    /// non-empty task table is available and the phone must disable its Plan view.
+    /// </summary>
+    [Key(18)]
+    public ChatTaskEntry[]? LocalTasks { get; set; }
 }
 
 /// <summary>

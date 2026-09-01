@@ -300,11 +300,24 @@ public sealed class AgentHubClientTests : IAsyncLifetime
 
             AcpSession session = await chat.CreateAsync(@"C:\repo", "Chat");
             session.Loaded = true;
+            session.UpdateLocalTasks(
+            [
+                new ChatTaskEntry
+                {
+                    TaskId = "send",
+                    Title = "Send image prompt",
+                    Status = "in_progress",
+                    DependsOn = ["stage"],
+                },
+            ]);
             await chat.ApplyCapabilitiesAsync(new AcpPromptCapabilities(Image: true, EmbeddedContext: true));
 
             AgentSessionUpdatedNotification updated = await Next<AgentSessionUpdatedNotification>();
             Assert.NotNull(updated.Session.ChatCapabilities);
             Assert.True(updated.Session.ChatCapabilities!.Image);
+            ChatTaskEntry advertisedTask = Assert.Single(updated.Session.LocalTasks!);
+            Assert.Equal("send", advertisedTask.TaskId);
+            Assert.Equal(["stage"], advertisedTask.DependsOn);
 
             byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x07];
             string attachmentId = Guid.NewGuid().ToString();

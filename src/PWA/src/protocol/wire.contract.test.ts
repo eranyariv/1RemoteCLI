@@ -148,6 +148,29 @@ describe('decoding what the hub sends', () => {
     expect(sessions[1].chatState).toBe('Available')
   })
 
+  it('reads local task plans and defaults older agents to unavailable', () => {
+    const sessions = decodeMachineList(wire('machineList'))[0].sessions
+
+    expect(sessions[1].localTasks).toEqual([
+      {
+        taskId: 'inspect',
+        title: 'Inspect implementation',
+        status: 'completed',
+        dependsOn: [],
+      },
+      {
+        taskId: 'build',
+        title: 'Build plan view',
+        status: 'in_progress',
+        dependsOn: ['inspect'],
+      },
+    ])
+
+    const raw = wire('sessionOpened') as unknown[]
+    const olderSession = raw[1] as unknown[]
+    expect(decodeSessionOpened([raw[0], olderSession.slice(0, 18)]).session.localTasks).toBeNull()
+  })
+
   it('calls a session Generic when the type is missing or unknown', () => {
     // A version 1 agent sends a nine-element session; a later one could send a type
     // this build has never heard of. Both mean "nobody has said", not a crash.

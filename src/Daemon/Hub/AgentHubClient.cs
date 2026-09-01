@@ -1295,6 +1295,7 @@ public sealed class AgentHubClient : ISessionSink, IAgentChatSink, IAsyncDisposa
         Kind = SessionKind.AgentChat,
         ChatCapabilities = session.PromptCapabilities.ToChatCapabilities(),
         ChatState = session.ChatState,
+        LocalTasks = session.LocalTasks,
     };
 
     private static string AgentVersion => ProductVersion.Current;

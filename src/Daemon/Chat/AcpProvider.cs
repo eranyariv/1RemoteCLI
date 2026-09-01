@@ -27,6 +27,7 @@ public sealed class AcpProvider : IAsyncDisposable
     private readonly Action<string>? _log;
     private readonly AcpSettings _settings = AcpSettings.FromEnvironment();
     private readonly CopilotArchiveIndex _copilotIndex;
+    private readonly CopilotTaskPlanIndex _taskPlans;
     private AcpClient? _client;
     private IAgentChatSink? _sink;
     private AcpPromptCapabilities _capabilities = AcpPromptCapabilities.None;
@@ -41,8 +42,9 @@ public sealed class AcpProvider : IAsyncDisposable
     internal AcpProvider(
         Func<string, JsonObject, CancellationToken, Task<JsonElement>> call,
         bool hideArchivedSessions = false,
-        CopilotArchiveIndex? copilotIndex = null)
-        : this(log: null, hideArchivedSessions, call, copilotIndex)
+        CopilotArchiveIndex? copilotIndex = null,
+        CopilotTaskPlanIndex? taskPlans = null)
+        : this(log: null, hideArchivedSessions, call, copilotIndex, taskPlans)
     {
         ArgumentNullException.ThrowIfNull(call);
     }
@@ -51,10 +53,12 @@ public sealed class AcpProvider : IAsyncDisposable
         Action<string>? log,
         bool hideArchivedSessions,
         Func<string, JsonObject, CancellationToken, Task<JsonElement>>? call,
-        CopilotArchiveIndex? copilotIndex = null)
+        CopilotArchiveIndex? copilotIndex = null,
+        CopilotTaskPlanIndex? taskPlans = null)
     {
         _log = log;
         _copilotIndex = copilotIndex ?? new CopilotArchiveIndex(log);
+        _taskPlans = taskPlans ?? new CopilotTaskPlanIndex(log);
         _hideArchivedSessions = hideArchivedSessions ? 1 : 0;
         _call = call;
     }
@@ -290,6 +294,13 @@ public sealed class AcpProvider : IAsyncDisposable
                 }
 
                 session.Loaded = true;
+            }
+
+            bool taskPlanChanged =
+                await RefreshLocalTasksAsync(session, cancellationToken).ConfigureAwait(false);
+            if (taskPlanChanged && _sink is not null)
+            {
+                await _sink.OnChatUpdatedAsync(session, cancellationToken).ConfigureAwait(false);
             }
 
             // Keep the composer blocked until the whole snapshot has been queued. A
@@ -677,7 +688,10 @@ public sealed class AcpProvider : IAsyncDisposable
         {
             if (_sessions.TryGetValue(item.SessionId, out AcpSession? existing))
             {
-                if (existing.UpdateMetadata(item.Cwd, item.Title, item.UpdatedAt) && _sink is not null)
+                bool sessionChanged = existing.UpdateMetadata(item.Cwd, item.Title, item.UpdatedAt);
+                sessionChanged |=
+                    await RefreshLocalTasksAsync(existing, cancellationToken).ConfigureAwait(false);
+                if (sessionChanged && _sink is not null)
                 {
                     await _sink.OnChatUpdatedAsync(existing, cancellationToken).ConfigureAwait(false);
                 }
@@ -693,6 +707,7 @@ public sealed class AcpProvider : IAsyncDisposable
                 _settings.Program,
                 _settings.CliType);
             added.UpdateCapabilities(PromptCapabilities);
+            await RefreshLocalTasksAsync(added, cancellationToken).ConfigureAwait(false);
             _sessions[item.SessionId] = added;
             changed = true;
 
@@ -822,11 +837,36 @@ public sealed class AcpProvider : IAsyncDisposable
         }
 
         ChatEvent? changed = ApplyUpdate(session, kind, update);
+        bool taskPlanChanged =
+            session.Loaded &&
+            (kind is "tool_call" or "tool_call_update") &&
+            await RefreshLocalTasksAsync(session, CancellationToken.None).ConfigureAwait(false);
 
         if (changed is not null && session.Loaded && _sink is not null)
         {
             await _sink.OnChatTranscriptAsync(session, ChatTranscriptKind.Delta, [changed])
                 .ConfigureAwait(false);
+        }
+        if (taskPlanChanged && _sink is not null)
+        {
+            await _sink.OnChatUpdatedAsync(session).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<bool> RefreshLocalTasksAsync(
+        AcpSession session,
+        CancellationToken cancellationToken)
+    {
+        await session.TaskPlanGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            CopilotTaskPlanRead result =
+                await _taskPlans.ReadAsync(session.SessionId, cancellationToken).ConfigureAwait(false);
+            return result.Succeeded && session.UpdateLocalTasks(result.Tasks);
+        }
+        finally
+        {
+            session.TaskPlanGate.Release();
         }
     }
 

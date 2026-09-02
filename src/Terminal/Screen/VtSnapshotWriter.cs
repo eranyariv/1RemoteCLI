@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 
 namespace OneRemoteCli.Terminal.Screen;
 
@@ -46,7 +46,7 @@ public static class VtSnapshotWriter
 
         // Start from a state both sides agree on. Everything after this is a delta from
         // power-on, which is what lets the rest of the writer emit only what differs.
-        output.Append(Esc).Append('c');
+        WritePowerOnState(output, screen);
 
         // The pen is what the receiving terminal's SGR state will be, tracked so a run
         // that matches the previous one costs nothing.
@@ -104,6 +104,88 @@ public static class VtSnapshotWriter
         WriteTitle(output, screen.Title);
 
         return output.ToString();
+    }
+
+    /// <summary>
+    /// Puts the receiving terminal into power-on state without discarding its scrollback.
+    /// <para>
+    /// This used to be <c>ESC c</c>, one byte that did the whole job. RIS also throws
+    /// away the client's scrollback, though, and on a phone that is the only history
+    /// there is: the agent models the visible screen and nothing above it, so lines
+    /// that scrolled off exist solely in the emulator the user is looking at. A snapshot
+    /// arrives on every reattach the tail is too small to answer — which, for a CLI that
+    /// repaints, is every reattach — so RIS was deleting an hour of real output to
+    /// redraw a screen that was already correct.
+    /// </para>
+    /// <para>
+    /// Erasing the display instead leaves the scrollback where it is. Everything RIS
+    /// reset for free then has to be said out loud, which is what the rest of this
+    /// method is. That keeps the property the writer is built on — every later
+    /// <c>Write*</c> emits only what differs from power-on — so the cost of the change
+    /// is paid here once rather than spread across all of them.
+    /// </para>
+    /// </summary>
+    private static void WritePowerOnState(StringBuilder output, TerminalScreen screen)
+    {
+        // The pen and the charsets come first because everything below depends on them:
+        // an erase fills with the current background, so a client that had a colour set
+        // would otherwise be cleared to that colour rather than to blank.
+        output.Append(Esc).Append("[0m");
+        WriteCharsets(output, Charset.Ascii, Charset.Ascii, 0);
+
+        // Absolute addressing, full-height scrolling, no insert, wrap on. The repaint
+        // positions every row explicitly, and origin mode or a leftover scroll region
+        // would silently shift all of it.
+        output.Append(Esc).Append("[?6l");
+        output.Append(Esc).Append("[r");
+        output.Append(Esc).Append("[4l");
+        output.Append(Esc).Append("[?7h");
+
+        // The alternate buffer, cleared through a bare 47 switch rather than 1047 or
+        // 1049: those clear and move the cursor themselves, and the point here is to do
+        // exactly one known thing per sequence. The alternate screen has no scrollback
+        // to protect, but it does hold the previous session's editor.
+        output.Append(Esc).Append("[?47h");
+        output.Append(Esc).Append("[2J");
+        output.Append(Esc).Append("[H");
+        output.Append(Esc).Append('7');
+        output.Append(Esc).Append("[?47l");
+
+        // The primary screen. ED 2 clears the rows in view and leaves everything above
+        // them alone, which is the whole point of this method.
+        output.Append(Esc).Append("[2J");
+        output.Append(Esc).Append("[H");
+        output.Append(Esc).Append('7');
+
+        // Tab stops every eight columns. There is no sequence that restores the default
+        // set, so it is cleared and rebuilt; RIS was doing this invisibly.
+        output.Append(Esc).Append("[3g");
+
+        for (int column = 8; column < screen.Columns; column += 8)
+        {
+            output.Append(Esc).Append('[').Append(column + 1).Append('G');
+            output.Append(Esc).Append('H');
+        }
+
+        output.Append(Esc).Append("[H");
+
+        // The modes whose power-on value is "off", plus the two whose power-on value is
+        // "on". Written unconditionally, because what the client has cannot be known.
+        output.Append(Esc).Append("[?1l");
+        output.Append(Esc).Append('>');
+        output.Append(Esc).Append("[?2004l");
+        output.Append(Esc).Append("[?1000l");
+        output.Append(Esc).Append("[?1002l");
+        output.Append(Esc).Append("[?1003l");
+        output.Append(Esc).Append("[?1006l");
+        output.Append(Esc).Append("[?1004l");
+        output.Append(Esc).Append("[?25h");
+        output.Append(Esc).Append("[?12h");
+        output.Append(Esc).Append("[0 q");
+
+        // An empty title. A stale one names the session the user was in last, which is
+        // the one thing a title must never do.
+        output.Append(Esc).Append("]0;").Append('');
     }
 
     // Painting.

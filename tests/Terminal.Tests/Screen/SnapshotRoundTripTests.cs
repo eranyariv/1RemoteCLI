@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 
 using OneRemoteCli.Terminal.Screen;
 using OneRemoteCli.Terminal.Vt;
@@ -180,13 +180,18 @@ public sealed class SnapshotRoundTripTests
     }
 
     [Fact]
-    public void ASnapshotStartsFromAKnownState()
+    public void ASnapshotStartsFromAKnownStateWithoutDiscardingScrollback()
     {
         var screen = new ScreenHarness().Feed("\u001b[31mred").Screen;
 
-        // Without the reset the snapshot would be a delta against whatever the client
-        // happened to be showing, which on a re-attach is the previous session.
-        Assert.StartsWith("\u001bc", VtSnapshotWriter.SerializeToString(screen), StringComparison.Ordinal);
+        string snapshot = VtSnapshotWriter.SerializeToString(screen);
+
+        // Without a reset the snapshot would be a delta against whatever the client
+        // happened to be showing, which on a re-attach is the previous session. It must
+        // not be RIS, though: that also discards the scrollback, which on a phone is the
+        // only copy of everything that has already scrolled off the screen.
+        Assert.DoesNotContain("\u001bc", snapshot, StringComparison.Ordinal);
+        Assert.Contains("\u001b[2J", snapshot, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -195,7 +200,22 @@ public sealed class SnapshotRoundTripTests
         var screen = new TerminalScreen(rows: 50, columns: 200);
 
         // Attaching to an idle session is the common case and happens over cellular.
-        Assert.True(VtSnapshotWriter.Serialize(screen).Length < 32);
+        // It used to be two bytes; it is now the explicit power-on preamble, most of
+        // which is the tab stops -- there is no sequence that restores the default set,
+        // so they are cleared and rebuilt one column at a time. Still small enough that
+        // the round trip is dominated by latency rather than by this, and a phone-sized
+        // screen pays a quarter of it.
+        Assert.True(VtSnapshotWriter.Serialize(screen).Length < 512);
+    }
+
+    [Fact]
+    public void ThePreambleShrinksWithTheScreen()
+    {
+        // The 200-column budget above is the desktop worst case. What actually goes over
+        // the air is a phone, and the tab stops are the only part that scales.
+        var phone = new TerminalScreen(rows: 28, columns: 53);
+
+        Assert.True(VtSnapshotWriter.Serialize(phone).Length < 256);
     }
 
     [Fact]
@@ -225,6 +245,104 @@ public sealed class SnapshotRoundTripTests
 
         // Thirty-eight spaces would be thirty-eight bytes; a forward move is four.
         Assert.Contains("\u001b[38C", snapshot, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The state a re-attaching client is actually in: still showing the previous
+    /// screen, with whatever modes, colours, charsets and tab stops the program had set
+    /// before the connection dropped.
+    /// <para>
+    /// This is the state a snapshot has to survive being applied to. It used to be free
+    /// -- the leading ESC c flattened everything -- but RIS also discards the client's
+    /// scrollback, which is real history the user can still scroll back through. The
+    /// writer now clears the screen without discarding it, so every piece of state RIS
+    /// used to reset has to be reset explicitly, and this is what proves it is.
+    /// </para>
+    /// </summary>
+    private const string DirtyTerminal =
+        "\u001b[?1049h\u001b[44;93;1;4;7mleftover on the alternate screen\r\nmore junk"
+        + "\u001b[?1049l\u001b[41;32mprevious session\r\nsecond line\r\nthird line"
+        + "\u001b[3;7r\u001b[?6h\u001b[?7l\u001b[4h\u001b[?25l\u001b[?2004h\u001b[?1h\u001b="
+        + "\u001b[?1000h\u001b[?1002h\u001b[?1006h\u001b[3g\u001b[4G\u001bH\u001b[11G\u001bH"
+        + "\u001b(0\u001b)0\u000e\u001b]0;a stale window title\u0007\u001b[2 q"
+        + "\u001b[5;5H\u001b7\u001b[2;2H";
+
+    [Theory]
+    [MemberData(nameof(Corpus))]
+    public void ASnapshotReproducesTheScreenOnATerminalThatIsNotFresh(string name, string input)
+    {
+        var original = new ScreenHarness(rows: 8, columns: 24).Feed(input).Screen;
+
+        string snapshot = VtSnapshotWriter.SerializeToString(original);
+        var restored = new ScreenHarness(rows: 8, columns: 24).Feed(DirtyTerminal).Feed(snapshot).Screen;
+
+        Assert.Equal(ScreenState.Describe(original), ScreenState.Describe(restored));
+        Assert.NotEqual(string.Empty, name);
+    }
+
+    /// <summary>
+    /// The same property with the dirty state generated rather than chosen: the
+    /// hand-written one above can only contain what somebody remembered to put in it.
+    /// </summary>
+    [Theory]
+    [InlineData(20260901)]
+    [InlineData(20260902)]
+    [InlineData(20260903)]
+    public void TheRoundTripHoldsWhenRestoringOverAScreenAlreadyInUse(int seed)
+    {
+        var random = new Random(seed);
+
+        for (int iteration = 0; iteration < 200; iteration++)
+        {
+            string input = RandomProgram(random);
+            string dirty = SafelyTerminated(RandomProgram(random));
+
+            var original = new ScreenHarness(rows: 6, columns: 20).Feed(input).Screen;
+            string snapshot = VtSnapshotWriter.SerializeToString(original);
+
+            // Compared against a fresh restore rather than against the original,
+            // because those are two different properties. Whether the writer captures
+            // a screen faithfully is what the tests above are for -- and issue #214 is
+            // one input where it does not. What matters here is that applying a
+            // snapshot does not depend on what the client happened to be showing, so
+            // that the reset can stop discarding scrollback.
+            var freshly = new ScreenHarness(rows: 6, columns: 20).Feed(snapshot).Screen;
+            var restored = new ScreenHarness(rows: 6, columns: 20).Feed(dirty).Feed(snapshot).Screen;
+
+            string expected = ScreenState.Describe(freshly);
+            string actual = ScreenState.Describe(restored);
+
+            if (expected != actual)
+            {
+                Assert.Fail(
+                    $"Restoring over a dirty screen differed from restoring onto a fresh one"
+                    + $" on seed {seed}, iteration {iteration}."
+                    + $"\ninput:    {Printable(input)}"
+                    + $"\ndirty:    {Printable(dirty)}"
+                    + $"\nsnapshot: {Printable(snapshot)}"
+                    + $"\nfresh:\n{expected}"
+                    + $"\ndirty:\n{actual}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Cuts a generated program at the last point a frame could have ended.
+    /// <para>
+    /// The agent never splices a snapshot onto a half-finished escape sequence: output
+    /// is framed at the parser's last safe offset, so a client beginning a snapshot is
+    /// always between sequences. Without this the generator eventually produces a
+    /// program ending mid-OSC, whose string-terminator hunt swallows the snapshot's own
+    /// opening bytes -- which tests the framing contract rather than the thing this is
+    /// about, and fails for a reason that cannot happen in production.
+    /// </para>
+    /// </summary>
+    private static string SafelyTerminated(string program)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(program);
+        new VtParser().Parse(bytes, new TerminalScreen(rows: 6, columns: 20), out int lastSafe);
+
+        return lastSafe <= 0 ? string.Empty : Encoding.UTF8.GetString(bytes, 0, lastSafe);
     }
 
     private static string RandomProgram(Random random)

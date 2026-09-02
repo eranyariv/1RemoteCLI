@@ -31,6 +31,20 @@
         newest first.
       </p>
 
+      <section class="release" aria-labelledby="v0.64">
+         <h2 id="v0.64">v0.64 <time datetime="2026-09-02">2 September 2026</time></h2>
+         <ul>
+           <li>
+             <strong>Reconnecting no longer wipes the screen's history.</strong> Scrolling back
+             through what a session has printed used to end at the last reconnection: every
+             re-attach repainted the terminal from scratch and took the scrollback with it, so a
+             few seconds without signal cost everything above the visible screen. The repaint now
+             leaves the history above it alone. A session you have not looked at for more than a
+             day still starts clean.
+           </li>
+         </ul>
+      </section>
+
       <section class="release" aria-labelledby="v0.63">
          <h2 id="v0.63">v0.63 <time datetime="2026-09-01">1 September 2026</time></h2>
          <ul>

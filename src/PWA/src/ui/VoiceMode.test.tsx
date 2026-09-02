@@ -238,8 +238,9 @@ describe('VoiceMode', () => {
     expect(button.textContent).toBe('')
     expect(button.querySelector('svg[aria-hidden="true"]')).not.toBeNull()
     expect(button.className).toContain(
-      'bottom-[calc(max(0.75rem,env(safe-area-inset-bottom))+4rem)]',
+      'bottom-[max(0.5rem,env(safe-area-inset-bottom))]',
     )
+    expect(button.className).toContain('size-10')
   })
 
   it('keeps the microphone below an open terminal key bar', () => {

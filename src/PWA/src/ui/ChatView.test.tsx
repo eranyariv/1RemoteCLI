@@ -144,7 +144,16 @@ describe('ChatView', () => {
 
   afterEach(cleanup)
 
-  it('reserves space between the composer divider and Send button for voice mode', () => {
+  function openViewMenu() {
+    fireEvent.click(screen.getByRole('button', { name: /^Conversation view:/ }))
+  }
+
+  function chooseView(name: 'Compact' | 'Summary' | 'Full' | 'Plan') {
+    openViewMenu()
+    fireEvent.click(screen.getByRole('menuitemradio', { name }))
+  }
+
+  it('keeps the compact composer clear of the voice button', () => {
     render(
       <ChatView
         client={relay.client}
@@ -156,8 +165,10 @@ describe('ChatView', () => {
     )
 
     const form = screen.getByRole('button', { name: 'Send' }).closest('form')
-    expect(form?.className).toContain('pt-[4.5rem]')
-    expect(screen.getByRole('button', { name: 'Send' }).className).not.toContain('mr-16')
+    expect(form?.className).toContain('pt-2')
+    expect(form?.className).toContain('env(safe-area-inset-right)')
+    expect(screen.getByRole('button', { name: 'Send' }).className).toContain('min-h-10')
+    expect((screen.getByLabelText('Message agent') as HTMLTextAreaElement).rows).toBe(1)
   })
 
   it('attaches, renders a snapshot, and replaces delta events by id', async () => {
@@ -234,6 +245,76 @@ describe('ChatView', () => {
     )
 
     await waitFor(() => expect(relay.attach).toHaveBeenCalledTimes(1))
+  })
+
+  it('shows every connection state through an accessible status orb', () => {
+    const view = render(
+      <ChatView
+        client={relay.client}
+        connected
+        machine={machine}
+        session={session}
+        onClose={() => {}}
+      />,
+    )
+
+    expect(screen.getByRole('status', { name: 'Connected' }).className).toContain('bg-emerald-400')
+
+    view.rerender(
+      <ChatView
+        client={relay.client}
+        connected={false}
+        machine={machine}
+        session={session}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.getByRole('status', { name: 'Reconnecting' }).className).toContain('bg-transparent')
+
+    for (const [chatState, label, color] of [
+      ['Available', 'Opening', 'bg-amber-400'],
+      ['Busy', 'Open elsewhere', 'bg-amber-400'],
+      ['Unavailable', 'Unavailable', 'bg-rose-500'],
+      ['Unknown', 'Unavailable', 'bg-rose-500'],
+    ] as const) {
+      view.rerender(
+        <ChatView
+          client={relay.client}
+          connected
+          machine={machine}
+          session={{ ...session, chatState }}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.getByRole('status', { name: label }).className).toContain(color)
+    }
+  })
+
+  it('dismisses the view menu with Escape or an outside tap', () => {
+    render(
+      <ChatView
+        client={relay.client}
+        connected
+        machine={machine}
+        session={session}
+        onClose={() => {}}
+      />,
+    )
+
+    openViewMenu()
+    expect(screen.getByRole('menu', { name: 'Conversation view' })).toBeTruthy()
+    expect(document.activeElement).toBe(screen.getByRole('menuitemradio', { name: 'Summary' }))
+    fireEvent.keyDown(document.activeElement as Element, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(screen.getByRole('menuitemradio', { name: 'Full' }))
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('menu', { name: 'Conversation view' })).toBeNull()
+    expect(document.activeElement).toBe(
+      screen.getByRole('button', { name: 'Conversation view: Summary' }),
+    )
+
+    openViewMenu()
+    fireEvent.pointerDown(document.body)
+    expect(screen.queryByRole('menu', { name: 'Conversation view' })).toBeNull()
   })
 
   it('finishes loading when the transcript is empty', () => {
@@ -370,7 +451,7 @@ describe('ChatView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
 
     expect(relay.respondChatPermission).toHaveBeenCalledWith('chat-1', 'req-1', 'yes')
-    expect(screen.getByText('approval needed')).toBeTruthy()
+    expect(screen.getByRole('status', { name: 'Approval needed' })).toBeTruthy()
   })
 
   it('renders an elicitation choice menu and forwards the selected answer', async () => {
@@ -428,7 +509,8 @@ describe('ChatView', () => {
       />,
     )
 
-    expect(screen.getByRole('button', { name: 'Plan' }).hasAttribute('disabled')).toBe(true)
+    openViewMenu()
+    expect(screen.getByRole('menuitemradio', { name: 'Plan' }).hasAttribute('disabled')).toBe(true)
   })
 
   it('renders the local task plan with status and dependency ordering', () => {
@@ -470,9 +552,11 @@ describe('ChatView', () => {
       />,
     )
 
-    const plan = screen.getByRole('button', { name: 'Plan' })
+    openViewMenu()
+    const plan = screen.getByRole('menuitemradio', { name: 'Plan' })
     expect(plan.hasAttribute('disabled')).toBe(false)
     fireEvent.click(plan)
+    expect(screen.queryByRole('menu', { name: 'Conversation view' })).toBeNull()
 
     expect(screen.getByRole('heading', { name: 'Tasks' })).toBeTruthy()
     expect(screen.getByLabelText('Completed')).toBeTruthy()
@@ -525,10 +609,10 @@ describe('ChatView', () => {
     expect(screen.getByText('Inspect files')).toBeTruthy()
     expect(screen.queryByText('A very long tool result')).toBeNull()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Full' }))
+    chooseView('Full')
     expect(screen.getByText('A very long tool result')).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Compact' }))
+    chooseView('Compact')
     expect(screen.queryByText('Inspect files')).toBeNull()
   })
 
@@ -579,7 +663,7 @@ describe('ChatView', () => {
     expect(screen.getByText('Verbose deployment output')).toBeTruthy()
     expect(screen.getByText('Wait for deployment')).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Compact' }))
+    chooseView('Compact')
 
     const tool = screen.getByRole('button', { name: /Deploy corrected version.*pending/ })
     const plan = screen.getByRole('button', { name: /Plan.*0\/1/ })
@@ -751,13 +835,14 @@ describe('ChatView', () => {
       expect(screen.queryByLabelText('Attach a file')).toBeNull()
       expect(screen.queryByLabelText('Attach a photo')).toBeNull()
       expect(screen.queryByLabelText('Take a photo')).toBeNull()
+      expect(screen.getByRole('button', { name: 'Conversation view: Summary' })).toBeTruthy()
     })
 
     it('offers only the picker the negotiated capabilities justify', () => {
       const imagesOnly = view(withCapabilities(true, false))
 
       expect(screen.getByLabelText('Attach a photo')).toBeTruthy()
-      expect(screen.getByLabelText('Take a photo')).toBeTruthy()
+      expect(screen.queryByLabelText('Take a photo')).toBeNull()
       expect(screen.queryByLabelText('Attach a file')).toBeNull()
 
       imagesOnly.unmount()
@@ -796,7 +881,7 @@ describe('ChatView', () => {
 
     it('sends an attachment with no text at all', async () => {
       view(withCapabilities(true, true))
-      pick('chat-camera-input', image('photo.jpg'))
+      pick('chat-image-input', image('photo.jpg'))
 
       await waitFor(() => expect(screen.getByText(/ready/)).toBeTruthy())
       fireEvent.click(screen.getByRole('button', { name: 'Send' }))

@@ -52,6 +52,32 @@ function isAttachmentSummary(block: ChatContentBlock): boolean {
   )
 }
 
+function chatStatus(
+  connected: boolean,
+  state: SessionInfo['chatState'],
+  pendingInput?: ChatEvent,
+): { label: string; className: string } {
+  if (!connected) {
+    return { label: 'Reconnecting', className: 'border border-slate-500 bg-transparent' }
+  }
+  if (state === 'Unavailable' || state === 'Unknown') {
+    return { label: 'Unavailable', className: 'bg-rose-500' }
+  }
+  if (state === 'Busy') {
+    return { label: 'Open elsewhere', className: 'bg-amber-400' }
+  }
+  if (state === 'Available') {
+    return { label: 'Opening', className: 'animate-pulse bg-amber-400' }
+  }
+  if (pendingInput) {
+    return {
+      label: isElicitation(pendingInput) ? 'Input needed' : 'Approval needed',
+      className: 'bg-amber-400',
+    }
+  }
+  return { label: 'Connected', className: 'bg-emerald-400' }
+}
+
 export function ChatView({
   client,
   connected,
@@ -72,14 +98,16 @@ export function ChatView({
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [viewMode, setViewMode] = useState<ViewMode>('summary')
+  const [viewMenuOpen, setViewMenuOpen] = useState(false)
   const [attachments, setAttachments] = useState<ChatAttachmentDraft[]>([])
   const [composerError, setComposerError] = useState<string | null>(null)
   const bottom = useRef<HTMLDivElement>(null)
   const content = useRef<HTMLDivElement>(null)
   const screenRef = useRef<HTMLElement | null>(null)
+  const viewMenuRef = useRef<HTMLDivElement | null>(null)
+  const viewMenuButtonRef = useRef<HTMLButtonElement | null>(null)
   const fileInput = useRef<HTMLInputElement | null>(null)
   const imageInput = useRef<HTMLInputElement | null>(null)
-  const cameraInput = useRef<HTMLInputElement | null>(null)
 
   /**
    * Uploads in flight, and the object URLs their previews hold.
@@ -164,6 +192,7 @@ export function ChatView({
     () => events.find((event) => event.kind === 'Permission' && event.status === 'pending'),
     [events],
   )
+  const status = chatStatus(connected, session.chatState, pendingInput)
   const visibleEvents = useMemo(() => {
     const elicitationTools = new Set(
       events.flatMap((event) =>
@@ -181,6 +210,36 @@ export function ChatView({
   useEffect(() => {
     attachmentsRef.current = attachments
   }, [attachments])
+
+  useEffect(() => {
+    if (!viewMenuOpen) return
+
+    const menuItems = viewMenuRef.current?.querySelectorAll<HTMLButtonElement>(
+      '[role="menuitemradio"]:not(:disabled)',
+    )
+    const selected = Array.from(menuItems ?? []).find(
+      (item) => item.getAttribute('aria-checked') === 'true',
+    )
+    const itemToFocus = selected ?? menuItems?.[0]
+    itemToFocus?.focus()
+
+    const dismiss = (event: PointerEvent) => {
+      if (!viewMenuRef.current?.contains(event.target as Node)) setViewMenuOpen(false)
+    }
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setViewMenuOpen(false)
+        viewMenuButtonRef.current?.focus()
+      }
+    }
+
+    document.addEventListener('pointerdown', dismiss)
+    document.addEventListener('keydown', escape)
+    return () => {
+      document.removeEventListener('pointerdown', dismiss)
+      document.removeEventListener('keydown', escape)
+    }
+  }, [viewMenuOpen])
 
   const forget = useCallback((attachmentId: string) => {
     uploads.current.get(attachmentId)?.abort()
@@ -390,48 +449,14 @@ export function ChatView({
           </p>
         </div>
         <span
-          className={`shrink-0 text-xs ${connected ? 'text-emerald-400' : 'text-amber-400'}`}
+          role="status"
+          aria-label={status.label}
+          title={status.label}
+          className={`size-2.5 shrink-0 rounded-full ${status.className}`}
         >
-          {connected
-            ? session.chatState === 'Busy'
-              ? 'open elsewhere'
-              : session.chatState === 'Available'
-                ? 'opening'
-                : session.chatState === 'Unavailable' || session.chatState === 'Unknown'
-                  ? 'unavailable'
-                  : pendingInput
-              ? isElicitation(pendingInput)
-                ? 'input needed'
-                : 'approval needed'
-              : 'connected'
-            : 'reconnecting'}
+          <span className="sr-only">{status.label}</span>
         </span>
       </header>
-
-      <div
-        className="flex items-center justify-between gap-3 border-b border-slate-800 px-4 py-2"
-        role="group"
-        aria-label="Conversation view"
-      >
-        <span className="text-xs font-medium text-slate-400">View</span>
-        <div className="flex rounded-lg bg-slate-900 p-0.5">
-          {(['compact', 'summary', 'full', 'plan'] as const).map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              aria-pressed={viewMode === mode}
-              disabled={mode === 'plan' && !taskPlan}
-              title={mode === 'plan' && !taskPlan ? 'No local task plan is available' : undefined}
-              onClick={() => setViewMode(mode)}
-              className={`min-h-8 rounded-md px-2.5 text-xs capitalize ${
-                viewMode === mode ? 'bg-slate-700 text-white' : 'text-slate-400'
-              } disabled:text-slate-700`}
-            >
-              {mode[0].toUpperCase() + mode.slice(1)}
-            </button>
-          ))}
-        </div>
-      </div>
 
       <div
         role={loadBlocked ? 'alert' : 'status'}
@@ -498,7 +523,7 @@ export function ChatView({
 
       <form
         onSubmit={(event) => void send(event)}
-        className="border-t border-slate-800 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-[4.5rem]"
+        className="border-t border-slate-800 pb-[max(0.5rem,env(safe-area-inset-bottom))] pl-2 pr-[calc(2.75rem+max(0.5rem,env(safe-area-inset-right)))] pt-2"
       >
         {canAttach ? (
           <>
@@ -521,23 +546,6 @@ export function ChatView({
               accept={CHAT_IMAGE_ACCEPT}
               className="hidden"
               data-testid="chat-image-input"
-              onChange={(event) => {
-                attach(event.currentTarget.files)
-                event.currentTarget.value = ''
-              }}
-            />
-            {/*
-              A separate input, not a mode on the one above: `capture` is what makes a
-              phone open the camera directly instead of the photo library, and putting
-              it on the shared input would take the library away from everyone.
-            */}
-            <input
-              ref={cameraInput}
-              type="file"
-              accept={CHAT_IMAGE_ACCEPT}
-              capture="environment"
-              className="hidden"
-              data-testid="chat-camera-input"
               onChange={(event) => {
                 attach(event.currentTarget.files)
                 event.currentTarget.value = ''
@@ -607,9 +615,9 @@ export function ChatView({
           </ul>
         ) : null}
 
-        <div className="flex gap-2">
-          {canAttach ? (
-            <div className="flex shrink-0 flex-col justify-end gap-1">
+        <div className="flex items-end gap-1.5">
+          <div ref={viewMenuRef} className="relative flex shrink-0 gap-1.5">
+            {canAttach ? (
               <button
                 type="button"
                 onClick={() =>
@@ -622,28 +630,88 @@ export function ChatView({
                   attachments.length >= MAX_CHAT_ATTACHMENT_COUNT
                 }
                 aria-label={capabilities?.embeddedContext ? 'Attach a file' : 'Attach a photo'}
-                className="min-h-12 rounded-xl border border-slate-700 px-3 text-sm text-slate-300 active:bg-slate-800 disabled:opacity-40"
+                className="flex size-10 items-center justify-center rounded-lg border border-slate-700 text-sm text-slate-300 active:bg-slate-800 disabled:opacity-40"
               >
                 📎
               </button>
-              {capabilities?.image ? (
-                <button
-                  type="button"
-                  onClick={() => cameraInput.current?.click()}
-                  disabled={
-                    !connected ||
-                    !chatReady ||
-                    sending ||
-                    attachments.length >= MAX_CHAT_ATTACHMENT_COUNT
+            ) : null}
+            <button
+              ref={viewMenuButtonRef}
+              type="button"
+              aria-label={`Conversation view: ${viewMode[0].toUpperCase() + viewMode.slice(1)}`}
+              aria-haspopup="menu"
+              aria-expanded={viewMenuOpen}
+              onClick={() => setViewMenuOpen((open) => !open)}
+              className="flex size-10 items-center justify-center rounded-lg border border-slate-700 text-slate-300 active:bg-slate-800"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                className="size-5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden
+              >
+                <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+                <circle cx="12" cy="12" r="2.75" />
+              </svg>
+            </button>
+            {viewMenuOpen ? (
+              <div
+                role="menu"
+                aria-label="Conversation view"
+                onKeyDown={(event) => {
+                  const items = Array.from(
+                    event.currentTarget.querySelectorAll<HTMLButtonElement>(
+                      '[role="menuitemradio"]:not(:disabled)',
+                    ),
+                  )
+                  const current = items.indexOf(document.activeElement as HTMLButtonElement)
+                  let next: number | undefined
+
+                  if (event.key === 'ArrowDown') next = (current + 1) % items.length
+                  else if (event.key === 'ArrowUp')
+                    next = (current - 1 + items.length) % items.length
+                  else if (event.key === 'Home') next = 0
+                  else if (event.key === 'End') next = items.length - 1
+
+                  if (next !== undefined) {
+                    event.preventDefault()
+                    items[next]?.focus()
                   }
-                  aria-label="Take a photo"
-                  className="min-h-12 rounded-xl border border-slate-700 px-3 text-sm text-slate-300 active:bg-slate-800 disabled:opacity-40"
-                >
-                  📷
-                </button>
-              ) : null}
-            </div>
-          ) : null}
+                }}
+                className="absolute bottom-full left-0 z-30 mb-2 w-36 overflow-hidden rounded-xl border border-slate-700 bg-slate-900 p-1 shadow-2xl"
+              >
+                {(['compact', 'summary', 'full', 'plan'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={viewMode === mode}
+                    disabled={mode === 'plan' && !taskPlan}
+                    title={
+                      mode === 'plan' && !taskPlan ? 'No local task plan is available' : undefined
+                    }
+                    onClick={() => {
+                      setViewMode(mode)
+                      setViewMenuOpen(false)
+                      viewMenuButtonRef.current?.focus()
+                    }}
+                    className={`flex min-h-9 w-full items-center justify-between rounded-lg px-3 text-left text-sm capitalize ${
+                      viewMode === mode
+                        ? 'bg-slate-700 text-white'
+                        : 'text-slate-300 active:bg-slate-800'
+                    } disabled:text-slate-600`}
+                  >
+                    {mode[0].toUpperCase() + mode.slice(1)}
+                    {viewMode === mode ? <span aria-hidden>✓</span> : null}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
 
           <textarea
             value={draft}
@@ -654,17 +722,17 @@ export function ChatView({
                 event.currentTarget.form?.requestSubmit()
               }
             }}
-            rows={2}
+            rows={1}
             maxLength={MAX_CHAT_PROMPT_TEXT_CHARS}
             disabled={!chatReady}
             placeholder={chatReady ? 'Message agent' : 'Waiting for safe handoff'}
             aria-label="Message agent"
-            className="min-h-12 min-w-0 flex-1 resize-none rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-[16px] outline-none placeholder:text-slate-600 focus:border-sky-500 disabled:opacity-50"
+            className="h-10 min-w-0 flex-1 resize-none rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-2 text-[16px] leading-5 outline-none placeholder:text-slate-600 focus:border-sky-500 disabled:opacity-50"
           />
           <button
             type="submit"
             disabled={!canSend}
-            className="min-h-12 self-end rounded-xl bg-sky-600 px-4 text-sm font-semibold disabled:opacity-40"
+            className="min-h-10 self-end rounded-lg bg-sky-600 px-3 text-sm font-semibold disabled:opacity-40"
           >
             {sending ? 'Sending…' : uploading ? 'Attaching…' : 'Send'}
           </button>

@@ -384,8 +384,8 @@ describe('ChatView', () => {
     expect(relay.sendChatMessage).not.toHaveBeenCalled()
   })
 
-  it('explains that a ready Copilot chat is a sequential handoff', () => {
-    render(
+  it('lets the user dismiss ready-chat handoff guidance', () => {
+    const { rerender } = render(
       <ChatView
         client={relay.client}
         connected
@@ -397,6 +397,23 @@ describe('ChatView', () => {
 
     expect(screen.getByText(/Copilot Desktop does not live-sync with this view/)).toBeTruthy()
     expect((screen.getByLabelText('Message agent') as HTMLTextAreaElement).disabled).toBe(false)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss handoff guidance' }))
+
+    expect(screen.queryByText(/Copilot Desktop does not live-sync with this view/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Dismiss handoff guidance' })).toBeNull()
+
+    rerender(
+      <ChatView
+        client={relay.client}
+        connected
+        machine={machine}
+        session={{ ...session, sessionId: 'chat-2' }}
+        onClose={() => {}}
+      />,
+    )
+
+    expect(screen.getByText(/Copilot Desktop does not live-sync with this view/)).toBeTruthy()
   })
 
   it('offers the same handoff retry for Claude Code chats', () => {
@@ -412,6 +429,7 @@ describe('ChatView', () => {
 
     expect(screen.getByText(/This chat is open in Claude Code or another Claude Code process/)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Retry handoff' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Dismiss handoff guidance' })).toBeNull()
   })
 
   it('renders every permission option and forwards the selected one', async () => {

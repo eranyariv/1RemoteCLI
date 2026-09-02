@@ -97,6 +97,7 @@ export function ChatView({
   const [sending, setSending] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loadAttempt, setLoadAttempt] = useState(0)
+  const [dismissedGuidanceSessionId, setDismissedGuidanceSessionId] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<ViewMode>('summary')
   const [viewMenuOpen, setViewMenuOpen] = useState(false)
   const [attachments, setAttachments] = useState<ChatAttachmentDraft[]>([])
@@ -128,6 +129,10 @@ export function ChatView({
     session.chatState === 'Busy' ||
     session.chatState === 'Unavailable' ||
     session.chatState === 'Unknown'
+  const showHandoffGuidance =
+    loadBlocked ||
+    (dismissedGuidanceSessionId !== session.sessionId &&
+      (session.chatState === 'Available' || session.chatState === 'Ready'))
   const desktopApp = session.cliType === 'ClaudeCode' ? 'Claude Code' : 'Copilot Desktop'
   const chatProvider = session.cliType === 'ClaudeCode' ? 'Claude Code' : 'Copilot'
   const taskPlan = session.localTasks
@@ -458,28 +463,41 @@ export function ChatView({
         </span>
       </header>
 
-      <div
-        role={loadBlocked ? 'alert' : 'status'}
-        className={`border-b px-4 py-3 text-xs leading-5 ${
-          session.chatState === 'Busy'
-            ? 'border-amber-500/30 bg-amber-500/10 text-amber-100'
-            : session.chatState === 'Unavailable' || session.chatState === 'Unknown'
-              ? 'border-rose-500/30 bg-rose-500/10 text-rose-100'
-              : 'border-sky-500/20 bg-sky-500/5 text-sky-100'
-        }`}
-      >
-        <p>
-          {session.chatState === 'Busy'
-            ? `This chat is open in ${desktopApp} or another ${chatProvider} process. Close it there before continuing here.`
-            : session.chatState === 'Unavailable'
-              ? `This chat could not be loaded on the machine. ${desktopApp} does not live-sync with 1RemoteCLI.`
-              : session.chatState === 'Unknown'
-                ? `Update the 1RemoteCLI agent on this machine before continuing this ${chatProvider} chat safely.`
-                : session.chatState === 'Available'
-                  ? `Opening this chat is a sequential handoff. Close it in ${desktopApp} first; the two views do not live-sync.`
-                  : `${desktopApp} does not live-sync with this view. Reopen the session there after finishing here to continue the saved conversation.`}
-        </p>
-        {session.chatState === 'Busy' || session.chatState === 'Unavailable' ? (
+      {showHandoffGuidance ? (
+        <div
+          role={loadBlocked ? 'alert' : 'status'}
+          className={`border-b px-4 py-3 text-xs leading-5 ${
+            session.chatState === 'Busy'
+              ? 'border-amber-500/30 bg-amber-500/10 text-amber-100'
+              : session.chatState === 'Unavailable' || session.chatState === 'Unknown'
+                ? 'border-rose-500/30 bg-rose-500/10 text-rose-100'
+                : 'border-sky-500/20 bg-sky-500/5 text-sky-100'
+          }`}
+        >
+          <div className="flex items-start gap-3">
+            <p className="min-w-0 flex-1">
+              {session.chatState === 'Busy'
+                ? `This chat is open in ${desktopApp} or another ${chatProvider} process. Close it there before continuing here.`
+                : session.chatState === 'Unavailable'
+                  ? `This chat could not be loaded on the machine. ${desktopApp} does not live-sync with 1RemoteCLI.`
+                  : session.chatState === 'Unknown'
+                    ? `Update the 1RemoteCLI agent on this machine before continuing this ${chatProvider} chat safely.`
+                    : session.chatState === 'Available'
+                      ? `Opening this chat is a sequential handoff. Close it in ${desktopApp} first; the two views do not live-sync.`
+                      : `${desktopApp} does not live-sync with this view. Reopen the session there after finishing here to continue the saved conversation.`}
+            </p>
+            {!loadBlocked ? (
+              <button
+                type="button"
+                onClick={() => setDismissedGuidanceSessionId(session.sessionId)}
+                aria-label="Dismiss handoff guidance"
+                className="-mr-2 min-h-8 shrink-0 rounded-lg px-2 text-base leading-none text-sky-200 active:bg-sky-400/10"
+              >
+                ×
+              </button>
+            ) : null}
+          </div>
+          {session.chatState === 'Busy' || session.chatState === 'Unavailable' ? (
           <button
             type="button"
             onClick={() => setLoadAttempt((attempt) => attempt + 1)}
@@ -488,8 +506,9 @@ export function ChatView({
           >
             Retry handoff
           </button>
-        ) : null}
-      </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div
         ref={content}

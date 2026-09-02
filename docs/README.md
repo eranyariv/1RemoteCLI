@@ -47,7 +47,7 @@ These are deliberate v1 limitations, not bugs. Knowing them up front saves an af
 - **You have to remember to type `1remote`.** A terminal you already started cannot be adopted.
 - **The session dies with the window it started in.** Close the terminal at your desk and the session ends, on the phone too.
 - **The machine is only reachable while you are logged on.** The agent runs as you, so a rebooted PC sitting at the lock screen shows nothing.
-- **No scrollback on the phone.** You see the current screen. Full scrollback stays at your desk.
+- **Scrollback on the phone starts when you attach.** You can scroll back through everything that has arrived since, and it survives a reconnection, but not through what the session printed before you got there — the agent models the visible screen and keeps no history of its own. Full scrollback stays at your desk.
 - **A hub restart silently stops notifications** until each phone opens the app once — push subscriptions are held in memory. If everyone's notifications stop at the same moment, this is why.
 - **The relay sees your terminal in plaintext.** See [Security](security.md); this one deserves a decision, not a shrug.
 

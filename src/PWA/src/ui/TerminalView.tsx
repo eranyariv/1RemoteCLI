@@ -131,9 +131,9 @@ export function TerminalView({
   // the one that existed on the render where they were registered.
   const sendRef = useRef<(bytes: Uint8Array) => void>(() => {})
 
-  const write = useCallback((data: Uint8Array, kind: TerminalOutputKind) => {
+  const write = useCallback((data: Uint8Array, kind: TerminalOutputKind, awayMs: number) => {
     const term = termRef.current
-    if (term) applyOutput(term, data, kind)
+    if (term) applyOutput(term, data, kind, awayMs)
   }, [])
 
   const attached = useAttachedSession({

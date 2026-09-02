@@ -41,8 +41,15 @@ export interface AttachOptions {
   sessionId: string
   cols: number
   rows: number
-  /** Called for every output frame. Deliberately not React state — see below. */
-  onOutput(data: Uint8Array, kind: TerminalOutputKind): void
+  /**
+   * Called for every output frame. Deliberately not React state — see below.
+   *
+   * `awayMs` is how long the client had been out of contact when the frame arrived,
+   * and is zero for everything that arrives while it is connected. A snapshot is the
+   * only frame that acts on it, and only to decide whether the scrollback it is about
+   * to draw over is still history worth keeping.
+   */
+  onOutput(data: Uint8Array, kind: TerminalOutputKind, awayMs: number): void
   /** Whether the relay connection is currently up. Drives re-attach. */
   connected: boolean
   /**
@@ -85,6 +92,14 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
   const sampler = samplerRef.current
 
   const position = useRef<StreamPosition>(startOfStream)
+
+  // When contact was lost, or null while it is up.
+  //
+  // Read once, by the first frame to arrive afterwards: that frame is a snapshot far
+  // more often than not, and how long the gap lasted is the only thing that separates
+  // a reconnection worth keeping the screen's history through from a session being
+  // picked up days later.
+  const awaySince = useRef<number | null>(null)
 
   // Set once the session is known to be over. Read by the attach effect, which
   // must not go looking for a session it watched exit — the hub would answer
@@ -164,8 +179,14 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
         if (missed) setMissedOutput(true)
         if (!step.apply) return
 
+        // Cleared on the first frame through, not on the attach: a snapshot that
+        // arrives in several frames must not have each of them read as a fresh
+        // return from the same long absence.
+        const awayMs = awaySince.current === null ? 0 : Date.now() - awaySince.current
+        awaySince.current = null
+
         sampler.output()
-        onOutput.current(output.data, output.kind)
+        onOutput.current(output.data, output.kind, awayMs)
       }),
 
       client.on('sessionClosed', (closedMachine, closedSession, code) => {
@@ -179,6 +200,7 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
       client.on('machineOffline', (offlineMachine) => {
         if (offlineMachine !== machineId) return
         agentOffline.current = true
+        awaySince.current ??= Date.now()
         sampler.discardPending()
         setState('failed')
         setError({
@@ -212,6 +234,10 @@ export function useAttachedSession(options: AttachOptions): AttachedSession {
     if (finished.current) return
 
     if (!connected) {
+      // Coalesced rather than assigned, so a re-render while still disconnected does
+      // not keep moving the moment contact was lost forward to now.
+      awaySince.current ??= Date.now()
+
       // Say so. While the socket is down no output can arrive, and a terminal that
       // looks live but has quietly stopped updating is worse than one that admits
       // it is offline, because the user will read the stale screen and type into
